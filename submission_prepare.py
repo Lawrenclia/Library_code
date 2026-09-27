@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import shutil
 import threading
 from zipfile import BadZipFile
 from datetime import datetime, timezone
@@ -48,6 +49,27 @@ kind_evidence必须引用支持该文献类型的来源；未提供类型依据�
 
 def normalize_title(text):
     return ''.join(c for c in str(text).casefold() if c.isalnum())
+
+
+def normalize_doi(value):
+    """Reduce a DOI to its bare form.
+
+    The SA export writes some DOIs as full ``https://doi.org/...`` URLs while WOS,
+    Crossref and template sources carry the bare ``10.x/y`` form. Comparing the raw
+    strings silently fails to match, either rejecting a good export or blocking an
+    otherwise valid template fill.
+    """
+    text=str(value or '').strip().casefold()
+    for prefix in ("https://doi.org/","http://doi.org/","https://dx.doi.org/",
+                   "http://dx.doi.org/","doi:"):
+        text=text.removeprefix(prefix).strip()
+    return text
+
+
+def usable_doi(value):
+    """A bare DOI that is safe to put in a Crossref path; empty when unusable."""
+    text=normalize_doi(value)
+    return text if re.fullmatch(r'10\.\d{4,9}/\S+',text) else ''
 
 
 def zero_roster(path):
@@ -190,8 +212,7 @@ def export_text(path):
 
 
 def matches_paper(text,paper):
-    return bool((paper['doi'] and paper['doi'].casefold() in text.casefold())
-                or normalize_title(paper['title']) in normalize_title(text))
+    return bool(match_papers(text,[paper]))
 
 
 def resave_workbook(source,target):
@@ -204,6 +225,22 @@ def resave_workbook(source,target):
     book=openpyxl.load_workbook(source)
     save_workbook(book,target)
     return target
+
+
+def match_papers(text,papers):
+    """Papers whose title or DOI appears in an export.
+
+    Normalises the export once per file: the caller may be testing a whole roster
+    against it, and rebuilding the title index for every paper is wasted work.
+    """
+    haystack=text.casefold()
+    normalized=normalize_title(text)
+    hits=[]
+    for paper in papers:
+        needle=normalize_doi(paper['doi'])
+        if (needle and needle in haystack) or normalize_title(paper['title']) in normalized:
+            hits.append(paper)
+    return hits
 
 
 def inbox_export(path,paper,folder):
@@ -234,6 +271,70 @@ def inbox_export(path,paper,folder):
         record['import_file']=str(normalized)
         record['status']='来自待收目录，已另存一份可导入副本；来源渠道未经程序验证'
     return record
+
+
+def downloads_folder():
+    """The browser's default download folder, where WOS/CNKI exports land."""
+    return Path(os.path.expanduser('~'))/'Downloads'
+
+
+def scan_exports(folder,papers):
+    """(matched, unmatched) for every readable export in a folder. Read-only.
+
+    Matching never widens on its own: a file the roster cannot identify stays in the
+    unmatched list for a human, because the SA title is often the thing that is wrong
+    and guessing would defeat the purpose of the search.
+    """
+    matched,unmatched=[],[]
+    for path in inbox_files(folder):
+        try:
+            if path.stat().st_size>MAX_INBOX_BYTES:
+                unmatched.append({'file':path.name,'reason':'文件超过 20MB，未读取'})
+                continue
+            text=export_text(path)
+        except (OSError,ValueError,KeyError,BadZipFile,openpyxl.utils.exceptions.InvalidFileException):
+            unmatched.append({'file':path.name,'reason':'无法读取，需人工检查'})
+            continue
+        head=text.lstrip()[:2000].casefold()
+        if head.startswith(('<!doctype html','<html')) or '<html' in head:
+            unmatched.append({'file':path.name,'reason':'是网页而不是导出文件'})
+            continue
+        hits=match_papers(text,papers)
+        if hits:
+            matched.append({'file':path.name,'path':str(path),
+                            'ids':[p['id'] for p in hits],'titles':[p['title'] for p in hits]})
+        else:
+            unmatched.append({'file':path.name,'reason':'未匹配到当前名单的任何题名或 DOI'})
+    return matched,unmatched
+
+
+def collect_from_folder(folder,papers,inbox):
+    """Copy matching exports into the intake folder so the normal flow adopts them.
+
+    The intake folder is not written for anything the roster cannot identify, and an
+    existing different file is never overwritten.
+    """
+    inbox=Path(inbox)
+    inbox.mkdir(parents=True,exist_ok=True)
+    matched,unmatched=scan_exports(folder,papers)
+    copied=[]
+    for entry in matched:
+        source=Path(entry['path'])
+        target=inbox/source.name
+        if target.exists():
+            if target.read_bytes()==source.read_bytes():
+                entry['copied']=str(target)
+            else:
+                entry['copied']=''
+                unmatched.append({'file':source.name,
+                                  'reason':'待收目录已有同名但内容不同的文件，未覆盖'})
+                continue
+        else:
+            shutil.copy2(source,target)
+            entry['copied']=str(target)
+        copied.append(entry)
+    return {'folder':str(Path(folder)),'inbox':str(inbox),'matched':matched,
+            'unmatched':unmatched,'copied':copied}
 
 
 def prefill_fields(record):
@@ -287,12 +388,14 @@ def fetch_bytes(url, allowed_hosts, limit=10*1024*1024):
 
 
 def crossref_source(paper,fetch=fetch_bytes):
-    doi=paper['doi'].strip()
+    # A roster DOI may be a full doi.org URL; only a bare, well-formed DOI can go into
+    # the /works/<doi> path. Anything unusable falls back to the title query.
+    doi=usable_doi(paper['doi'])
     url='https://api.crossref.org/works/'+quote(doi,safe='') if doi else 'https://api.crossref.org/works?'+urlencode({'query.title':paper['title'],'rows':5})
     raw,_=fetch(url,{'api.crossref.org'},2*1024*1024)
     message=json.loads(raw)['message']
     candidates=[message] if doi else message.get('items',[])
-    matched=[m for m in candidates if any(normalize_title(t)==normalize_title(paper['title']) for t in m.get('title',[])) and (not doi or str(m.get('DOI','')).casefold()==doi.casefold())]
+    matched=[m for m in candidates if any(normalize_title(t)==normalize_title(paper['title']) for t in m.get('title',[])) and (not doi or normalize_doi(m.get('DOI',''))==doi)]
     if len(matched)!=1:
         raise SafetyStop('Crossref 没有唯一同题/同 DOI 记录，需要补充出版证据。')
     m=matched[0]
@@ -368,7 +471,7 @@ def validate_metadata(content,paper,sources,specs):
         values={k:v['value'] for k,v in data['fields'].items()}
         if values.get('题名') and normalize_title(values['题名'])!=normalize_title(paper['title']):
             raise ValueError()
-        if paper['doi'] and values.get('DOI') and values['DOI'].casefold()!=paper['doi'].casefold():
+        if normalize_doi(paper['doi']) and values.get('DOI') and normalize_doi(values['DOI'])!=normalize_doi(paper['doi']):
             raise ValueError()
         return data
     except (ValueError,KeyError,TypeError):
@@ -471,7 +574,7 @@ def original_export(entry,paper,folder,fetch=fetch_bytes,allowed_hosts=()):
             text=raw.decode('utf-8-sig')
         except UnicodeDecodeError:
             text=raw.decode('gb18030')
-    if not ((paper['doi'] and paper['doi'].casefold() in text.casefold()) or normalize_title(paper['title']) in normalize_title(text)):
+    if not ((normalize_doi(paper['doi']) and normalize_doi(paper['doi']) in text.casefold()) or normalize_title(paper['title']) in normalize_title(text)):
         raise SafetyStop('原始文件未检出对应题名或 DOI，未采纳。')
     path=folder/(paper['id']+'.'+entry['format'])
     path.write_bytes(raw)
@@ -581,7 +684,7 @@ def prepare(input_path=BASE/'list.xlsx',template_dir=BASE/'templates',output=BAS
         except (OSError,ValueError,KeyError,BadZipFile,openpyxl.utils.exceptions.InvalidFileException):
             unmatched.append({'file':path.name,'reason':'无法读取，需人工检查'})
             continue
-        hits=[p for p in roster['papers'] if matches_paper(text,p)]
+        hits=match_papers(text,roster['papers'])
         if not hits:
             unmatched.append({'file':path.name,'reason':'未匹配到任何零匹配任务'})
             continue

@@ -8,7 +8,7 @@ from automation import ImportStore
 from core import Record, SafetyStop
 from submission_prepare import matches_paper
 from tests.test_automation import sample
-from wos_batch import export, plan, safe_name, wos_targets
+from wos_batch import all_targets, export, plan, roster_rows, safe_name, wos_targets
 
 
 def record(**kwargs):
@@ -42,14 +42,57 @@ class TargetsTests(unittest.TestCase):
                          ["demo-001"])
         self.assertEqual(wos_targets(FakeRoster(records), {}, papers), [])
 
-    def test_safe_name_has_no_path_or_separator_characters(self):
-        name = safe_name(record(sa_id="../../etc/pa ss:wd*"), "a" * 64)
-        self.assertTrue(name.startswith("WOS-"))
-        self.assertNotIn("/", name)
-        self.assertNotIn("\\", name)
-        self.assertNotIn(" ", name)
-        self.assertNotIn(":", name)
-        self.assertTrue(name.endswith("-" + "a" * 8 + ".txt"))
+    def test_all_targets_merges_rows_of_the_same_paper(self):
+        # The roster lists one row per SA record, each with its own SA ID. Exporting
+        # every row would write identical TXT files, so one row represents the paper.
+        records = [record(),
+                   record(row=3, sa_id="same-paper-002"),
+                   record(row=4, sa_id="done-001", done=True),
+                   record(row=5, sa_id="matched-001", matches=2),
+                   record(row=6, sa_id="other-001", title="Another paper", doi="10.1234/other")]
+        self.assertEqual([r.sa_id for r in all_targets(FakeRoster(records))],
+                         ["demo-001", "other-001"])
+
+    def test_roster_rows_counts_before_merging(self):
+        records = [record(), record(row=3, sa_id="same-paper-002"),
+                   record(row=4, sa_id="done-001", done=True)]
+        self.assertEqual(len(roster_rows(FakeRoster(records))), 2)
+        self.assertEqual(len(all_targets(FakeRoster(records))), 1)
+
+    def test_all_targets_ignores_the_classification_hint(self):
+        # The roster decides the scope: a record the model did not label WOS is still
+        # searched, because that is exactly the record that needs the lookup.
+        records = [record(sa_id="unlabelled-001", title="Unlabelled paper")]
+        self.assertEqual([r.sa_id for r in all_targets(FakeRoster(records))], ["unlabelled-001"])
+
+    def test_different_doi_keeps_same_titled_rows_apart(self):
+        # Same title with a different DOI are different papers for the intake, so they
+        # must not collapse into a single file.
+        records = [record(), record(row=3, sa_id="same-title-002", doi="10.1234/other")]
+        self.assertEqual([r.sa_id for r in all_targets(FakeRoster(records))],
+                         ["demo-001", "same-title-002"])
+
+    def test_safe_name_is_title_plus_sa_id(self):
+        name = safe_name(record(sa_id="sa-001", title="A Push and a Pull: Dual Pathways"))
+        self.assertEqual(name, "A Push and a Pull Dual Pathways+sa-001.txt")
+
+    def test_safe_name_is_filesystem_safe_and_keeps_the_identifier(self):
+        hostile = safe_name(record(sa_id="../../etc/pa ss:wd*", title="Bad/Name:with*chars?"))
+        for forbidden in ("/", "\\", ":", "*", "?", "<", ">", '"', "|"):
+            self.assertNotIn(forbidden, hostile)
+        self.assertTrue(hostile.endswith("+.._.._etc_pa ss_wd_.txt"), hostile)
+        # The identifier survives an absurd title, and the whole name stays importable.
+        long_title = safe_name(record(sa_id="sa-002", title="T" * 500))
+        self.assertTrue(long_title.endswith("+sa-002.txt"))
+        self.assertLessEqual(len(long_title), 190)
+        self.assertEqual(safe_name(record(sa_id="sa-003", title="   ")), "sa-003.txt")
+
+    def test_safe_name_with_a_long_title_still_differs_per_record(self):
+        first = safe_name(record(sa_id="sa-100", title="Same title " * 40))
+        second = safe_name(record(sa_id="sa-200", title="Same title " * 40))
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.endswith("+sa-100.txt"))
+        self.assertTrue(second.endswith("+sa-200.txt"))
 
 
 class PlanTests(unittest.TestCase):
@@ -99,10 +142,20 @@ class ExportTests(unittest.TestCase):
         return (FakeRoster([self.record]), {f"p{n}": {"import_route": {"recommended_channel": "WOS"}}
                                             for n in rows}, [{"id": f"p{n}", "rows": [n]} for n in rows])
 
+    def selected(self):
+        """The classification-driven scope, as the app computes it."""
+        roster, classification, papers = self.classification()
+        return wos_targets(roster, classification, papers)
+
+    def distinct(self, count, start=2):
+        """Distinct papers: all_targets merges rows sharing a title and DOI."""
+        return [record(row=start+i, sa_id=f"demo-{start+i:03d}",
+                       title=f"Synthetic paper {start+i}", doi=f"10.1234/test{start+i}")
+                for i in range(count)]
+
     def test_export_copies_the_full_record_into_the_intake_folder(self):
         raw = sample()
-        roster, classification, papers = self.classification()
-        result = export(roster, classification, papers, self.bridge_for(raw),
+        result = export(self.selected(), self.bridge_for(raw),
                         ImportStore(self.root / "imports"), self.inbox)
         self.assertEqual((result["total"], len(result["exported"]), result["failed"]), (1, 1, {}))
         written = Path(result["exported"][0]["file"])
@@ -114,34 +167,44 @@ class ExportTests(unittest.TestCase):
 
     def test_second_run_reuses_the_archive_without_touching_the_browser(self):
         raw = sample()
-        roster, classification, papers = self.classification()
+        targets = self.selected()
         bridge = self.bridge_for(raw)
         store = ImportStore(self.root / "imports")
-        export(roster, classification, papers, bridge, store, self.inbox)
+        export(targets, bridge, store, self.inbox)
         calls = bridge.call.call_count
         self.assertGreater(calls, 0)
-        export(roster, classification, papers, bridge, store, self.inbox)
+        export(targets, bridge, store, self.inbox)
         self.assertEqual(bridge.call.call_count, calls)
 
-    def test_repeated_failures_stop_the_batch(self):
-        records = [record(row=n, sa_id=f"demo-{n:03d}") for n in (2, 3, 4, 5)]
-        classification = {f"p{n}": {"import_route": {"recommended_channel": "WOS"}} for n in (2, 3, 4, 5)}
-        papers = [{"id": f"p{n}", "rows": [n]} for n in (2, 3, 4, 5)]
+    def test_download_does_not_require_sjtu_affiliation_or_call_import(self):
+        bridge=self.bridge_for(sample(C1='Another University'))
+        result=export(self.selected(),bridge,ImportStore(self.root/'downloads'),self.inbox)
+        self.assertEqual(len(result['exported']),1)
+        self.assertEqual([c.args[0] for c in bridge.call.call_args_list],['wos_search','wos_export'])
+
+    def test_conflicting_doi_is_not_adopted(self):
+        result=export(self.selected(),self.bridge_for(sample(DI='10.1234/other')),
+                      ImportStore(self.root/'downloads'),self.inbox)
+        self.assertEqual(result['exported'],[])
+        self.assertEqual(result['not_exported'],1)
+
+    def test_repeated_download_failures_visit_every_record(self):
+        records = self.distinct(4)
         # A relative path means the extension never reported a usable download.
         bridge = Mock(call=Mock(return_value={"path": "relative.txt", "sa_id": "demo-002"}))
-        with self.assertRaises(SafetyStop):
-            export(FakeRoster(records), classification, papers, bridge,
-                   ImportStore(self.root / "imports"), self.inbox)
+        result=export(all_targets(FakeRoster(records)), bridge,
+                      ImportStore(self.root / "imports"), self.inbox)
+        self.assertEqual(len(result['failed']),4)
+        self.assertEqual(bridge.call.call_count,8)
+        self.assertFalse(result['stopped'])
         self.assertEqual(list(self.inbox.iterdir()), [])
 
     def test_weak_identity_export_is_not_dropped_into_the_auto_adopted_folder(self):
         # The roster has neither DOI nor WOS ID, so identity() cannot confirm strongly.
         weak = record(doi="", wos="")
         inbox = self.root / "inbox"
-        result = export(FakeRoster([weak]),
-                        {"p1": {"import_route": {"recommended_channel": "WOS"}}},
-                        [{"id": "p1", "rows": [2]}],
-                        self.bridge_for(sample()), ImportStore(self.root / "imports"), inbox)
+        result = export(all_targets(FakeRoster([weak])), self.bridge_for(sample()),
+                        ImportStore(self.root / "imports"), inbox)
         self.assertEqual(result["exported"], [])
         self.assertEqual(len(result["unconfirmed"]), 1)
         self.assertEqual(result["unconfirmed"][0]["sa_id"], weak.sa_id)
@@ -153,20 +216,55 @@ class ExportTests(unittest.TestCase):
         import threading
         stop = threading.Event()
         stop.set()
-        roster, classification, papers = self.classification()
         bridge = self.bridge_for(sample())
-        result = export(roster, classification, papers, bridge,
+        result = export(self.selected(), bridge,
                         ImportStore(self.root / "imports"), self.inbox, stop=stop)
         self.assertEqual(result["exported"], [])
         self.assertTrue(result["stopped"])
         bridge.call.assert_not_called()
 
+    def test_expected_lookup_misses_do_not_trip_the_circuit_breaker(self):
+        # A roster whose titles are wrong produces "no record" / "not unique" answers.
+        # Those are results, not failures: a long list-driven run must keep going.
+        records = self.distinct(8)
+        def call(action, payload, timeout=75):
+            if action == "wos_export":
+                raise SafetyStop('WOS 结果不是可确认的唯一记录，请人工选择并核对后使用“导出当前 WOS 文献”')
+            return {}
+        bridge = Mock(call=Mock(side_effect=call))
+        result = export(all_targets(FakeRoster(records)), bridge,
+                        ImportStore(self.root / "imports"), self.inbox)
+        self.assertEqual(len(result["failed"]), len(records))
+        self.assertEqual(result["not_exported"], len(records))
+        self.assertEqual(result["session_failures"], 0)
+
+    def test_session_level_failures_visit_every_record(self):
+        records = self.distinct(8)
+        bridge = Mock(call=Mock(side_effect=SafetyStop('绑定的工作标签页已切换或未登录，请人工返回')))
+        result=export(all_targets(FakeRoster(records)), bridge,
+                      ImportStore(self.root / "imports"), self.inbox)
+        self.assertEqual(result['session_failures'],8)
+        self.assertEqual(bridge.call.call_count,8)
+        self.assertFalse(result['stopped'])
+
+    def test_success_after_three_failures_is_still_downloaded(self):
+        records=self.distinct(3)+[self.record]
+        bridge=self.bridge_for(sample())
+        original=bridge.call.side_effect
+        def call(action,payload,timeout=75):
+            if payload['sa_id']!=self.record.sa_id:
+                raise SafetyStop('WOS 下载中断')
+            return original(action,payload,timeout)
+        bridge.call.side_effect=call
+        result=export(records,bridge,ImportStore(self.root/'downloads'),self.inbox)
+        self.assertEqual(len(result['failed']),3)
+        self.assertEqual(len(result['exported']),1)
+        self.assertEqual(result['exported'][0]['sa_id'],self.record.sa_id)
+
     def test_bridge_failure_is_not_silently_swallowed(self):
-        roster, classification, papers = self.classification()
         bridge = Mock(call=Mock(side_effect=RuntimeError("桥接断开")))
         with self.assertRaises(RuntimeError):
-            export(roster, classification, papers, bridge,
-                   ImportStore(self.root / "imports"), self.inbox)
+            export(self.selected(), bridge, ImportStore(self.root / "imports"), self.inbox)
 
 
 if __name__ == "__main__":

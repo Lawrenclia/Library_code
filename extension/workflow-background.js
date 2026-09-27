@@ -43,7 +43,8 @@ function isExpectedWOSDownload(item,recordURL) {
 async function dispatchWorkflow(command,pair) {
   if(!Number.isFinite(command.expires) || Date.now()>=command.expires-2500)throw new Error("工作命令已过期，未执行");
   const role=workflowRole(command.action), id=pair[role];
-  if(!Number.isInteger(id) || id===pair.tabId)throw new Error("请在扩展中分别绑定 WOS 与“数据导入与批次管理”标签页");
+  if(!Number.isInteger(id) || (id===pair.tabId && !(role==="wosTabId" && pair.mode==="wos")))
+    throw new Error(role==="wosTabId"?"请连接或绑定 WOS 标签页":"请绑定数据导入与批次管理标签页");
   let tab=await chrome.tabs.get(id);
   if(!validRolePage(tab.url,role))throw new Error("绑定的工作标签页已切换或未登录，请人工返回");
   const workOrigin=new URL(tab.url).origin;

@@ -1,19 +1,20 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>连接 SA 比对助手</title>
 <link rel="stylesheet" href="popup.css"></head><body>
-<h1>连接当前比对页</h1>
-<p>先打开并登录「SA数据比对 → 比对结果」，再将桌面工具的配对码粘贴到这里。</p>
+<h1>连接论文助手</h1>
+<p>下载论文：打开已登录的 WOS 页面，粘贴桌面配对码并连接即可。不需要打开 SA 或导入页。</p>
 <label for="token">本次配对码（不是账号密码）</label>
 <input id="token" type="password" autocomplete="off" spellcheck="false">
 <button id="pair">连接当前标签页</button><button id="disconnect">断开</button>
-<h2>WOS 单条导入工作页</h2>
+<details><summary>后台处理 / 单条导入（可选）</summary>
 <p>保持 SA 页不动。切换到 WOS 或后台导入标签页后，点击对应绑定按钮。WOS 支持 .com 与 clarivate.cn。导入页是左侧「数据导入与批次管理」，不是普通「数据管理」列表。</p>
 <button id="open-import">打开后台导入页面</button>
 <button id="wos">绑定当前 WOS 页</button>
 <button id="import">绑定当前导入管理页</button>
+</details>
 <button id="inspect">检查工作页（只读）</button>
 <button id="mute">WOS 静音 / 恢复</button>
 <textarea id="diagnostics" rows="6" readonly hidden aria-label="只读控件诊断"></textarea>
 <p>下载权限仅用于捕获本次 WOS TXT；不读取任意历史下载、账号或登录令牌。</p>
-<p id="status" role="status">只操作当前配对标签页，不读取密码或登录令牌。</p>
+<p id="status" role="status">在 WOS 页直接连接即可下载；无需绑定后台工作页。</p>
 <script src="popup.js"></script></body></html>

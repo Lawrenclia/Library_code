@@ -6,9 +6,10 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, filedialog, messagebox
 from model_review import MODELS, KeyStore
-from paper_classify import BASE
+from paper_classify import BASE, read_papers
 from core import SafetyStop
-from submission_prepare import prepare, templates, zero_roster
+from submission_prepare import (INBOX_NAME, collect_from_folder, downloads_folder,
+                                prepare, templates, zero_roster)
 
 
 class SubmissionPanel:
@@ -45,6 +46,12 @@ class SubmissionPanel:
         self.stop_button=ttk.Button(actions,text='当前条目后停止',command=self.request_stop,state='disabled')
         self.stop_button.pack(side='left')
         ttk.Button(actions,text='打开材料目录',command=self.open_folder).pack(side='right')
+        pickup=ttk.Frame(page)
+        pickup.pack(fill='x',pady=(2,0))
+        ttk.Label(pickup,text='手工从 WOS/CNKI 下载的导出默认落在浏览器下载目录，可按当前名单一键筛选并放入待收目录。\n批量自动下载在“批量分类 / 导入渠道”页的“下载 WOS 元数据”。',style='Muted.TLabel').pack(side='left')
+        pickup_button=ttk.Button(pickup,text='从下载目录筛选',command=self.collect_downloads)
+        pickup_button.pack(side='right')
+        self.controls.append(pickup_button)
         ttk.Label(page,textvariable=self.status,wraplength=920).pack(anchor='w',pady=12)
         ttk.Label(page,text='字段齐备：保存到“字段齐备”，仍需核验本校归属和本库查重。\n缺少作者、单位、日期、出处等关键资料：保存到“待补草稿”，不混入齐备文件。\n模型字段必须引用来源；无依据不补造。原始 WOS/CNKI 等导出文件只从配置中的真实地址下载。\n运行会调用交大模型 API 和公开元数据服务；名单负责人、工号和内部平台编号不发送给 AI。',wraplength=920,style='Muted.TLabel').pack(anchor='w',pady=12)
         self.timer=app.root.after(150,self.poll)
@@ -97,6 +104,44 @@ class SubmissionPanel:
                 self.events.put(('error',str(exc) if isinstance(exc,SafetyStop) else '本地读写或配置错误；已保存的材料可继续。'))
         threading.Thread(target=worker,daemon=True).start()
 
+    def collect_downloads(self):
+        if self.app.busy:
+            return
+        source=downloads_folder()
+        if not source.is_dir():
+            self.status.set(f'找不到浏览器下载目录：{source}')
+            return
+        inbox=BASE/'runtime'/'submission'/INBOX_NAME
+        self.status.set(f'正在按当前名单筛选 {source} …（只读取，未命中不会放入待收目录）')
+        def worker():
+            try:
+                document=read_papers(BASE/'list.xlsx')
+                self.events.put(('collected',collect_from_folder(source,document['papers'],inbox)))
+            except Exception as exc:
+                self.events.put(('error',str(exc) if isinstance(exc,SafetyStop) else '扫描下载目录失败。'))
+        threading.Thread(target=worker,daemon=True).start()
+
+    def report_collected(self,result):
+        lines=[f'扫描目录：{result["folder"]}',
+               f'命中并放入待收目录：{len(result["copied"])} 个',
+               f'未放入：{len(result["unmatched"])} 个']
+        if result['copied']:
+            lines.extend(['','已放入：'])
+            for entry in result['copied'][:6]:
+                lines.append(f'  · {entry["file"]}  →  {len(entry["ids"])} 篇')
+            if len(result['copied'])>6:
+                lines.append(f'  …共 {len(result["copied"])} 个')
+        if result['unmatched']:
+            lines.extend(['','未放入（原因）：'])
+            for entry in result['unmatched'][:8]:
+                lines.append(f'  · {entry["file"]}：{entry["reason"]}')
+            if len(result['unmatched'])>8:
+                lines.append(f'  …共 {len(result["unmatched"])} 个')
+        self.status.set(f'下载目录筛选完成：{len(result["copied"])} 个已放入待收目录，'
+                        f'{len(result["unmatched"])} 个未放入。')
+        messagebox.showinfo('从下载目录筛选','\n'.join(lines)
+                            +'\n\n下一步：点“开始 / 继续准备”采纳这些文件。',parent=self.app.root)
+
     def request_stop(self):
         self.stop.set()
         self.stop_button.configure(state='disabled')
@@ -108,6 +153,8 @@ class SubmissionPanel:
                 kind,value=self.events.get_nowait()
                 if kind=='progress':
                     self.status.set(value)
+                elif kind=='collected':
+                    self.report_collected(value)
                 else:
                     self.busy=False
                     self.app.set_busy(False)

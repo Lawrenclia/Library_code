@@ -113,7 +113,7 @@ class Bridge:
             if self.pending:
                 raise SafetyStop("已有命令正在执行。")
             if not self.online:
-                raise SafetyStop("浏览器未连接。请在已登录的比对页打开扩展并配对。")
+                raise SafetyStop("浏览器未连接。请在已登录的 WOS 或比对页打开扩展并配对。")
             result = queue.Queue(maxsize=1)
             command = {"id": str(uuid.uuid4()), "action": action, **payload,
                        "expires": int((time.time() + timeout) * 1000)}

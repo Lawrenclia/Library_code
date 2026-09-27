@@ -144,35 +144,55 @@ class App:
         ttk.Button(frame,text='打开所选记录',command=confirm).pack(anchor='e',pady=(12,0))
         popup.grab_set()
 
-    def export_wos_metadata(self):
-        # Batch download only. Upload, import and push write to the production library
-        # and stay single-record with explicit confirmation in the automation page.
-        if self.busy or not self.classifier:
-            return
+    def _wos_export_ready(self):
+        """Shared guard: returns the roster document, or None after telling the user."""
+        if self.busy:
+            return None
         if not self.roster:
             messagebox.showinfo('请先读取名单','请在人工处理页读取 list.xlsx。',parent=self.root)
             self.tabs.select(self.manual_page)
-            return
+            return None
         if not self.bridge or not self.bridge.online:
             messagebox.showinfo('需要连接浏览器',
                 '批量导出会操作你在扩展里绑定的 WOS 标签页。\n'
-                '请先在人工处理页点“连接浏览器”，并在扩展中绑定 WOS 工作页，然后再试。',
+                '请点“连接浏览器”取得配对码，在已登录的 WOS 页打开扩展并连接即可。无需 SA 或导入页。',
                 parent=self.root)
-            return
+            return None
         from paper_classify import read_papers
-        from wos_batch import default_inbox, export as export_batch, plan
         try:
-            document=read_papers(BASE/'list.xlsx')
-            classification,papers=plan(document,BASE/'runtime'/'classification')
+            return read_papers(BASE/'list.xlsx')
         except SafetyStop as exc:
-            messagebox.showwarning('无法开始批量导出',str(exc),parent=self.root)
+            messagebox.showwarning('无法读取名单',str(exc),parent=self.root)
+            return None
+
+    def export_wos_metadata(self):
+        """Search every zero-match record in the roster and export its WOS Full Record.
+
+        Every WOS export is download-only. Upload, import and push write to the
+        production library and stay single-record with confirmation on the other page.
+        """
+        if self._wos_export_ready() is None:
             return
+        from wos_batch import all_targets, roster_rows
+        rows=len(roster_rows(self.roster))
+        self._start_wos_export(all_targets(self.roster),'下载 WOS 元数据',rows=rows)
+
+    def _start_wos_export(self, targets, label, rows=None):
+        if not targets:
+            messagebox.showinfo('没有待导出的记录',
+                '按当前范围没有可导出的记录（已导出的条目会直接复用本地存档）。',parent=self.root)
+            return
+        from wos_batch import default_inbox, export as export_batch
         roster=self.roster
         bridge=self.bridge
-        store=self.automation_panel.store
         report=self.automation_panel.progress.put
+        total=len(targets)
+        scope=(f'名单 {rows} 条记录，同一篇论文合并为 {total} 份文件' if rows and rows!=total
+               else f'名单范围 {total} 条')
         def job():
-            return export_batch(roster,classification,papers,bridge,store,default_inbox(),
+            from wos_batch import default_store
+            store=default_store()
+            return export_batch(targets,bridge,store,default_inbox(),
                                 stop=self.classifier.stop,unchanged=roster.assert_unchanged,
                                 progress=report)
         def done(result):
@@ -183,21 +203,32 @@ class App:
                          +'\n'.join(f'· 原表第 {v["row"]} 行：{v["title"][:40]}' for v in shown))
                 if len(result['unconfirmed'])>len(shown):
                     detail+=f'\n…共 {len(result["unconfirmed"])} 条。'
-                detail+='\n请在“自动化 / 认领”页对这些条目逐条检索、核对身份后再导入。'
+                detail+='\n请先核对 runtime/wos-downloads 中的原始文件，再用于提交准备。'
             if result['failed']:
-                shown=list(result['failed'].values())[:5]
-                detail+='\n\n失败条目：\n'+'\n'.join(f'· 原表第 {v["row"]} 行：{v["error"]}' for v in shown)
-                if len(result['failed'])>len(shown):
-                    detail+=f'\n…共 {len(result["failed"])} 条，其余见运行日志。'
-            messagebox.showinfo('WOS 元数据导出结束',
-                f'待导出 {result["total"]} 条，成功 {len(result["exported"])} 条，'
+                listed=[v for v in result['failed'].values() if v['per_record']]
+                broken=[v for v in result['failed'].values() if not v['per_record']]
+                if listed:
+                    detail+='\n\nWOS 没有可用记录（需人工核对正确题名）：\n'+'\n'.join(
+                        f'· 原表第 {v["row"]} 行：{v["error"]}' for v in listed[:8])
+                    if len(listed)>8:
+                        detail+=f'\n…共 {len(listed)} 条，其余见运行日志。'
+                if broken:
+                    detail+='\n\n页面或会话问题（不是某一篇的问题）：\n'+'\n'.join(
+                        f'· 原表第 {v["row"]} 行：{v["error"]}' for v in broken[:5])
+                    if len(broken)>5:
+                        detail+=f'\n…共 {len(broken)} 条。'
+            messagebox.showinfo(f'{label}结束',
+                f'{scope}，成功 {len(result["exported"])} 条，'
                 f'身份待核验 {len(result.get("unconfirmed",[]))} 条，'
-                f'失败 {len(result["failed"])} 条。\n\n'
+                f'WOS 无可用记录 {result.get("not_exported",0)} 条，'
+                f'页面/会话问题 {result.get("session_failures",0)} 条。\n\n'
                 f'成功导出的 TXT 已放入待收目录：\n{result["inbox"]}\n\n'
-                '下一步：在“零匹配提交准备”页点“开始 / 继续准备”，这些文件会被自动采纳；'
-                '上传、导入与推送仍需在“自动化 / 认领”页逐条确认执行。'+detail,parent=self.root)
+                '下一步：在“零匹配提交准备”页点“开始 / 继续准备”采纳这些文件；'
+                '上传、导入与推送仍需在“自动化 / 认领”页逐条确认执行。'
+                '\n\n“WOS 无可用记录”包含检索无结果与结果不唯一两种情况，'
+                '需要人工核对正确题名；程序不会替你在多篇里挑一篇。'+detail,parent=self.root)
         self.classifier.set_exporting(True)
-        self.run(job,done,'正在按分类结果导出 WOS 元数据…',log_action='WOS 批量导出')
+        self.run(job,done,f'正在{label}…共 {total} 条',log_action=label)
 
     def button(self, parent, text, command, **kwargs):
         # Use text-sized buttons; ttk's default nine-character minimum clips the
@@ -551,7 +582,7 @@ class App:
         popup.geometry("510x290")
         frame = ttk.Frame(popup, padding=16)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="在 Chrome / Edge 加载 code/extension 扩展。\n登录后台并进入 SA 数据比对页，点击扩展图标，\n粘贴下方配对码并连接当前标签页。", wraplength=465).pack(anchor="w", pady=(0, 10))
+        ttk.Label(frame, text="在 Chrome / Edge 加载 extension 扩展。\n下载：在已登录的 WOS 页粘贴配对码并连接。\n后台处理：在 SA 比对结果页配对。两种用途独立。", wraplength=465).pack(anchor="w", pady=(0, 10))
         token = tk.StringVar(value=self.bridge.token)
         ttk.Entry(frame, textvariable=token, state="readonly").pack(fill="x")
         ttk.Button(frame, text="复制配对码", command=lambda: self.copy(token.get(), "配对码已复制。请在扩展中连接。")).pack(anchor="w", pady=8)

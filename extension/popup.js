@@ -4,7 +4,7 @@ document.getElementById("pair").addEventListener("click", async () => {
     const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
     const result = await chrome.runtime.sendMessage({type: "pair", tabId: tab?.id,
       token: document.getElementById("token").value.trim()});
-    status.textContent = result.ok ? "已连接。回到桌面弹窗选择负责人并开始。" : result.error;
+    status.textContent = result.ok ? "已连接当前页面。WOS 下载请回桌面点击“下载 WOS 元数据”。" : result.error;
     if (result.ok) document.getElementById("token").value = "";
   } catch (error) { status.textContent = error.message; }
 });
