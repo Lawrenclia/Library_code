@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SA 比对半自动助手",
-  "version": "0.3.16",
+  "version": "0.3.17",
   "description": "单条 SA 比对、WOS 完整记录导出与导入；独立绑定工作页，未知情况暂停。",
   "permissions": ["storage", "scripting", "activeTab", "downloads"],
   "host_permissions": [
@@ -11,6 +11,7 @@
     "https://www.webofscience.com/*",
     "https://webofscience.clarivate.cn/*"
   ],
+  "content_scripts": [{"matches": ["https://www.webofscience.com/wos/*", "https://webofscience.clarivate.cn/wos/*"], "js": ["content.js"]}],
   "background": {"service_worker": "background.js"},
   "action": {"default_popup": "popup.html", "default_title": "连接 SA 比对助手"}
 }

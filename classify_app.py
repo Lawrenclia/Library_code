@@ -112,6 +112,24 @@ class ClassifyApp:
         self.channel.trace_add('write',lambda *_:self.filter_results())
         self.count_text=tk.StringVar(value='暂无结果')
         ttk.Label(filters,textvariable=self.count_text,style='Muted.TLabel').pack(side='right',padx=(12,0))
+        # The bottom rows are packed before the expanding pane below. Tk's packer hands
+        # out space in packing order, so a pane packed first would claim the whole
+        # cavity and push the footer buttons off the edge -- where they are not merely
+        # hidden but unmapped, which is how the WOS download button disappeared.
+        ttk.Label(page,text='AI 建议需核实收录及导出文件。开始会使用模型额度；原名单保持不变。',style='Muted.TLabel').pack(side='bottom',anchor='w',pady=(8,0))
+        footer=ttk.Frame(page)
+        footer.pack(side='bottom',fill='x',pady=(12,0))
+        self.report_button=ttk.Button(footer,text='查看分类报告',command=lambda:self.open_report('分类建议.md'))
+        self.report_button.pack(side='left')
+        self.channel_button=ttk.Button(footer,text='查看渠道分组',command=lambda:self.open_report('导入渠道分类.md'))
+        self.channel_button.pack(side='left',padx=8)
+        if self.on_review:
+            self.review_button=ttk.Button(footer,text='转到人工处理',command=self.review_selected)
+            self.review_button.pack(side='left')
+        if self.on_export:
+            self.export_button=ttk.Button(footer,text='下载 WOS 元数据',command=self.export_wos)
+            self.export_button.pack(side='left',padx=8)
+        ttk.Button(footer,text='结果文件夹',command=self.open_output).pack(side='right')
         panes=ttk.Panedwindow(page,orient='vertical')
         panes.pack(fill='both',expand=True)
         table=ttk.Frame(panes)
@@ -137,20 +155,6 @@ class ClassifyApp:
         ds.pack(side='right',fill='y')
         self.detail.pack(fill='both',expand=True)
         self.set_detail('选择一篇论文，查看完整题名、分类理由、推荐入口和待确认条件。')
-        footer=ttk.Frame(page)
-        footer.pack(fill='x',pady=(12,0))
-        self.report_button=ttk.Button(footer,text='查看分类报告',command=lambda:self.open_report('分类建议.md'))
-        self.report_button.pack(side='left')
-        self.channel_button=ttk.Button(footer,text='查看渠道分组',command=lambda:self.open_report('导入渠道分类.md'))
-        self.channel_button.pack(side='left',padx=8)
-        if self.on_review:
-            self.review_button=ttk.Button(footer,text='转到人工处理',command=self.review_selected)
-            self.review_button.pack(side='left')
-        if self.on_export:
-            self.export_button=ttk.Button(footer,text='按分类导出 WOS 元数据',command=self.export_wos)
-            self.export_button.pack(side='left',padx=8)
-        ttk.Button(footer,text='结果文件夹',command=self.open_output).pack(side='right')
-        ttk.Label(page,text='AI 建议需核实收录及导出文件。开始会使用模型额度；原名单保持不变。',style='Muted.TLabel').pack(anchor='w',pady=(8,0))
         self.load_results()
         self.poll_id=root.after(150,self.poll)
         root.bind('<Destroy>',lambda event:self.dispose() if event.widget is root else None,add='+')
@@ -198,7 +202,7 @@ class ClassifyApp:
         # The batch reuses this same stop flag, so "本批完成后停止" also halts an export
         # run instead of leaving the window disabled with no way out.
         self.stop.clear()
-        self.status.set('正在按分类结果导出 WOS 元数据；可点“本批完成后停止”。')
+        self.status.set('正在按名单检索 WOS 并下载完整记录；可点“本批完成后停止”。')
         self.on_export()
 
     def set_exporting(self,value):

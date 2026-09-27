@@ -9,7 +9,8 @@ from unittest.mock import Mock, patch
 import openpyxl
 from core import SafetyStop, file_hash
 from submission_prepare import (KINDS,REQUIRED,zero_roster,templates,crossref_source,validate_metadata,
-                                assess,original_export,prepare,fetch_bytes,MetadataClient)
+                                assess,original_export,prepare,fetch_bytes,MetadataClient,
+                                matches_paper,normalize_doi,usable_doi)
 
 
 class SubmissionTests(unittest.TestCase):
@@ -331,6 +332,78 @@ class SubmissionTests(unittest.TestCase):
         result=json.loads((folder/'提交准备.json').read_text(encoding='utf-8'))['records'][0]
         self.assertEqual(result['status'],'字段齐备待核验')
         self.assertNotIn('待收-',json.dumps(result.get('export') or {}))
+
+    def test_url_form_roster_doi_matches_a_bare_doi_export(self):
+        # The SA export writes some DOIs as full doi.org URLs; WOS and Crossref carry
+        # the bare form. Raw string comparison would reject a perfectly good export.
+        self.assertEqual(normalize_doi('https://doi.org/10.1000/Test'),'10.1000/test')
+        self.assertEqual(normalize_doi('doi:10.1000/test'),'10.1000/test')
+        paper={'title':'A completely different title','doi':'https://doi.org/10.1000/test'}
+        self.assertTrue(matches_paper('DI 10.1000/test\nTI Something else\nER\nEF',paper))
+        self.assertFalse(matches_paper('DI 10.1000/other\nTI Something else',paper))
+        # A malformed DOI must not be forced into a Crossref path.
+        self.assertEqual(usable_doi('https://doi.org/not-a-doi'),'')
+        self.assertEqual(usable_doi('https://doi.org/10.1000/test'),'10.1000/test')
+
+    def test_validate_metadata_accepts_a_bare_doi_for_a_url_form_roster_doi(self):
+        paper={**self.paper,'doi':'https://doi.org/10.1000/test'}
+        response=self.response()   # source and model both use the bare 10.1000/test
+        saved=validate_metadata(json.dumps(response),paper,[self.source()],self.spec)
+        self.assertEqual(saved['fields']['DOI']['value'],'10.1000/test')
+
+    def test_crossref_request_uses_the_bare_doi_path(self):
+        paper={**self.paper,'doi':'https://doi.org/10.1000/test'}
+        record={'title':['Target'],'DOI':'10.1000/test','type':'journal-article',
+                'author':[{'given':'A','family':'Name','affiliation':[{'name':'Uni'}]}],
+                'published':{'date-parts':[[2024,3,1]]},'container-title':['Journal']}
+        fetch=Mock(return_value=(json.dumps({'message':record}).encode(),'application/json'))
+        crossref_source(paper,fetch)
+        self.assertIn('/works/10.1000%2Ftest',fetch.call_args.args[0])
+
+    def test_scan_and_collect_from_a_download_folder(self):
+        from submission_prepare import scan_exports, collect_from_folder
+        papers=zero_roster(self.path)['papers']
+        source=self.root/'downloads'
+        source.mkdir()
+        (source/'match.txt').write_text('DI 10.1000/test\nTI Target\nER\nEF',encoding='utf-8')
+        (source/'unrelated.txt').write_text('DI 10.9999/other\nTI Nothing here',encoding='utf-8')
+        (source/'login.txt').write_text('<html><body>sign in</body></html>',encoding='utf-8')
+        matched,unmatched=scan_exports(source,papers)
+        self.assertEqual([m['file'] for m in matched],['match.txt'])
+        self.assertEqual(sorted(u['file'] for u in unmatched),['login.txt','unrelated.txt'])
+        inbox=self.root/'inbox'
+        result=collect_from_folder(source,papers,inbox)
+        self.assertEqual([Path(c['copied']).name for c in result['copied']],['match.txt'])
+        # Only the identified file may reach the auto-adopted folder.
+        self.assertEqual(sorted(p.name for p in inbox.iterdir()),['match.txt'])
+
+    def test_collect_never_overwrites_a_different_file_with_the_same_name(self):
+        from submission_prepare import collect_from_folder
+        papers=zero_roster(self.path)['papers']
+        source=self.root/'downloads'
+        source.mkdir()
+        (source/'match.txt').write_text('DI 10.1000/test\nTI Target\nER\nEF',encoding='utf-8')
+        inbox=self.root/'inbox'
+        inbox.mkdir()
+        (inbox/'match.txt').write_text('DI 10.1000/test\nTI Target\nKEEP THIS',encoding='utf-8')
+        result=collect_from_folder(source,papers,inbox)
+        self.assertEqual(result['copied'],[])
+        self.assertIn('未覆盖',result['unmatched'][-1]['reason'])
+        self.assertIn('KEEP THIS',(inbox/'match.txt').read_text(encoding='utf-8'))
+
+    def test_collect_is_idempotent_for_an_already_copied_file(self):
+        from submission_prepare import collect_from_folder
+        papers=zero_roster(self.path)['papers']
+        source=self.root/'downloads'
+        source.mkdir()
+        raw='DI 10.1000/test\nTI Target\nER\nEF'
+        (source/'match.txt').write_text(raw,encoding='utf-8')
+        inbox=self.root/'inbox'
+        first=collect_from_folder(source,papers,inbox)
+        second=collect_from_folder(source,papers,inbox)
+        self.assertEqual(len(first['copied']),1)
+        self.assertEqual(len(second['copied']),1)
+        self.assertEqual((inbox/'match.txt').read_text(encoding='utf-8'),raw)
 
     def test_model_payload_has_no_workflow_identifiers(self):
         client=MetadataClient(Mock())
