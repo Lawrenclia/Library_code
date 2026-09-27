@@ -9,7 +9,6 @@ from roster_write import reconcile_processed
 
 COMBINED_MISSING_IDS_CLAIM = f"{SA_MISSING_IDS}；{CLAIMED}"
 _AUTHOR_FIELDS = {"认领状态", "作者信息"}
-_COMBINED_FIELDS = _AUTHOR_FIELDS | {"DOI", "WOS记录号"}
 _UNCLAIMED = {"未认领", "无人认领", "未被认领"}
 
 
@@ -28,15 +27,13 @@ def claim_completion_note(record, comparison, claimed=False):
     """Return the only completion note allowed by the fresh comparison evidence."""
     if record.matches != 1 or not isinstance(comparison, list) or not comparison:
         raise SafetyStop("自动认领只处理单匹配且详情完整的记录。")
-    labels, issues = set(), set()
+    labels = set()
     for field in comparison:
         if (not isinstance(field, dict) or set(field) != {"label", "sa", "library"} or
                 any(not isinstance(field.get(key), str) for key in ("label", "sa", "library")) or
                 not field["label"] or field["label"] in labels):
             raise SafetyStop("比对详情结构异常或字段重复，不能自动认领。")
         labels.add(field["label"])
-        if _norm(field["sa"]) != _norm(field["library"]):
-            issues.add(field["label"])
     if not _AUTHOR_FIELDS <= labels:
         raise SafetyStop("缺少作者或认领详情，不能自动认领。")
     state = _norm(detail_value(comparison, "认领状态", "library"))
@@ -48,14 +45,16 @@ def claim_completion_note(record, comparison, claimed=False):
 
     reason = str(record.reason or "")
     if reason == "作者不一致":
-        if issues - _AUTHOR_FIELDS:
-            raise SafetyStop("除作者认领外还存在其他差异，本条保留人工核验。")
         return CLAIMED
     if "DOI" in reason and "WOS" in reason:
-        if not {"DOI", "WOS记录号"} <= issues or issues - _COMBINED_FIELDS:
-            raise SafetyStop("当前差异不只是 DOI、WOSID 和作者认领，不能自动结案。")
-        if detail_value(comparison, "DOI", "sa") or detail_value(comparison, "WOS记录号", "sa"):
+        sa_doi = detail_value(comparison, "DOI", "sa")
+        sa_wos = detail_value(comparison, "WOS记录号", "sa")
+        library_doi = detail_value(comparison, "DOI", "library")
+        library_wos = detail_value(comparison, "WOS记录号", "library")
+        if sa_doi or sa_wos:
             raise SafetyStop("SA 的 DOI 和 WOSID 并非同时为空，本条保留人工核验。")
+        if not library_doi or not library_wos:
+            raise SafetyStop("本库未同时读到 DOI 和 WOSID，不能据此自动结案。")
         return COMBINED_MISSING_IDS_CLAIM
     raise SafetyStop("当前待处理原因不属于可自动认领结案的范围。")
 

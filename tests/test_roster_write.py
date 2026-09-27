@@ -9,7 +9,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
 
 from core import HEADERS, QUERY_HEADER, SafetyStop, file_hash, read_roster
-from roster_write import mark_complete, mark_skipped_many, reconcile_processed
+from roster_write import clear_skipped_many, mark_complete, mark_skipped_many, reconcile_processed
 
 
 def make_roster(path, flags=(None, 1, "1", 0, True)):
@@ -141,6 +141,40 @@ class RosterWriteTests(unittest.TestCase):
         self.assertFalse(completed.roster.records[0].skipped)
         self.assertEqual(completed.roster.records[0].remark, "1")
         self.assertTrue(completed.roster.records[2].skipped)
+
+    def test_clear_skipped_many_only_clears_numeric_two(self):
+        make_roster(self.path, [2, "2", 2.0, 1, None])
+        roster = read_roster(self.path)
+        before = self.path.read_bytes()
+        with zipfile.ZipFile(self.path) as archive:
+            parts = {name: archive.read(name) for name in archive.namelist()}
+        targets = [record for record in roster.records if record.skipped]
+
+        update = clear_skipped_many(roster, targets)
+
+        self.assertEqual(update.cells, ("A2", "A4"))
+        self.assertEqual(update.backup.read_bytes(), before)
+        self.assertFalse(any(record.skipped for record in update.roster.records))
+        self.assertEqual([record.done for record in update.roster.records],
+                         [False, False, False, True, False])
+        self.assertEqual([record.remark for record in update.roster.records],
+                         ["", "2", "", "1", ""])
+        book = load_workbook(self.path)
+        try:
+            self.assertEqual([book["名单"][cell].value for cell in ("A2", "A3", "A4", "A5", "A6")],
+                             [None, "2", None, 1, None])
+            self.assertEqual(book["名单"]["A2"].fill.fgColor.rgb, "00FFF4C2")
+            self.assertEqual(book["名单"]["M2"].value, "网页备注保留")
+        finally:
+            book.close()
+        with zipfile.ZipFile(self.path) as archive:
+            changed = [name for name in archive.namelist() if archive.read(name) != parts[name]]
+        self.assertEqual(changed, ["xl/worksheets/sheet1.xml"])
+
+    def test_clear_requires_existing_numeric_two(self):
+        roster = read_roster(self.path)
+        with self.assertRaises(SafetyStop):
+            clear_skipped_many(roster, [roster.records[0]])
 
     def test_write_preserves_other_zip_parts_and_notes(self):
         roster = read_roster(self.path)

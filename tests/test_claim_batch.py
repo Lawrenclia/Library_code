@@ -136,6 +136,30 @@ class ClaimBatchTests(unittest.TestCase):
         self.assertEqual(result.completed_ids, (target.sa_id,))
         self.assertEqual(close.call_args.kwargs["note"], COMBINED_MISSING_IDS_CLAIM)
 
+    def test_combined_claim_allows_auxiliary_display_differences(self):
+        target = record("demo-combined-extra", reason="DOI和WOSID都不一致;作者不一致")
+        roster = FakeRoster([target])
+        search = found(target)
+        search["row"]["reason"] = target.reason
+        search["comparison"].extend([
+            {"label": "DOI", "sa": "", "library": "10.1016/j.oceaneng.2025.122998"},
+            {"label": "WOS记录号", "sa": "", "library": "WOS:001609529300006"},
+            {"label": "发表年月", "sa": "2026-01", "library": "2026"},
+            {"label": "作者单位", "sa": "船建", "library": "Shanghai Jiao Tong Univ"},
+        ])
+        prep = prepared(search)
+        proof = {"row": search["row"], "verified": True, "claimed": True, "staff_id": "00001",
+                 "scholar_id": "scholar-1", "author": "Tester", "order": 1}
+        bridge = Mock()
+        bridge.call.side_effect = [search, prep, proof]
+        closed_roster = FakeRoster([replace(target, done=True)])
+        closure = SimpleNamespace(completion=SimpleNamespace(roster=closed_roster))
+        with patch("claim_batch.auto_complete_claim", return_value=closure) as close:
+            result = run_claim_batch(roster, [target], bridge)
+
+        self.assertEqual(result.completed_ids, (target.sa_id,))
+        self.assertEqual(close.call_args.kwargs["note"], COMBINED_MISSING_IDS_CLAIM)
+
     def test_combined_case_requires_both_sa_identifiers_blank(self):
         target = record("demo-incomplete", reason="DOI和WOSID都不一致")
         roster = FakeRoster([target])

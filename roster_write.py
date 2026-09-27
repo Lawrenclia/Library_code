@@ -86,8 +86,8 @@ def worksheet_member(archive, name):
 
 def patch_cell(data, reference, row_number, value=1):
     """Preserve XML namespaces, styles, extensions and all surrounding bytes."""
-    if type(value) is not int or value not in (1, 2):
-        raise SafetyStop("名单状态只能写入数字 1（完成）或 2（跳过）。")
+    if value is not None and (type(value) is not int or value not in (1, 2)):
+        raise SafetyStop("名单状态只能写入数字 1（完成）、2（跳过）或清空跳过标记。")
     document = ET.fromstring(data)
     protection = document.find(f"{{{NS}}}sheetProtection")
     if document.tag != f"{{{NS}}}worksheet" or (protection is not None and protection.get("sheet", "1") not in {"0", "false"}):
@@ -123,9 +123,11 @@ def patch_cell(data, reference, row_number, value=1):
             raise SafetyStop("备注包含特殊元数据，请人工处理。")
         start = found[0].group().split(">", 1)[0].rstrip("/")
         start = re.sub(r'\s+t="[^"]*"', "", start)
-        replacement = start + f' t="n"><v>{value}</v></c>'
+        replacement = start + "/>" if value is None else start + f' t="n"><v>{value}</v></c>'
         segment = segment[:found[0].start()] + replacement + segment[found[0].end():]
     else:
+        if value is None:
+            raise SafetyStop("跳过标记单元格已不存在，请重新读取名单。")
         replacement = f'<c r="{reference}" t="n"><v>{value}</v></c>'
         from openpyxl.utils.cell import coordinate_to_tuple
         destination = coordinate_to_tuple(reference)[1]
@@ -150,9 +152,10 @@ def _mark_values(roster, updates, backup_dir=None):
         raise SafetyStop("没有需要写入的名单状态。")
     rows = set()
     for record, value in updates:
-        if record not in roster.records or record.done or type(value) is not int or value not in (1, 2):
+        valid_value = value is None or (type(value) is int and value in (1, 2))
+        if record not in roster.records or record.done or not valid_value:
             raise SafetyStop("任务已完成、状态无效或不属于当前名单，请重新读取。")
-        if record.row in rows or (value == 2 and record.skipped):
+        if record.row in rows or (value == 2 and record.skipped) or (value is None and not record.skipped):
             raise SafetyStop("跳过任务已标记或目标行重复，请重新读取。")
         rows.add(record.row)
     temporary = None
@@ -180,14 +183,17 @@ def _mark_values(roster, updates, backup_dir=None):
             for row_number, (record, value) in target_values.items():
                 expected = [r for r in verified.records if r.row == row_number and r.sa_id == record.sa_id]
                 state_ok = (value == 1 and expected and expected[0].done and not expected[0].skipped) or \
-                           (value == 2 and expected and expected[0].skipped and not expected[0].done)
+                           (value == 2 and expected and expected[0].skipped and not expected[0].done) or \
+                           (value is None and expected and not expected[0].done and
+                            not expected[0].skipped and expected[0].remark == "")
                 if len(expected) != 1 or not state_ok or expected[0].key != record.key:
                     fields = "目标行或 ID" if len(expected) != 1 else ("状态标记类型" if not state_ok else "其他任务字段")
                     raise SafetyStop(f"第 {row_number} 行回读失败（{fields}），原名单未修改。请重启最新版助手并重读名单；若仍失败，请反馈此行号。")
             from dataclasses import replace
             intended = [replace(r, done=target_values[r.row][1] == 1,
                                 skipped=target_values[r.row][1] == 2,
-                                remark=str(target_values[r.row][1]))
+                                remark="" if target_values[r.row][1] is None else
+                                str(target_values[r.row][1]))
                         if r.row in target_values else r for r in roster.records]
             if verified.records != intended:
                 raise SafetyStop("回读发现非目标行发生变化，原名单未修改。")
@@ -231,6 +237,11 @@ def mark_complete(roster, record, backup_dir=None):
 def mark_skipped_many(roster, records, backup_dir=None):
     """Back up and mark several safely skipped records with numeric 2."""
     return _mark_values(roster, [(record, 2) for record in records], backup_dir)
+
+
+def clear_skipped_many(roster, records, backup_dir=None):
+    """Back up and clear existing numeric-2 workflow flags only."""
+    return _mark_values(roster, [(record, None) for record in records], backup_dir)
 
 
 def reconcile_processed(roster, record, remote_row, owner="谭勋策"):

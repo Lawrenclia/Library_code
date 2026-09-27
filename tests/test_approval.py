@@ -170,6 +170,47 @@ class AutomaticClaimCompletionTests(unittest.TestCase):
         self.assertEqual(self.bridge.call.call_args.args[1]["note"], COMBINED_MISSING_IDS_CLAIM)
         self.write.assert_called_once_with(self.roster, self.record)
 
+    def test_combined_claim_ignores_auxiliary_display_differences(self):
+        reason = "DOI和WOSID都不一致;作者不一致"
+        self.record.reason = reason
+        self.before["reason"] = reason
+        self.proof["row"]["reason"] = reason
+        self.row["reason"] = reason
+        fields = [
+            {"label": "DOI", "sa": "", "library": "10.1016/j.oceaneng.2025.122998"},
+            {"label": "WOS记录号", "sa": "", "library": "WOS:001609529300006"},
+            {"label": "发表年月", "sa": "2026-01", "library": "2026"},
+            {"label": "作者单位", "sa": "船建", "library": "Shanghai Jiao Tong Univ"},
+        ]
+        self.comparison.extend(copy.deepcopy(fields))
+        self.current.extend(copy.deepcopy(fields))
+        self.latest = {"row": copy.deepcopy(self.row), "comparison": copy.deepcopy(self.current)}
+        self.done = {**self.row, "markStatus": "已处理", "remark": COMBINED_MISSING_IDS_CLAIM}
+        self.bridge.call.side_effect = [self.latest, self.latest, {"verified": True, "row": self.done}]
+
+        result = self.finish()
+
+        self.assertFalse(result.already_processed)
+        self.assertEqual(self.bridge.call.call_args.args[1]["note"], COMBINED_MISSING_IDS_CLAIM)
+        self.write.assert_called_once_with(self.roster, self.record)
+
+    def test_combined_claim_requires_both_library_identifiers(self):
+        reason = "DOI和WOSID都不一致;作者不一致"
+        self.record.reason = reason
+        self.before["reason"] = reason
+        self.proof["row"]["reason"] = reason
+        self.row["reason"] = reason
+        self.comparison.extend([
+            {"label": "DOI", "sa": "", "library": "10.1000/example"},
+            {"label": "WOS记录号", "sa": "", "library": ""},
+        ])
+
+        with self.assertRaisesRegex(SafetyStop, "本库未同时读到"):
+            self.finish()
+
+        self.bridge.call.assert_not_called()
+        self.write.assert_not_called()
+
     def test_other_owner_or_missing_confirmation_cannot_start(self):
         with self.assertRaises(SafetyStop):
             self.finish(confirmed=False)
