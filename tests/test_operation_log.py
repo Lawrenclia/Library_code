@@ -29,7 +29,9 @@ class OperationLogTests(unittest.TestCase):
 
     def test_paused_result_is_recorded_without_exception_text(self):
         self.log.record("网页认领", "已暂停", "demo-001")
+        self.log.record("无法判断的记录", "已跳过", "demo-002")
         self.assertEqual(self.log.read()[0]["result"], "已暂停")
+        self.assertEqual(self.log.read()[1]["result"], "已跳过")
         self.assertEqual(set(self.log.read()[0]), {"time", "action", "sa_id", "result"})
 
     def test_corrupt_existing_log_is_preserved(self):

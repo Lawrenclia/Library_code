@@ -74,6 +74,34 @@ class UITests(unittest.TestCase):
         self.assertEqual(self.app.done_count.get(), '已完成 1')
         self.assertEqual(self.app.tree.tag_configure('pending')['background'], YELLOW)
 
+    def test_skipped_automation_row_is_red_and_remains_pending(self):
+        self.select_first()
+        sa_id = self.app.current.sa_id
+        self.app.skipped[sa_id] = '署名不能唯一对应'
+        self.app.populate()
+        self.assertEqual(self.app.tree.item(sa_id, 'values')[2], '跳过')
+        self.assertIn('skipped', self.app.tree.item(sa_id, 'tags'))
+        self.assertEqual(self.app.tree.tag_configure('skipped')['background'], '#f4c7c7')
+        self.app.tree.selection_set(sa_id)
+        self.app.current = None
+        self.app.select_record()
+        self.assertIn('署名不能唯一对应', self.app.details.get('1.0', 'end'))
+        self.assertFalse(self.app.current.done)
+
+    def test_automatic_claim_list_applies_red_skips_without_excel_completion(self):
+        from claim_batch import ClaimBatchResult
+        self.select_tan_first()
+        record = self.app.current
+        self.app.bridge = Mock(online=True)
+        result = ClaimBatchResult(self.app.roster, (), (), {record.sa_id: '需要人工核对署名'}, 1, False, False)
+        with patch('automation_panel.run_claim_batch', return_value=result), \
+                patch.object(self.app, 'run', side_effect=self.sync_run):
+            self.app.automation_panel.claim_batch()
+        self.assertIn('skipped', self.app.tree.item(record.sa_id, 'tags'))
+        self.assertEqual(self.app.tree.item(record.sa_id, 'values')[2], '跳过')
+        self.assertFalse(next(item for item in self.app.roster.records if item.sa_id == record.sa_id).done)
+        self.assertIn('红色跳过：1', self.app.automation_panel.output.get('1.0', 'end'))
+
     def test_warning_is_quiet_non_modal_and_can_be_updated(self):
         self.root.deiconify()
         self.root.update()

@@ -30,7 +30,7 @@ class OperationLog:
         return data["operations"]
 
     def record(self, action, result, sa_id=""):
-        if not isinstance(action, str) or not action.strip() or result not in {"已执行", "已暂停"}:
+        if not isinstance(action, str) or not action.strip() or result not in {"已执行", "已跳过", "已暂停"}:
             raise ValueError("操作日志字段无效。")
         entry = {"time": datetime.now().astimezone().isoformat(timespec="seconds"),
                  "action": action.strip(), "sa_id": str(sa_id or ""), "result": result}

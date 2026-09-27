@@ -45,6 +45,7 @@ class App:
         self.comparison = None
         self.prepared_claim = None
         self.claim_options = []
+        self.skipped = {}
         self.busy = False
         self.events = queue.Queue()
         self.buttons = []
@@ -325,6 +326,7 @@ class App:
             self.tree.column(name, width=size, minwidth=50, stretch=name == "title")
         self.tree.tag_configure("pending", background=YELLOW, foreground="#4b3d17")
         self.tree.tag_configure("done", background=GREEN, foreground="#19522c")
+        self.tree.tag_configure("skipped", background="#f4c7c7", foreground="#761c1c")
         scroll = ttk.Scrollbar(listing, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -499,6 +501,7 @@ class App:
         self.roster = None
         self.records = []
         self.by_id = {}
+        self.skipped.clear()
         self.owner.set("")
         self.owner_box["values"] = []
         self.tree.delete(*self.tree.get_children())
@@ -526,8 +529,9 @@ class App:
         self.by_id = {r.sa_id: r for r in self.records}
         self.tree.delete(*self.tree.get_children())
         for record in self.records:
-            self.tree.insert("", "end", iid=record.sa_id, values=(record.sa_id, record.title, "已完成" if record.done else "未完成"),
-                             tags=("done" if record.done else "pending",))
+            tag = "done" if record.done else "skipped" if record.sa_id in self.skipped else "pending"
+            state = "已完成" if record.done else "跳过" if tag == "skipped" else "未完成"
+            self.tree.insert("", "end", iid=record.sa_id, values=(record.sa_id, record.title, state), tags=(tag,))
         self.update_counts(scope)
         style = ttk.Style(self.root)
         style.map("Treeview", background=[("selected", "#a7dcbc" if self.task_view.get() == "done" else "#f5d366")],
@@ -560,7 +564,10 @@ class App:
         self.current = record
         self.set_approval(record.done)
         self.current_id.set(f"ID：{record.sa_id}")
-        self.show_text(f"{record.title}\n\n工号 {record.staff_id or '—'}    匹配 {record.matches}\n{record.reason or '未提供差异原因'}")
+        skipped = self.skipped.get(record.sa_id)
+        self.show_text(f"{record.title}\n\n工号 {record.staff_id or '—'}    匹配 {record.matches}\n"
+                       f"{record.reason or '未提供差异原因'}" +
+                       (f"\n\n自动认领已跳过：{skipped}" if skipped else ""))
         self.status.set("已完成记录，仅供查看。" if record.done else "可定位网页；处理完成后由你批准。")
         self.note_operation("选择记录", sa_id=record.sa_id)
 

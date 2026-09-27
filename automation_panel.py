@@ -6,6 +6,7 @@ from tkinter import ttk
 from notices import messages as messagebox
 
 from automation import ImportStore, WOSFlow, classify
+from claim_batch import run_claim_batch
 from core import SafetyStop
 from pilot import OWNER, pilot_scope, precheck_pilot
 from roster_write import reconcile_processed
@@ -21,9 +22,9 @@ class AutomationPanel:
         self.route = tk.StringVar(value="自动识别当前条目的处理路径")
         toolbar = ttk.Frame(parent)
         toolbar.pack(fill="x", pady=(0, 8))
-        app.button(toolbar, "自动判断并执行", self.start, style="Model.TButton").pack(side="left")
+        app.button(toolbar, "自动认领列表", self.claim_batch, style="Model.TButton").pack(side="left")
         app.button(toolbar, "预检前100条", self.pilot).pack(side="left", padx=5)
-        self.stop_button = ttk.Button(toolbar, text="暂停后续步骤", command=self.cancelled.set)
+        self.stop_button = ttk.Button(toolbar, text="暂停后续步骤", command=self.cancel)
         self.stop_button.pack(side="right")
         ttk.Label(parent, textvariable=self.route, wraplength=445).pack(anchor="w", pady=(0, 8))
         self.subtabs = ttk.Notebook(parent)
@@ -32,6 +33,7 @@ class AutomationPanel:
         self.claim_page = ttk.Frame(self.subtabs, padding=8)
         self.subtabs.add(self.wos_page, text="WOS 导入")
         self.subtabs.add(self.claim_page, text="作者认领")
+        self.subtabs.select(self.claim_page)
         wos = self.wos_page
         ttk.Label(wos, text="检索 → 完整记录 → 核验 → 导入 → 推送", wraplength=425).pack(anchor="w", pady=(0, 5))
         box = ttk.Frame(wos)
@@ -56,6 +58,69 @@ class AutomationPanel:
     def clear(self):
         self.route.set("自动识别当前条目的处理路径")
         self.show("")
+
+    def cancel(self):
+        self.cancelled.set()
+        self.app.note_operation("暂停自动认领列表")
+
+    def claim_batch(self):
+        app = self.app
+        if app.busy:
+            return
+        try:
+            if not app.roster or app.owner.get() != OWNER or app.task_view.get() != "pending":
+                raise SafetyStop("请先在人工页选择谭勋策，并切换到未完成列表。")
+            app.roster.assert_unchanged()
+            if not app.bridge or not app.bridge.online:
+                raise SafetyStop("请先连接 Edge 中的 SA 比对结果页。")
+            candidates = [record for record in app.records if not record.done][:100]
+            if not candidates:
+                raise SafetyStop("当前没有可检查的未完成记录。")
+            roster = app.roster
+            originals = {record.sa_id: record for record in roster.records}
+            for record in candidates:
+                app.skipped.pop(record.sa_id, None)
+            self.cancelled.clear()
+            app.reviewed.set(False)
+            self.subtabs.select(self.claim_page)
+        except SafetyStop as exc:
+            app.note_operation("自动认领列表", "已暂停")
+            messagebox.showwarning("暂未自动认领", str(exc), parent=app.root)
+            return
+
+        def audit(action, result, sa_id):
+            app.operation_log.record(action, result, sa_id)
+
+        def finished(result):
+            app.roster = result.roster
+            app.skipped.update(result.skipped)
+            app.clear_selection()
+            app.populate()
+            for sa_id in (*result.completed_ids, *result.synced_ids):
+                original = originals.get(sa_id)
+                if not original:
+                    continue
+                try:
+                    app.journal.save(original, "已完成", "已认领" if sa_id in result.completed_ids else "", {
+                        "mode": "automatic_claim_batch", "already_processed": sa_id in result.synced_ids})
+                except Exception:
+                    pass
+            summary = (f"本轮检查：{result.checked} 条（最多 100）\n"
+                       f"自动认领并结案：{len(result.completed_ids)} 条\n"
+                       f"后台原已处理并同步：{len(result.synced_ids)} 条\n"
+                       f"红色跳过：{len(result.skipped)} 条")
+            reasons = "\n".join(f"{sa_id}：{reason}" for sa_id, reason in list(result.skipped.items())[:12])
+            self.route.set("自动认领因网页状态不确定而停止" if result.halted else
+                           "自动认领已暂停" if result.cancelled else "自动认领列表已完成")
+            self.show(summary + ("\n\n红色记录：\n" + reasons if reasons else ""))
+            app.status.set("已停止后续操作；红色记录保留未完成，请先核验网页。" if result.halted else
+                           "自动认领已暂停；已完成结果已保留。" if result.cancelled else
+                           "自动认领列表完成；红色记录已跳过并保持未完成。")
+
+        app.run(lambda: run_claim_batch(roster, candidates, app.bridge, self.cancelled.is_set,
+                                        self.progress.put, audit, limit=100), finished,
+                "正在自动认领当前列表，无法安全判断的记录将标红跳过…",
+                log_action="自动认领列表")
 
     def guard(self):
         app = self.app
