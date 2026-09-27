@@ -188,13 +188,15 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(result['exported'],[])
         self.assertEqual(result['not_exported'],1)
 
-    def test_repeated_failures_stop_the_batch(self):
+    def test_repeated_download_failures_visit_every_record(self):
         records = self.distinct(4)
         # A relative path means the extension never reported a usable download.
         bridge = Mock(call=Mock(return_value={"path": "relative.txt", "sa_id": "demo-002"}))
-        with self.assertRaises(SafetyStop):
-            export(all_targets(FakeRoster(records)), bridge,
-                   ImportStore(self.root / "imports"), self.inbox)
+        result=export(all_targets(FakeRoster(records)), bridge,
+                      ImportStore(self.root / "imports"), self.inbox)
+        self.assertEqual(len(result['failed']),4)
+        self.assertEqual(bridge.call.call_count,8)
+        self.assertFalse(result['stopped'])
         self.assertEqual(list(self.inbox.iterdir()), [])
 
     def test_weak_identity_export_is_not_dropped_into_the_auto_adopted_folder(self):
@@ -236,12 +238,28 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(result["not_exported"], len(records))
         self.assertEqual(result["session_failures"], 0)
 
-    def test_session_level_failures_still_stop_the_batch(self):
+    def test_session_level_failures_visit_every_record(self):
         records = self.distinct(8)
         bridge = Mock(call=Mock(side_effect=SafetyStop('绑定的工作标签页已切换或未登录，请人工返回')))
-        with self.assertRaises(SafetyStop):
-            export(all_targets(FakeRoster(records)), bridge,
-                   ImportStore(self.root / "imports"), self.inbox)
+        result=export(all_targets(FakeRoster(records)), bridge,
+                      ImportStore(self.root / "imports"), self.inbox)
+        self.assertEqual(result['session_failures'],8)
+        self.assertEqual(bridge.call.call_count,8)
+        self.assertFalse(result['stopped'])
+
+    def test_success_after_three_failures_is_still_downloaded(self):
+        records=self.distinct(3)+[self.record]
+        bridge=self.bridge_for(sample())
+        original=bridge.call.side_effect
+        def call(action,payload,timeout=75):
+            if payload['sa_id']!=self.record.sa_id:
+                raise SafetyStop('WOS 下载中断')
+            return original(action,payload,timeout)
+        bridge.call.side_effect=call
+        result=export(records,bridge,ImportStore(self.root/'downloads'),self.inbox)
+        self.assertEqual(len(result['failed']),3)
+        self.assertEqual(len(result['exported']),1)
+        self.assertEqual(result['exported'][0]['sa_id'],self.record.sa_id)
 
     def test_bridge_failure_is_not_silently_swallowed(self):
         bridge = Mock(call=Mock(side_effect=RuntimeError("桥接断开")))

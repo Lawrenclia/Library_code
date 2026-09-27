@@ -13,14 +13,10 @@ from pathlib import Path
 from automation import ImportStore, MAX_TXT, doi, wos, norm, parse_wos
 from core import SafetyStop
 
-# A bound tab that has been switched away or logged out fails every record, so stop
-# instead of walking the whole roster with a dead bridge.
-MAX_CONSECUTIVE_FAILURES = 3
-
 # Outcomes that are about this one paper rather than about the session being broken.
 # "WOS has no record" and "the result set is not a single record" are the expected,
 # useful answers for a roster whose titles are often wrong -- treating them as
-# failures would stop a list-driven run after the first three misses.
+# failures would misrepresent the batch summary.
 PER_RECORD_OUTCOMES = (
     '未找到记录',
     '不是可确认的唯一记录',
@@ -142,12 +138,11 @@ def export(targets, bridge, store, inbox,
     inbox.mkdir(parents=True, exist_ok=True)
     flow = WOSDownload(bridge, store, unchanged, stop, audit)
     exported, failed, unconfirmed = [], {}, []
-    streak = 0
-    for record in targets:
+    for index, record in enumerate(targets):
         if stop is not None and stop.is_set():
             progress(f'WOS 导出已暂停：已成功 {len(exported)} 条。')
             break
-        progress(f'WOS 导出：已处理 {len(exported)}/{len(targets)}；原表第 {record.row} 行')
+        progress(f'WOS 导出：已处理 {index}/{len(targets)}；原表第 {record.row} 行')
         try:
             # prepare() is idempotent: an already archived export is reused, not re-downloaded.
             state = flow.prepare(record)
@@ -156,19 +151,8 @@ def export(targets, bridge, store, inbox,
             message = str(exc)
             failed[record.sa_id] = {'row': record.row, 'error': message,
                                     'per_record': per_record_outcome(message)}
-            if failed[record.sa_id]['per_record']:
-                # The page answered cleanly about this paper, so the session is healthy.
-                streak = 0
-                progress(f'第 {record.row} 行未导出：{message}')
-                continue
-            streak += 1
-            progress(f'第 {record.row} 行导出暂停：{message}')
-            if streak >= MAX_CONSECUTIVE_FAILURES:
-                raise SafetyStop(
-                    f'连续 {streak} 条 WOS 导出失败，已停止以免继续操作网页；'
-                    f'已成功 {len(exported)} 条。请检查扩展里的 WOS 标签页绑定、登录状态和当前页面。')
+            progress(f'第 {record.row} 行未导出，已记录并继续下一条：{message}')
             continue
-        streak = 0
         sha = state['candidate']['sha256']
         if not state.get('identity_confirmed'):
             # The single-record flow asks a human here. The intake folder is adopted
