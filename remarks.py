@@ -30,7 +30,8 @@ def validate_note(note, comparison, reason, match_count):
         raise SafetyStop("请选择标准备注，或填写 6–2000 字的核验依据与结论。")
     for rule in selected_rules(note):
         if rule == CLAIMED:
-            if "作者不一致" not in reason:
+            combined_missing = SA_MISSING_IDS in selected_rules(note) and "DOI" in reason and "WOS" in reason
+            if "作者不一致" not in reason and not combined_missing:
                 raise SafetyStop("“已认领”用于作者不一致的认领处理，请核对当前任务原因。")
             if str(match_count) != "1" or detail_value(comparison, "认领状态", "library") != "已认领":
                 raise SafetyStop("尚未回读到当前唯一条目“已认领”。请先在网页完成认领、保存，再重新查询。")

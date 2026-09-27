@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from approval import auto_complete_claim, verify_claim_result
+from approval import auto_complete_claim, claim_completion_note, verify_claim_result
 from automation import classify
 from claim import sa_claim_source
 from core import SafetyStop
@@ -86,8 +86,10 @@ def run_claim_batch(roster, records, bridge, cancel=lambda: False, progress=lamb
             skipped[sa_id] = "不是谭勋策负责的记录。"
             note("自动认领列表条目", "已跳过", sa_id)
             continue
-        if record.matches != 1 or record.reason != "作者不一致":
-            skipped[sa_id] = "仅处理单匹配、仅作者不一致；本条保留人工核验。"
+        reason = str(record.reason or "")
+        supported_reason = reason == "作者不一致" or ("DOI" in reason and "WOS" in reason)
+        if record.matches != 1 or not supported_reason:
+            skipped[sa_id] = "仅处理单匹配的作者认领或 DOI/WOSID 双缺失认领；本条保留人工核验。"
             note("自动认领列表条目", "已跳过", sa_id)
             continue
         try:
@@ -115,6 +117,9 @@ def run_claim_batch(roster, records, bridge, cancel=lambda: False, progress=lamb
             if plan.route != "claim":
                 raise SafetyStop(plan.reason)
             before, comparison = found["row"], found.get("comparison")
+            if before.get("reason") != record.reason or str(before.get("matchCount")) != str(record.matches):
+                raise SafetyStop("网页待处理原因或匹配数与名单不一致，本条保留人工核验。")
+            completion_note = claim_completion_note(record, comparison, claimed=False)
             source, staff_id = sa_claim_source(comparison)
             payload = {"sa_id": sa_id, "expected": before, "sa_text": source,
                        "staff_id": staff_id, "roster_staff_id": record.staff_id}
@@ -160,7 +165,7 @@ def run_claim_batch(roster, records, bridge, cancel=lambda: False, progress=lamb
         note("作者认领已核验", "已执行", sa_id)
         try:
             closed = auto_complete_claim(current_roster, record, bridge, before, comparison,
-                                         proof, person, author, confirmed=True)
+                                         proof, person, author, confirmed=True, note=completion_note)
         except Exception as exc:
             skipped[sa_id] = "认领成功，批注或结案未全部核验：" + str(exc)
             note("自动批注结案", "已暂停", sa_id)

@@ -44,6 +44,10 @@ class RemarkTests(unittest.TestCase):
     def test_both_sa_identifiers_missing(self):
         self.validate(SA_MISSING_IDS)
 
+    def test_combined_claim_is_allowed_when_reason_only_names_both_identifier_differences(self):
+        self.reason = "DOI和WOSID都不一致"
+        self.validate("DOI和WOSID SA未提交；已认领")
+
     def test_only_one_missing_rejected(self):
         for index in (1, 2):
             with self.subTest(index=index):

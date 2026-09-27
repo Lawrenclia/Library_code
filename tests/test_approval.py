@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from approval import auto_complete_claim, complete_claim
+from approval import COMBINED_MISSING_IDS_CLAIM, auto_complete_claim, complete_claim
 from core import SafetyStop
 
 
@@ -150,6 +150,26 @@ class AutomaticClaimCompletionTests(unittest.TestCase):
         self.assertEqual(self.bridge.call.call_args.args[1]["note"], "已认领")
         self.write.assert_called_once_with(self.roster, self.record)
 
+    def test_combined_missing_ids_claim_uses_exact_combined_note(self):
+        reason = "DOI和WOSID都不一致"
+        self.record.reason = reason
+        self.before["reason"] = reason
+        self.proof["row"]["reason"] = reason
+        self.row["reason"] = reason
+        identifiers = [
+            {"label": "DOI", "sa": "", "library": "10.1000/example"},
+            {"label": "WOS记录号", "sa": "", "library": "WOS:000000000000001"},
+        ]
+        self.comparison.extend(copy.deepcopy(identifiers))
+        self.current.extend(copy.deepcopy(identifiers))
+        self.latest = {"row": copy.deepcopy(self.row), "comparison": copy.deepcopy(self.current)}
+        self.done = {**self.row, "markStatus": "已处理", "remark": COMBINED_MISSING_IDS_CLAIM}
+        self.bridge.call.side_effect = [self.latest, self.latest, {"verified": True, "row": self.done}]
+        result = self.finish()
+        self.assertFalse(result.already_processed)
+        self.assertEqual(self.bridge.call.call_args.args[1]["note"], COMBINED_MISSING_IDS_CLAIM)
+        self.write.assert_called_once_with(self.roster, self.record)
+
     def test_other_owner_or_missing_confirmation_cannot_start(self):
         with self.assertRaises(SafetyStop):
             self.finish(confirmed=False)
@@ -210,6 +230,13 @@ class AutomaticClaimCompletionTests(unittest.TestCase):
         with self.assertRaisesRegex(SafetyStop, "发生变化"):
             self.finish()
         self.assertEqual(self.bridge.call.call_count, 2)
+        self.write.assert_not_called()
+
+    def test_processed_race_with_wrong_note_never_syncs_excel(self):
+        wrong = {**self.row, "markStatus": "已处理", "remark": "其他处理结论"}
+        self.bridge.call.side_effect = [self.latest, {"row": wrong, "comparison": self.current}]
+        with self.assertRaisesRegex(SafetyStop, "备注与本次认领证据不一致"):
+            self.finish()
         self.write.assert_not_called()
 
     def test_uncertain_closure_is_not_retried(self):

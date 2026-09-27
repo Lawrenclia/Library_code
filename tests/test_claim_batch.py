@@ -5,6 +5,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from approval import COMBINED_MISSING_IDS_CLAIM
 from claim_batch import automatic_claim_selection, run_claim_batch
 from core import Record, SafetyStop
 
@@ -102,6 +103,43 @@ class ClaimBatchTests(unittest.TestCase):
         self.assertEqual(result.completed_ids, (second.sa_id,))
         self.assertEqual([call.args[0] for call in bridge.call.call_args_list],
                          ["search", "prepare_claim", "search", "search", "prepare_claim", "submit_claim"])
+
+    def test_missing_doi_and_wos_unclaimed_uses_combined_note(self):
+        target = record("demo-combined", reason="DOI和WOSID都不一致")
+        roster = FakeRoster([target])
+        search = found(target)
+        search["row"]["reason"] = target.reason
+        search["comparison"].extend([
+            {"label": "DOI", "sa": "", "library": "10.1000/example"},
+            {"label": "WOS记录号", "sa": "", "library": "WOS:000000000000001"},
+        ])
+        prep = prepared(search)
+        proof = {"row": search["row"], "verified": True, "claimed": True, "staff_id": "00001",
+                 "scholar_id": "scholar-1", "author": "Tester", "order": 1}
+        bridge = Mock()
+        bridge.call.side_effect = [search, prep, proof]
+        closed_roster = FakeRoster([replace(target, done=True)])
+        closure = SimpleNamespace(completion=SimpleNamespace(roster=closed_roster))
+        with patch("claim_batch.auto_complete_claim", return_value=closure) as close:
+            result = run_claim_batch(roster, [target], bridge)
+        self.assertEqual(result.completed_ids, (target.sa_id,))
+        self.assertEqual(close.call_args.kwargs["note"], COMBINED_MISSING_IDS_CLAIM)
+
+    def test_combined_case_requires_both_sa_identifiers_blank(self):
+        target = record("demo-incomplete", reason="DOI和WOSID都不一致")
+        roster = FakeRoster([target])
+        search = found(target)
+        search["row"]["reason"] = target.reason
+        search["comparison"].extend([
+            {"label": "DOI", "sa": "10.1000/present", "library": "10.1000/example"},
+            {"label": "WOS记录号", "sa": "", "library": "WOS:000000000000001"},
+        ])
+        bridge = Mock()
+        bridge.call.return_value = search
+        result = run_claim_batch(roster, [target], bridge)
+        self.assertIn(target.sa_id, result.skipped)
+        self.assertIn("并非同时为空", result.skipped[target.sa_id])
+        bridge.call.assert_called_once_with("search", {"sa_id": target.sa_id})
 
     def test_uncertain_submit_marks_red_and_halts_without_next_record(self):
         first, second = record("demo-a"), record("demo-b")

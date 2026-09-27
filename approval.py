@@ -1,9 +1,16 @@
 """Narrow, reviewed claim closure: backend readback precedes Excel completion."""
 from dataclasses import dataclass
+import unicodedata
 
 from claim import sa_claim_source
 from core import SafetyStop
+from remarks import CLAIMED, SA_MISSING_IDS, detail_value, validate_note
 from roster_write import reconcile_processed
+
+COMBINED_MISSING_IDS_CLAIM = f"{SA_MISSING_IDS}；{CLAIMED}"
+_AUTHOR_FIELDS = {"认领状态", "作者信息"}
+_COMBINED_FIELDS = _AUTHOR_FIELDS | {"DOI", "WOS记录号"}
+_UNCLAIMED = {"未认领", "无人认领", "未被认领"}
 
 
 @dataclass
@@ -11,6 +18,46 @@ class ClaimCompletion:
     completion: object
     row: dict
     already_processed: bool
+
+
+def _norm(value):
+    return " ".join(unicodedata.normalize("NFKC", str(value or "")).casefold().split())
+
+
+def claim_completion_note(record, comparison, claimed=False):
+    """Return the only completion note allowed by the fresh comparison evidence."""
+    if record.matches != 1 or not isinstance(comparison, list) or not comparison:
+        raise SafetyStop("自动认领只处理单匹配且详情完整的记录。")
+    labels, issues = set(), set()
+    for field in comparison:
+        if (not isinstance(field, dict) or set(field) != {"label", "sa", "library"} or
+                any(not isinstance(field.get(key), str) for key in ("label", "sa", "library")) or
+                not field["label"] or field["label"] in labels):
+            raise SafetyStop("比对详情结构异常或字段重复，不能自动认领。")
+        labels.add(field["label"])
+        if _norm(field["sa"]) != _norm(field["library"]):
+            issues.add(field["label"])
+    if not _AUTHOR_FIELDS <= labels:
+        raise SafetyStop("缺少作者或认领详情，不能自动认领。")
+    state = _norm(detail_value(comparison, "认领状态", "library"))
+    if claimed:
+        if state != _norm(CLAIMED):
+            raise SafetyStop("尚未回读到已认领，不能自动结案。")
+    elif state not in {_norm(value) for value in _UNCLAIMED}:
+        raise SafetyStop("当前记录不是未认领状态。")
+
+    reason = str(record.reason or "")
+    if reason == "作者不一致":
+        if issues - _AUTHOR_FIELDS:
+            raise SafetyStop("除作者认领外还存在其他差异，本条保留人工核验。")
+        return CLAIMED
+    if "DOI" in reason and "WOS" in reason:
+        if not {"DOI", "WOS记录号"} <= issues or issues - _COMBINED_FIELDS:
+            raise SafetyStop("当前差异不只是 DOI、WOSID 和作者认领，不能自动结案。")
+        if detail_value(comparison, "DOI", "sa") or detail_value(comparison, "WOS记录号", "sa"):
+            raise SafetyStop("SA 的 DOI 和 WOSID 并非同时为空，本条保留人工核验。")
+        return COMBINED_MISSING_IDS_CLAIM
+    raise SafetyStop("当前待处理原因不属于可自动认领结案的范围。")
 
 
 def verify_claim_result(record, result, person, author):
@@ -22,11 +69,16 @@ def verify_claim_result(record, result, person, author):
         raise SafetyStop("已发出认领，但回读结果不一致。请核验网页，禁止直接重试。")
 
 
-def auto_complete_claim(roster, record, bridge, before, comparison, proof, person, author, confirmed=False):
-    """Continue only the just-confirmed claim, never an unattended queue or retry."""
+def auto_complete_claim(roster, record, bridge, before, comparison, proof, person, author,
+                        confirmed=False, note=None):
+    """Continue only the just-verified claim, never an uncertain retry."""
     if (confirmed is not True or record.owner != "谭勋策" or record not in roster.records or record.done
-            or record.matches != 1 or record.reason != "作者不一致"):
+            or record.matches != 1):
         raise SafetyStop("自动批注只允许本次确认的谭勋策单匹配作者认领。")
+    expected_note = claim_completion_note(record, comparison, claimed=False)
+    note = expected_note if note is None else note
+    if note != expected_note:
+        raise SafetyStop("自动认领备注与本次差异证据不一致。")
     verify_claim_result(record, proof, person, author)
     if (not isinstance(before, dict) or proof.get("row") != before or
             before.get("saLzkId") != record.sa_id or not record.staff_id or
@@ -35,6 +87,8 @@ def auto_complete_claim(roster, record, bridge, before, comparison, proof, perso
     roster.assert_unchanged()
     latest = bridge.call("search", {"sa_id": record.sa_id})
     row = latest.get("row")
+    if isinstance(row, dict) and row.get("markStatus") == "已处理" and row.get("remark") != note:
+        raise SafetyStop("认领后记录已被处理，但备注与本次证据不一致；Excel 未同步，请人工核验。")
     completion = reconcile_processed(roster, record, row)
     if completion:
         return ClaimCompletion(completion, row, True)
@@ -62,30 +116,36 @@ def auto_complete_claim(roster, record, bridge, before, comparison, proof, perso
     if stable_fields(comparison) != stable_fields(current):
         raise SafetyStop("认领前后 SA 或论文信息发生变化，停止自动批注。")
     # Re-read once more inside complete_claim, immediately before submitting.
-    return complete_claim(roster, record, bridge, row, current, reviewed=True)
+    return complete_claim(roster, record, bridge, row, current, reviewed=True, note=note)
 
 
-def complete_claim(roster, record, bridge, expected, comparison, reviewed=False):
+def complete_claim(roster, record, bridge, expected, comparison, reviewed=False, note=None):
     if record.owner != "谭勋策" or record not in roster.records or record.done:
         raise SafetyStop("认领结案只允许谭勋策名单中的未完成记录。")
     if reviewed is not True:
         raise SafetyStop("请先核对当前记录、认领结果和处理备注。")
-    if (record.matches != 1 or record.reason != "作者不一致" or
-            not isinstance(expected, dict) or expected.get("saLzkId") != record.sa_id):
-        raise SafetyStop("本按钮仅处理单匹配、仅作者不一致的认领结案，请重新定位。")
+    if record.matches != 1 or not isinstance(expected, dict) or expected.get("saLzkId") != record.sa_id:
+        raise SafetyStop("本按钮仅处理单匹配的认领结案，请重新定位。")
+    expected_note = claim_completion_note(record, comparison, claimed=True)
+    note = expected_note if note is None else note
+    if note != expected_note:
+        raise SafetyStop("认领结案备注与当前差异证据不一致。")
+    validate_note(note, comparison, record.reason, record.matches)
     roster.assert_unchanged()
     # Search reads the current status first and can safely reconcile the owned
     # read-only detail. Never switch an already-processed row back to pending.
     latest = bridge.call("search", {"sa_id": record.sa_id})
     row = latest.get("row")
+    if isinstance(row, dict) and row.get("markStatus") == "已处理" and row.get("remark") != note:
+        raise SafetyStop("记录已被处理，但备注与本次认领证据不一致；Excel 未同步，请人工核验。")
     completion = reconcile_processed(roster, record, row)
     if completion:
         return ClaimCompletion(completion, row, True)
     if row != expected or latest.get("comparison") != comparison:
         raise SafetyStop("网页在核对后发生变化，请重新定位并核对，未提交结案。")
-    if str(row.get("matchCount")) != "1" or row.get("reason") != "作者不一致":
-        raise SafetyStop("后台不是单匹配、仅作者不一致，不能认领结案。")
-    if row.get("remark", "") not in ("", "已认领"):
+    if str(row.get("matchCount")) != "1" or row.get("reason") != record.reason:
+        raise SafetyStop("后台匹配数或待处理原因与名单不一致，不能认领结案。")
+    if row.get("remark", "") not in ("", note):
         raise SafetyStop("后台已有其他备注，保留原文，请人工核对后结案。")
     fields = [field for field in comparison or [] if field.get("label") == "认领状态"]
     if len(fields) != 1 or fields[0].get("library", "").strip() != "已认领":
@@ -95,10 +155,10 @@ def complete_claim(roster, record, bridge, expected, comparison, reviewed=False)
         raise SafetyStop("名单、SA 和后台人员编号不一致，不能结案。")
     roster.assert_unchanged()
     result = bridge.call("complete", {"sa_id": record.sa_id, "expected": row,
-        "expected_comparison": comparison, "reviewed": True, "note": "已认领"})
+        "expected_comparison": comparison, "reviewed": True, "note": note})
     verified = result.get("row", {})
     if (result.get("verified") is not True or verified.get("saLzkId") != record.sa_id or
-            verified.get("markStatus") != "已处理" or verified.get("remark") != "已认领"):
+            verified.get("markStatus") != "已处理" or verified.get("remark") != note):
         raise SafetyStop("网页结案结果未完整核验，Excel 未修改。禁止重复提交，请先核验后台。")
     try:
         completion = reconcile_processed(roster, record, verified)
