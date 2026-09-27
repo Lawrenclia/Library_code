@@ -130,6 +130,10 @@ def run_claim_batch(roster, records, bridge, cancel=lambda: False, progress=lamb
         try:
             prepared_result = bridge.call("prepare_claim", payload)
         except Exception as exc:
+            if "作者认领页面结构已变化" in str(exc):
+                skipped[sa_id] = "网页没有可用的作者认领窗口。"
+                note("自动认领列表条目", "已跳过", sa_id)
+                continue
             skipped[sa_id] = "人员或署名无法自动确认：" + str(exc)
             note("自动认领列表条目", "已跳过", sa_id)
             try:

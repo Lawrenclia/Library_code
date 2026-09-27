@@ -141,6 +141,27 @@ class ClaimBatchTests(unittest.TestCase):
         self.assertIn("并非同时为空", result.skipped[target.sa_id])
         bridge.call.assert_called_once_with("search", {"sa_id": target.sa_id})
 
+    def test_missing_claim_window_is_red_skip_and_next_record_continues(self):
+        first, second = record("demo-no-window"), record("demo-next")
+        roster = FakeRoster([first, second])
+        search_a, search_b = found(first), found(second)
+        prep_b = prepared(search_b)
+        proof = {"row": search_b["row"], "verified": True, "claimed": True, "staff_id": "00001",
+                 "scholar_id": "scholar-1", "author": "Tester", "order": 1}
+        bridge = Mock()
+        bridge.call.side_effect = [search_a, SafetyStop("[扩展 0.3.17] 作者认领页面结构已变化，请更新扩展"),
+                                   search_b, prep_b, proof]
+        closed_roster = FakeRoster([first, replace(second, done=True)])
+        with patch("claim_batch.auto_complete_claim",
+                   return_value=SimpleNamespace(completion=SimpleNamespace(roster=closed_roster))):
+            result = run_claim_batch(roster, [first, second], bridge)
+        self.assertIn(first.sa_id, result.skipped)
+        self.assertIn("没有可用的作者认领窗口", result.skipped[first.sa_id])
+        self.assertEqual(result.completed_ids, (second.sa_id,))
+        self.assertFalse(result.halted)
+        self.assertEqual([call.args[0] for call in bridge.call.call_args_list],
+                         ["search", "prepare_claim", "search", "prepare_claim", "submit_claim"])
+
     def test_uncertain_submit_marks_red_and_halts_without_next_record(self):
         first, second = record("demo-a"), record("demo-b")
         roster = FakeRoster([first, second])
