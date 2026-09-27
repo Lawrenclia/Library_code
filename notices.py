@@ -1,6 +1,7 @@
 """Quiet, non-modal warnings; never changes Windows volume or sound settings."""
 import tkinter as tk
 from tkinter import ttk, messagebox as native_messages
+from ui_theme import P, style_text
 
 
 class QuietMessages:
@@ -25,6 +26,8 @@ class QuietMessages:
             ttk.Label(frame, text="已暂停 · 请核对提示", font=("Microsoft YaHei UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
             window.body = tk.Text(frame, height=5, width=30, wrap="word", relief="flat", bg="#fff7df",
                                   font=("Microsoft YaHei UI", 10), padx=8, pady=8)
+            style_text(window.body)
+            window.body.configure(background=P.amber_soft, highlightbackground=P.amber_soft)
             window.body.pack(fill="both", expand=True)
             tools = ttk.Frame(frame)
             tools.pack(fill="x", pady=(10, 0))

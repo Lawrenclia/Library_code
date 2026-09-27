@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 from app import App
 from core import Journal, file_hash, read_roster
+from operation_log import OperationLog
 from tests.test_roster_write import make_roster
 
 
@@ -19,7 +20,8 @@ class UnifiedTests(unittest.TestCase):
         self.reader=patch('classify_app.read_papers',return_value={'papers':[{'rows':[2]}]})
         self.reader.start()
         self.addCleanup(self.reader.stop)
-        self.app=App(self.root,Journal(Path(self.tmp.name)/'unified.db'),auto_load=False,unified=True)
+        self.app=App(self.root,Journal(Path(self.tmp.name)/'unified.db'),auto_load=False,unified=True,
+                     operation_log=OperationLog(Path(self.tmp.name)/'preview-log.txt'))
         self.app.loaded(read_roster(self.path))
 
     def tearDown(self):

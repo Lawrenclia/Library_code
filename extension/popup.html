@@ -1,20 +1,71 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>连接 SA 比对助手</title>
-<link rel="stylesheet" href="popup.css"></head><body>
-<h1>连接论文助手</h1>
-<p>下载论文：打开已登录的 WOS 页面，粘贴桌面配对码并连接即可。不需要打开 SA 或导入页。</p>
-<label for="token">本次配对码（不是账号密码）</label>
-<input id="token" type="password" autocomplete="off" spellcheck="false">
-<button id="pair">连接当前标签页</button><button id="disconnect">断开</button>
-<details><summary>后台处理 / 单条导入（可选）</summary>
-<p>保持 SA 页不动。切换到 WOS 或后台导入标签页后，点击对应绑定按钮。WOS 支持 .com 与 clarivate.cn。导入页是左侧「数据导入与批次管理」，不是普通「数据管理」列表。</p>
-<button id="open-import">打开后台导入页面</button>
-<button id="wos">绑定当前 WOS 页</button>
-<button id="import">绑定当前导入管理页</button>
-</details>
-<button id="inspect">检查工作页（只读）</button>
-<button id="mute">WOS 静音 / 恢复</button>
-<textarea id="diagnostics" rows="6" readonly hidden aria-label="只读控件诊断"></textarea>
-<p>下载权限仅用于捕获本次 WOS TXT；不读取任意历史下载、账号或登录令牌。</p>
-<p id="status" role="status">在 WOS 页直接连接即可下载；无需绑定后台工作页。</p>
-<script src="popup.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>连接 SA 比对助手</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none"><path d="M4 4.5h5a4 4 0 0 1 3 1.4 4 4 0 0 1 3-1.4h5v14h-5a4 4 0 0 0-3 1.4 4 4 0 0 0-3-1.4H4zM12 6v13"/></svg>
+    </div>
+    <div>
+      <div class="eyebrow">LIBRARY / WORKSPACE</div>
+      <h1>论文助手</h1>
+    </div>
+  </header>
+  <p class="intro">连接浏览器，回到桌面继续工作。</p>
+  <main>
+    <section class="card pairing" aria-labelledby="pairing-title">
+      <div class="section-heading">
+        <h2 id="pairing-title">连接工作页</h2>
+        <span class="pill">桌面配对</span>
+      </div>
+      <p class="hint">打开已登录的 WOS 页面，粘贴配对码即可连接。下载论文无需打开 SA 或导入页。</p>
+      <div class="field-label">
+        <label for="token">本次配对码</label>
+        <span>来自桌面助手 · 非账号密码</span>
+      </div>
+      <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴配对码" aria-describedby="pairing-title">
+      <div class="pair-actions">
+        <button id="pair" class="primary">连接当前标签页 <span aria-hidden="true">↗</span></button>
+        <button id="disconnect" class="secondary">断开</button>
+      </div>
+    </section>
+    <details class="card workflow">
+      <summary>
+        <span>后台处理 / 单条导入</span>
+        <span class="summary-trailing"><span class="optional">可选</span><span class="chevron" aria-hidden="true">›</span></span>
+      </summary>
+      <div class="workflow-content">
+        <p class="hint">保持 SA 页不动，切到对应标签页后绑定。WOS 支持 .com 与 clarivate.cn。</p>
+        <button id="open-import" class="secondary full-width">打开后台导入页面 <span aria-hidden="true">↗</span></button>
+        <div class="two-columns">
+          <button id="wos" class="secondary">绑定当前 WOS 页</button>
+          <button id="import" class="secondary">绑定导入管理页</button>
+        </div>
+        <p class="caption">导入页位于「数据管理 → 数据导入与批次管理」，不是普通数据列表。</p>
+      </div>
+    </details>
+    <div class="utilities">
+      <button id="inspect" class="utility">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m13 13 4 4M14.5 8.5a6 6 0 1 1-12 0 6 6 0 0 1 12 0Z"/></svg>
+        检查工作页<span class="utility-note">只读</span>
+      </button>
+      <button id="mute" class="utility">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m9 3-5 4H2v6h2l5 4ZM13 6a6 6 0 0 1 0 8M15.5 3.5a9 9 0 0 1 0 13"/></svg>
+        静音 / 恢复
+      </button>
+    </div>
+    <textarea id="diagnostics" rows="6" readonly hidden aria-label="只读控件诊断"></textarea>
+    <section class="status-card" aria-labelledby="status-title">
+      <h2 id="status-title"><span class="status-dot" aria-hidden="true"></span>连接状态</h2>
+      <p id="status" role="status">在 WOS 页直接连接即可下载；无需绑定后台工作页。</p>
+    </section>
+  </main>
+  <footer>下载权限仅用于本次 WOS TXT，不读取历史下载、账号或登录令牌。</footer>
+  <script src="popup.js"></script>
+</body>
+</html>

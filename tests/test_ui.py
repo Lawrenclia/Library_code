@@ -9,6 +9,7 @@ from unittest.mock import patch, Mock
 from openpyxl import load_workbook
 
 from app import App, BASE, GREEN, YELLOW
+from ui_theme import P
 from core import Journal, SafetyStop, file_hash, read_roster
 from remarks import CLAIMED
 from notices import messages as quiet_messages
@@ -81,7 +82,7 @@ class UITests(unittest.TestCase):
         self.app.populate()
         self.assertEqual(self.app.tree.item(sa_id, 'values')[2], '跳过')
         self.assertIn('skipped', self.app.tree.item(sa_id, 'tags'))
-        self.assertEqual(self.app.tree.tag_configure('skipped')['background'], '#f4c7c7')
+        self.assertEqual(self.app.tree.tag_configure('skipped')['background'], P.red_soft)
         self.app.tree.selection_set(sa_id)
         self.app.current = None
         self.app.select_record()

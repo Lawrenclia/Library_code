@@ -5,6 +5,7 @@ from tkinter import messagebox, ttk
 
 from core import SafetyStop
 from model_review import DEFAULT_MODEL, MODELS, context_stamp, make_context, render_advice
+from ui_theme import style_text
 
 
 class ModelPanel:
@@ -32,12 +33,13 @@ class ModelPanel:
         network.grid(row=2, column=0, sticky="ew", pady=(6, 8))
         app.button(network, "测试连接", self.test_connection).pack(side="left")
         app.button(network, "查看发送内容", self.preview).pack(side="left", padx=6)
-        ttk.Label(network, text="仅交大服务 · 校园网/VPN", foreground="#5b6572").pack(side="right")
+        ttk.Label(network, text="仅交大服务 · 校园网/VPN", style="Muted.TLabel").pack(side="right")
         evidence_frame = ttk.Frame(page)
         evidence_frame.grid(row=3, column=0, sticky="ew")
         ttk.Label(evidence_frame, text="补充证据（选填：原文、人员信息摘录及出处）").pack(anchor="w")
         self.evidence = tk.Text(evidence_frame, height=4, width=30, wrap="word", font=("Microsoft YaHei UI", 10),
                                 relief="solid", borderwidth=1, padx=5, pady=4)
+        style_text(self.evidence, inset=True)
         self.evidence.pack(fill="x", pady=(4, 6))
         self.evidence.bind("<<Modified>>", self.evidence_changed)
         self.allow = ttk.Checkbutton(page, variable=self.consent, text="允许发送本条比对与补充证据到交大模型服务")
@@ -54,11 +56,12 @@ class ModelPanel:
         output_frame.grid(row=6, column=0, sticky="nsew")
         self.output = tk.Text(output_frame, height=10, width=30, wrap="word", font=("Microsoft YaHei UI", 10),
                               bg="white", relief="flat", padx=8, pady=7, state="disabled")
+        style_text(self.output)
         scroll = ttk.Scrollbar(output_frame, command=self.output.yview)
         self.output.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self.output.pack(fill="both", expand=True)
-        self.info_label = ttk.Label(page, textvariable=self.info, foreground="#5b6572", wraplength=450)
+        self.info_label = ttk.Label(page, textvariable=self.info, style="Muted.TLabel", wraplength=450)
         self.info_label.grid(row=7, column=0, sticky="ew", pady=(7, 0))
         page.bind("<Configure>", lambda event: self.info_label.configure(wraplength=max(250, event.width - 24)))
         self.consent.trace_add("write", lambda *_: self.refresh())

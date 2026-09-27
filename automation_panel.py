@@ -10,6 +10,7 @@ from claim_batch import run_claim_batch
 from core import SafetyStop
 from pilot import OWNER, pilot_scope, precheck_pilot
 from roster_write import reconcile_processed
+from ui_theme import style_text
 
 
 class AutomationPanel:
@@ -49,6 +50,7 @@ class AutomationPanel:
         box.pack(fill="both", expand=True)
         self.output = tk.Text(box, wrap="word", height=6, width=25, state="disabled", relief="flat",
                               bg="white", padx=8, pady=8, font=("Microsoft YaHei UI", 9))
+        style_text(self.output)
         scroll = ttk.Scrollbar(box, command=self.output.yview)
         self.output.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -56,7 +58,7 @@ class AutomationPanel:
         app.button(wos, "继续 / 核验导入结果", self.resume, style="Complete.TButton").pack(fill="x", pady=(8, 4))
         app.button(wos, "导出当前 WOS 文献", lambda: self.start(current_wos=True)).pack(fill="x", pady=3)
         ttk.Label(wos, text="扩展可打开导入页：数据管理 → 数据导入与批次管理。\n绑定 WOS 和该页；不上传 PDF，完成仍需人工批准。", wraplength=425,
-                  foreground="#5b6572").pack(anchor="w", pady=(3, 0))
+                  style="Muted.TLabel").pack(anchor="w", pady=(3, 0))
 
     def show(self, value):
         self.output.configure(state="normal")

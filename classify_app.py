@@ -10,6 +10,7 @@ from tkinter import messagebox, simpledialog, ttk
 from core import SafetyStop
 from model_review import DEFAULT_MODEL, MODELS, KeyStore, limits
 from paper_classify import BASE, ClassificationClient, read_papers, run
+from ui_theme import P, install_theme, style_text
 
 
 class ClassifyApp:
@@ -35,26 +36,8 @@ class ClassifyApp:
             root.title('论文工作台 · AI 分类与导入渠道')
             root.geometry('1120x800')
             root.minsize(920,680)
-            root.configure(bg='#f3f5f9')
             root.protocol('WM_DELETE_WINDOW',self.close)
-        style=ttk.Style(root)
-        style.theme_use('clam')
-        style.configure('TFrame',background='#f3f5f9')
-        style.configure('TLabel',background='#f3f5f9',foreground='#22334a',font=('Microsoft YaHei UI',10))
-        style.configure('TButton',font=('Microsoft YaHei UI',10),padding=(12,7))
-        style.configure('TCombobox',padding=5,font=('Microsoft YaHei UI',10))
-        style.configure('TEntry',padding=6)
-        style.configure('Card.TFrame',background='white')
-        style.configure('Card.TLabel',background='white')
-        style.configure('Metric.TLabel',background='white',font=('Microsoft YaHei UI',23,'bold'),foreground='#163d71')
-        style.configure('Muted.TLabel',foreground='#65758b')
-        style.configure('Title.TLabel',font=('Microsoft YaHei UI',21,'bold'),foreground='#142c4a')
-        style.configure('Primary.TButton',background='#2563eb',foreground='white',borderwidth=0,padding=(18,9))
-        style.map('Primary.TButton',background=[('disabled','#dbe3ee'),('active','#1d4ed8')],foreground=[('disabled','#718096')])
-        style.configure('Treeview',rowheight=33,font=('Microsoft YaHei UI',10),background='white',fieldbackground='white',borderwidth=0)
-        style.configure('Treeview.Heading',font=('Microsoft YaHei UI',10,'bold'),padding=8,background='#eaf0f8')
-        style.map('Treeview',background=[('selected','#dbeafe')],foreground=[('selected','#173f77')])
-        style.configure('Horizontal.TProgressbar',background='#2563eb',troughcolor='#e2e8f0',borderwidth=0)
+        install_theme(root)
         page = ttk.Frame(parent if self.embedded else root,padding=16 if self.embedded else 22)
         page.pack(fill='both',expand=True)
         header=ttk.Frame(page)
@@ -144,12 +127,13 @@ class ClassifyApp:
         horizontal.pack(side='bottom',fill='x')
         scroll.pack(side='right',fill='y')
         self.tree.pack(fill='both',expand=True)
-        self.tree.tag_configure('pending',foreground='#946200')
+        self.tree.tag_configure('pending',foreground=P.amber)
         self.tree.bind('<<TreeviewSelect>>',self.show_detail)
         detail=ttk.Frame(panes,padding=(0,10,0,0))
         panes.add(detail,weight=1)
         ttk.Label(detail,text='论文详情 · 推荐依据',font=('Microsoft YaHei UI',10,'bold')).pack(anchor='w',pady=(0,4))
         self.detail=tk.Text(detail,height=5,wrap='word',font=('Microsoft YaHei UI',10),background='white',foreground='#334155',relief='flat',padx=12,pady=8,state='disabled')
+        style_text(self.detail)
         ds=ttk.Scrollbar(detail,command=self.detail.yview)
         self.detail.configure(yscrollcommand=ds.set)
         ds.pack(side='right',fill='y')

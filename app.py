@@ -16,14 +16,15 @@ from model_review import KeyStore, ModelClient
 from model_panel import ModelPanel
 from automation_panel import AutomationPanel
 from operation_log import OperationLog
+from ui_theme import FONT, P, install_theme, style_text
 
 from core import Journal, SafetyStop, fixed_roster_path, guide, read_roster
 from remarks import PRESETS, append_remark
 from roster_write import mark_complete
 
 BASE = Path(__file__).resolve().parent
-YELLOW = "#fff2bc"
-GREEN = "#d9f2df"
+YELLOW = P.amber_soft
+GREEN = P.green_soft
 
 
 class App:
@@ -246,26 +247,13 @@ class App:
         self.root.geometry(f"{width}x{height}+{x}+35")
         self.root.minsize(520, 600)
         self.root.attributes("-topmost", True)
-        self.root.configure(bg="#f5f6f8")
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
-        style.configure("TFrame", background="#f5f6f8")
-        style.configure("TLabel", background="#f5f6f8", font=("Microsoft YaHei UI", 9))
-        style.configure("TButton", font=("Microsoft YaHei UI", 9), padding=(8, 5))
-        style.configure("TCheckbutton", background="#f5f6f8", font=("Microsoft YaHei UI", 9))
-        style.configure("TNotebook.Tab", font=("Microsoft YaHei UI", 10), padding=(16, 6))
-        style.configure("Treeview", rowheight=27, font=("Microsoft YaHei UI", 9))
-        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 9))
-        style.map("Treeview", background=[("selected", "#f5d366")], foreground=[("selected", "#262626")])
-        style.configure("Complete.TButton", background="#16845b", foreground="white", borderwidth=0,
-                        padding=(14, 9), font=("Microsoft YaHei UI", 11, "bold"))
-        style.map("Complete.TButton", background=[("disabled", "#dce6e0"), ("pressed", "#0e5b3c"), ("active", "#106e49")],
-                  foreground=[("disabled", "#69786f"), ("!disabled", "white")])
-        style.configure("Model.TButton", background="#315b9c", foreground="white", padding=(12, 7))
-        style.map("Model.TButton", background=[("disabled", "#dce2ec"), ("active", "#234a86")],
-                  foreground=[("disabled", "#69786f"), ("!disabled", "white")])
+        install_theme(self.root)
+        header = ttk.Frame(self.root, padding=(18, 12, 18, 8))
+        header.pack(fill="x")
+        ttk.Label(header, text="机构知识库", font=(FONT, 14, "bold")).pack(side="left")
+        ttk.Label(header, text="LIBRARY  /  WORKSPACE", style="Eyebrow.TLabel").pack(side="right")
         self.tabs = ttk.Notebook(self.root)
-        self.tabs.pack(fill="both", expand=True, padx=8, pady=8)
+        self.tabs.pack(fill="both", expand=True, padx=12, pady=(0, 10))
         self.manual_page = ttk.Frame(self.tabs, padding=10)
         self.automation_page = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(self.manual_page, text="人工处理")
@@ -293,7 +281,7 @@ class App:
         self.auto_claim_check = ttk.Checkbutton(auto, variable=self.auto_claim_completion,
             text="认领核验成功后，自动批注并结案")
         self.auto_claim_check.pack(anchor="w")
-        ttk.Label(auto, text="仅限本人单匹配作者差异；其他情况保留人工审批。", wraplength=420, foreground="#5b6572").pack(anchor="w", pady=(4, 0))
+        ttk.Label(auto, text="仅限本人单匹配作者差异；其他情况保留人工审批。", wraplength=420, style="Muted.TLabel").pack(anchor="w", pady=(4, 0))
         ttk.Label(self.automation_page, textvariable=self.status, wraplength=445).pack(anchor="w", pady=(7, 0))
         page = self.manual_page
         page.columnconfigure(0, weight=1)
@@ -313,20 +301,22 @@ class App:
         self.view_buttons = []
         for value, caption, color in (("pending", self.pending_count, YELLOW), ("done", self.done_count, GREEN)):
             tab = tk.Radiobutton(counts, textvariable=caption, variable=self.task_view, value=value, indicatoron=False,
-                                 bg="#f5f6f8", selectcolor=color, activebackground=color, relief="flat", borderwidth=1,
-                                 padx=12, pady=5, command=self.switch_view, font=("Microsoft YaHei UI", 10))
+                                 bg=P.canvas, fg=P.muted, selectcolor=color, activebackground=color,
+                                 activeforeground=P.ink, relief="flat", borderwidth=0, highlightthickness=0,
+                                 padx=12, pady=5, command=self.switch_view, font=(FONT, 9))
             tab.pack(side="left", padx=(0, 5))
             self.view_buttons.append(tab)
-        ttk.Label(counts, text="点击切换").pack(side="right")
+        ttk.Label(counts, text="点击切换", style="Muted.TLabel").pack(side="right")
         listing = ttk.Frame(page)
         listing.grid(row=2, column=0, sticky="nsew")
-        self.tree = ttk.Treeview(listing, columns=("id", "title", "state"), show="headings", height=5, selectmode="browse")
+        self.tree = ttk.Treeview(listing, columns=("id", "title", "state"), show="headings", height=5, selectmode="browse",
+                                style="Task.Treeview")
         for name, caption, size in (("id", "名单 ID", 140), ("title", "题名", 260), ("state", "状态", 65)):
             self.tree.heading(name, text=caption)
             self.tree.column(name, width=size, minwidth=50, stretch=name == "title")
-        self.tree.tag_configure("pending", background=YELLOW, foreground="#4b3d17")
-        self.tree.tag_configure("done", background=GREEN, foreground="#19522c")
-        self.tree.tag_configure("skipped", background="#f4c7c7", foreground="#761c1c")
+        self.tree.tag_configure("pending", background=YELLOW, foreground=P.amber)
+        self.tree.tag_configure("done", background=GREEN, foreground=P.green)
+        self.tree.tag_configure("skipped", background=P.red_soft, foreground=P.red)
         scroll = ttk.Scrollbar(listing, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -337,12 +327,14 @@ class App:
         heading = ttk.Frame(page)
         heading.grid(row=3, column=0, sticky="ew", pady=(8, 5))
         ttk.Label(heading, textvariable=self.current_id).pack(side="left")
-        self.badge = tk.Label(heading, textvariable=self.approval, bg=YELLOW, fg="#735000", padx=7, pady=3)
+        self.badge = tk.Label(heading, textvariable=self.approval, bg=YELLOW, fg=P.amber,
+                              font=(FONT, 8), padx=9, pady=3)
         self.badge.pack(side="right")
         detail_frame = ttk.Frame(page)
         detail_frame.grid(row=4, column=0, sticky="nsew")
         self.details = tk.Text(detail_frame, height=5, width=30, wrap="word", font=("Microsoft YaHei UI", 10),
                                bg="white", relief="flat", padx=8, pady=6)
+        style_text(self.details)
         detail_scroll = ttk.Scrollbar(detail_frame, orient="vertical", command=self.details.yview)
         self.details.configure(yscrollcommand=detail_scroll.set, state="disabled")
         detail_scroll.pack(side="right", fill="y")
@@ -363,6 +355,7 @@ class App:
         self.preset_box.bind("<<ComboboxSelected>>", lambda _e: self.use_remark(self.preset.get()))
         self.button(templates, "复制备注", self.copy_note).pack(side="right", padx=(6, 0))
         self.note = tk.Text(page, height=2, width=30, wrap="word", font=("Microsoft YaHei UI", 10), relief="solid", borderwidth=1)
+        style_text(self.note, inset=True)
         self.note.grid(row=7, column=0, sticky="ew")
         self.note.bind("<<Modified>>", self.note_changed)
         self.check = ttk.Checkbutton(page, variable=self.reviewed, text="我已核对当前记录，并完成网页处理")
@@ -374,7 +367,7 @@ class App:
         self.complete_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
         self.claimed_complete_button = self.button(approvals, "网页认领结案", self.confirm_claim_done, style="Complete.TButton")
         self.claimed_complete_button.grid(row=0, column=1, sticky="ew")
-        self.status_label = ttk.Label(page, textvariable=self.status, wraplength=485, foreground="#5b6572")
+        self.status_label = ttk.Label(page, textvariable=self.status, wraplength=485, style="Muted.TLabel")
         self.status_label.grid(row=10, column=0, sticky="ew")
         page.bind("<Configure>", lambda event: self.status_label.configure(wraplength=max(250, event.width - 20)))
         self.refresh_approval()
@@ -492,7 +485,7 @@ class App:
 
     def set_approval(self, completed):
         self.approval.set("已完成" if completed else "未完成")
-        self.badge.configure(bg=GREEN if completed else YELLOW, fg="#19522c" if completed else "#735000")
+        self.badge.configure(bg=GREEN if completed else YELLOW, fg=P.green if completed else P.amber)
         self.reviewed.set(False)
 
     def reload_roster(self):
@@ -539,8 +532,8 @@ class App:
             self.tree.insert("", "end", iid=record.sa_id, values=(record.sa_id, record.title, state), tags=(tag,))
         self.update_counts(scope)
         style = ttk.Style(self.root)
-        style.map("Treeview", background=[("selected", "#a7dcbc" if self.task_view.get() == "done" else "#f5d366")],
-                  foreground=[("selected", "#163d29" if self.task_view.get() == "done" else "#262626")])
+        style.map("Task.Treeview", background=[("selected", "#CFE5D5" if self.task_view.get() == "done" else P.accent_soft)],
+                  foreground=[("selected", P.green if self.task_view.get() == "done" else P.accent)])
 
     def switch_view(self):
         if self.busy:
