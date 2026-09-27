@@ -40,6 +40,13 @@ class FakeRoster:
         self.assert_unchanged = Mock()
 
 
+def persist_skips(roster, records):
+    ids = {item.sa_id for item in records}
+    updated = [replace(item, skipped=True, remark="2") if item.sa_id in ids else item
+               for item in roster.records]
+    return SimpleNamespace(roster=FakeRoster(updated))
+
+
 class ClaimBatchTests(unittest.TestCase):
     def test_selection_requires_one_exact_suggested_signature(self):
         rec = record()
@@ -72,7 +79,8 @@ class ClaimBatchTests(unittest.TestCase):
         closure = SimpleNamespace(completion=SimpleNamespace(roster=completed_roster))
         audit = Mock()
         with patch("claim_batch.auto_complete_claim", return_value=closure) as close:
-            result = run_claim_batch(roster, [skipped, target], bridge, audit=audit)
+            result = run_claim_batch(roster, [skipped, target], bridge, audit=audit,
+                                     skip_writer=persist_skips)
         self.assertEqual(result.completed_ids, ("demo-ok",))
         self.assertIn("demo-skip", result.skipped)
         self.assertFalse(result.halted)
@@ -82,6 +90,8 @@ class ClaimBatchTests(unittest.TestCase):
         close.assert_called_once()
         self.assertIn(("自动认领列表条目", "已跳过", "demo-skip"),
                       [call.args for call in audit.call_args_list])
+        self.assertTrue(next(item for item in result.roster.records
+                             if item.sa_id == "demo-skip").skipped)
 
     def test_ambiguous_author_closes_owned_drawer_and_continues(self):
         first, second = record("demo-a"), record("demo-b")
@@ -98,7 +108,8 @@ class ClaimBatchTests(unittest.TestCase):
         closed_roster = FakeRoster([first, replace(second, done=True)])
         with patch("claim_batch.auto_complete_claim",
                    return_value=SimpleNamespace(completion=SimpleNamespace(roster=closed_roster))):
-            result = run_claim_batch(roster, [first, second], bridge)
+            result = run_claim_batch(roster, [first, second], bridge,
+                                     skip_writer=persist_skips)
         self.assertIn(first.sa_id, result.skipped)
         self.assertEqual(result.completed_ids, (second.sa_id,))
         self.assertEqual([call.args[0] for call in bridge.call.call_args_list],
@@ -136,7 +147,7 @@ class ClaimBatchTests(unittest.TestCase):
         ])
         bridge = Mock()
         bridge.call.return_value = search
-        result = run_claim_batch(roster, [target], bridge)
+        result = run_claim_batch(roster, [target], bridge, skip_writer=persist_skips)
         self.assertIn(target.sa_id, result.skipped)
         self.assertIn("并非同时为空", result.skipped[target.sa_id])
         bridge.call.assert_called_once_with("search", {"sa_id": target.sa_id})
@@ -154,7 +165,8 @@ class ClaimBatchTests(unittest.TestCase):
         closed_roster = FakeRoster([first, replace(second, done=True)])
         with patch("claim_batch.auto_complete_claim",
                    return_value=SimpleNamespace(completion=SimpleNamespace(roster=closed_roster))):
-            result = run_claim_batch(roster, [first, second], bridge)
+            result = run_claim_batch(roster, [first, second], bridge,
+                                     skip_writer=persist_skips)
         self.assertIn(first.sa_id, result.skipped)
         self.assertIn("没有可用的作者认领窗口", result.skipped[first.sa_id])
         self.assertEqual(result.completed_ids, (second.sa_id,))
@@ -168,13 +180,60 @@ class ClaimBatchTests(unittest.TestCase):
         search = found(first)
         bridge = Mock()
         bridge.call.side_effect = [search, prepared(search), SafetyStop("timeout after submit")]
-        result = run_claim_batch(roster, [first, second], bridge)
+        result = run_claim_batch(roster, [first, second], bridge,
+                                 skip_writer=persist_skips)
         self.assertTrue(result.halted)
         self.assertIn(first.sa_id, result.skipped)
         self.assertEqual(result.checked, 1)
         self.assertEqual(result.completed_ids, ())
         self.assertEqual([call.args[0] for call in bridge.call.call_args_list],
                          ["search", "prepare_claim", "submit_claim"])
+
+    def test_skip_marker_write_failure_halts_and_preserves_reason(self):
+        target = record("demo-write-two", reason="通讯作者不一致")
+        roster = FakeRoster([target])
+        writer = Mock(side_effect=SafetyStop("Excel 正在使用名单"))
+        result = run_claim_batch(roster, [target], Mock(), skip_writer=writer)
+        self.assertTrue(result.halted)
+        self.assertFalse(result.roster.records[0].skipped)
+        self.assertIn("Excel 数字 2 写入失败", result.skipped[target.sa_id])
+        writer.assert_called_once()
+
+    def test_normal_mode_ignores_numeric_two_and_retry_mode_accepts_it(self):
+        target = record("demo-red", skipped=True, remark="2")
+        roster = FakeRoster([target])
+        bridge = Mock()
+        normal = run_claim_batch(roster, [target], bridge)
+        self.assertEqual(normal.checked, 0)
+        bridge.call.assert_not_called()
+
+        search = found(target)
+        bridge.call.side_effect = [search, SafetyStop("作者认领页面结构已变化")]
+        retry = run_claim_batch(roster, [target], bridge, retry_skipped=True,
+                                skip_writer=persist_skips)
+        self.assertEqual(retry.checked, 1)
+        self.assertIn(target.sa_id, retry.skipped)
+        self.assertEqual([call.args[0] for call in bridge.call.call_args_list],
+                         ["search", "prepare_claim"])
+
+    def test_already_claimed_pending_row_is_closed_without_duplicate_claim(self):
+        target = record("demo-claimed")
+        roster = FakeRoster([target])
+        search = found(target)
+        search["comparison"][0]["library"] = "已认领"
+        bridge = Mock()
+        bridge.call.return_value = search
+        closed_roster = FakeRoster([replace(target, done=True)])
+        closure = SimpleNamespace(completion=SimpleNamespace(roster=closed_roster))
+        with patch("claim_batch.complete_claim", return_value=closure) as close, \
+                patch("claim_batch.auto_complete_claim") as new_claim:
+            result = run_claim_batch(roster, [target], bridge)
+        self.assertEqual(result.completed_ids, (target.sa_id,))
+        self.assertFalse(result.halted)
+        bridge.call.assert_called_once_with("search", {"sa_id": target.sa_id})
+        close.assert_called_once()
+        self.assertEqual(close.call_args.kwargs["note"], "已认领")
+        new_claim.assert_not_called()
 
     def test_cancel_and_limit_are_enforced(self):
         records = [record(f"demo-{index:03}") for index in range(101)]

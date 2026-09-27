@@ -20,12 +20,21 @@ class AutomationPanel:
         self.cancelled = threading.Event()
         self.progress = queue.Queue()
         self.route = tk.StringVar(value="自动识别当前条目的处理路径")
+        self.batch_limit = tk.StringVar(value="100")
         toolbar = ttk.Frame(parent)
-        toolbar.pack(fill="x", pady=(0, 8))
-        app.button(toolbar, "自动认领列表", self.claim_batch, style="Model.TButton").pack(side="left")
-        app.button(toolbar, "预检前100条", self.pilot).pack(side="left", padx=5)
+        toolbar.pack(fill="x", pady=(0, 5))
+        app.button(toolbar, "自动认领", self.claim_batch, style="Model.TButton").pack(side="left")
+        app.button(toolbar, "处理跳过项", lambda: self.claim_batch(retry_skipped=True)).pack(side="left", padx=5)
         self.stop_button = ttk.Button(toolbar, text="暂停后续步骤", command=self.cancel)
         self.stop_button.pack(side="right")
+        controls = ttk.Frame(parent)
+        controls.pack(fill="x", pady=(0, 8))
+        ttk.Label(controls, text="本轮").pack(side="left")
+        self.limit_box = ttk.Spinbox(controls, from_=1, to=100, increment=1, width=5,
+                                     textvariable=self.batch_limit)
+        self.limit_box.pack(side="left", padx=(5, 2))
+        ttk.Label(controls, text="条（1–100）").pack(side="left")
+        app.button(controls, "预检前100条", self.pilot).pack(side="right")
         ttk.Label(parent, textvariable=self.route, wraplength=445).pack(anchor="w", pady=(0, 8))
         self.subtabs = ttk.Notebook(parent)
         self.subtabs.pack(fill="both", expand=True)
@@ -63,7 +72,7 @@ class AutomationPanel:
         self.cancelled.set()
         self.app.note_operation("暂停自动认领列表")
 
-    def claim_batch(self):
+    def claim_batch(self, retry_skipped=False):
         app = self.app
         if app.busy:
             return
@@ -73,18 +82,23 @@ class AutomationPanel:
             app.roster.assert_unchanged()
             if not app.bridge or not app.bridge.online:
                 raise SafetyStop("请先连接 Edge 中的 SA 比对结果页。")
-            candidates = [record for record in app.records if not record.done][:100]
+            raw_limit = self.batch_limit.get().strip()
+            if not raw_limit.isdigit() or not 1 <= int(raw_limit) <= 100:
+                raise SafetyStop("本轮条数必须是 1–100 的整数。")
+            limit = int(raw_limit)
+            candidates = [record for record in app.records if not record.done and
+                          (record.skipped if retry_skipped else
+                           not record.skipped and record.sa_id not in app.skipped)][:limit]
             if not candidates:
-                raise SafetyStop("当前没有可检查的未完成记录。")
+                raise SafetyStop("当前没有 Excel 数字 2 的跳过记录。" if retry_skipped else
+                                 "当前没有可自动检查的未完成记录；红色跳过项请用专用按钮。")
             roster = app.roster
             originals = {record.sa_id: record for record in roster.records}
-            for record in candidates:
-                app.skipped.pop(record.sa_id, None)
             self.cancelled.clear()
             app.reviewed.set(False)
             self.subtabs.select(self.claim_page)
         except SafetyStop as exc:
-            app.note_operation("自动认领列表", "已暂停")
+            app.note_operation("处理跳过项" if retry_skipped else "自动认领列表", "已暂停")
             messagebox.showwarning("暂未自动认领", str(exc), parent=app.root)
             return
 
@@ -93,6 +107,8 @@ class AutomationPanel:
 
         def finished(result):
             app.roster = result.roster
+            app.skipped = {record.sa_id: "Excel 备注为数字 2，已持久标记为跳过。"
+                           for record in result.roster.records if record.skipped and not record.done}
             app.skipped.update(result.skipped)
             app.clear_selection()
             app.populate()
@@ -105,22 +121,26 @@ class AutomationPanel:
                         "mode": "automatic_claim_batch", "already_processed": sa_id in result.synced_ids})
                 except Exception:
                     pass
-            summary = (f"本轮检查：{result.checked} 条（最多 100）\n"
+            summary = (f"模式：{'只处理跳过项' if retry_skipped else '普通自动认领'}\n"
+                       f"本轮检查：{result.checked} 条（设定上限 {limit}）\n"
                        f"自动认领并结案：{len(result.completed_ids)} 条\n"
                        f"后台原已处理并同步：{len(result.synced_ids)} 条\n"
                        f"红色跳过：{len(result.skipped)} 条")
             reasons = "\n".join(f"{sa_id}：{reason}" for sa_id, reason in list(result.skipped.items())[:12])
-            self.route.set("自动认领因网页状态不确定而停止" if result.halted else
-                           "自动认领已暂停" if result.cancelled else "自动认领列表已完成")
+            label = "处理跳过项" if retry_skipped else "自动认领"
+            self.route.set(label + "因网页状态不确定而停止" if result.halted else
+                           label + "已暂停" if result.cancelled else label + "已完成")
             self.show(summary + ("\n\n红色记录：\n" + reasons if reasons else ""))
             app.status.set("已停止后续操作；红色记录保留未完成，请先核验网页。" if result.halted else
                            "自动认领已暂停；已完成结果已保留。" if result.cancelled else
                            "自动认领列表完成；红色记录已跳过并保持未完成。")
 
+        action = "处理跳过项" if retry_skipped else "自动认领列表"
         app.run(lambda: run_claim_batch(roster, candidates, app.bridge, self.cancelled.is_set,
-                                        self.progress.put, audit, limit=100), finished,
-                "正在自动认领当前列表，无法安全判断的记录将标红跳过…",
-                log_action="自动认领列表")
+                                        self.progress.put, audit, limit=limit,
+                                        retry_skipped=retry_skipped), finished,
+                f"正在{action}，无法安全判断的记录将标红跳过…",
+                log_action=action)
 
     def guard(self):
         app = self.app

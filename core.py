@@ -55,6 +55,7 @@ class Record:
     reason: str
     query: str
     done: bool = False
+    skipped: bool = False
     remark: str = ""
 
     @property
@@ -62,6 +63,7 @@ class Record:
         # Changed task facts invalidate an old completion, even for the same ID.
         values = asdict(self)
         values.pop("done")
+        values.pop("skipped")
         values.pop("remark")
         return digest(values)
 
@@ -132,8 +134,10 @@ def read_roster(path):
             flag = cells[done_column]
             if flag.data_type == "f":
                 raise SafetyStop(f"第 {number} 行完成备注是公式，不能自动判断或覆盖。")
-            # Only a numeric 1 counts. Text '1', booleans and formulas stay pending.
+            # Numeric 1 is complete and numeric 2 is skipped. Text values,
+            # booleans and formulas never silently become workflow states.
             done = flag.data_type == "n" and type(flag.value) in (int, float) and flag.value == 1
+            skipped = flag.data_type == "n" and type(flag.value) in (int, float) and flag.value == 2
             for key, index in mapping.items():
                 cell = cells[index]
                 if cell.data_type == "f":
@@ -157,7 +161,7 @@ def read_roster(path):
             if not values["owner"]:
                 values["owner"] = "（未分配）"
             values["matches"] = count
-            records.append(Record(row=number, done=done, remark=text(flag.value), **values))
+            records.append(Record(row=number, done=done, skipped=skipped, remark=text(flag.value), **values))
         if not records:
             raise SafetyStop("名单没有记录。")
     finally:

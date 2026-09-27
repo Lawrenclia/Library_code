@@ -88,6 +88,16 @@ class UITests(unittest.TestCase):
         self.assertIn('署名不能唯一对应', self.app.details.get('1.0', 'end'))
         self.assertFalse(self.app.current.done)
 
+    def test_numeric_two_is_red_after_fresh_roster_load(self):
+        make_roster(self.path, [2, None])
+        self.app.loaded(read_roster(self.path))
+        self.app.owner.set('测试员')
+        self.app.select_owner()
+        self.assertIn('demo-001', self.app.tree.get_children())
+        self.assertIn('skipped', self.app.tree.item('demo-001', 'tags'))
+        self.assertEqual(self.app.tree.item('demo-001', 'values')[2], '跳过')
+        self.assertIn('跳过 1', self.app.pending_count.get())
+
     def test_automatic_claim_list_applies_red_skips_without_excel_completion(self):
         from claim_batch import ClaimBatchResult
         self.select_tan_first()
@@ -101,6 +111,38 @@ class UITests(unittest.TestCase):
         self.assertEqual(self.app.tree.item(record.sa_id, 'values')[2], '跳过')
         self.assertFalse(next(item for item in self.app.roster.records if item.sa_id == record.sa_id).done)
         self.assertIn('红色跳过：1', self.app.automation_panel.output.get('1.0', 'end'))
+
+    def test_claim_buttons_use_adjustable_limit_and_separate_skip_queues(self):
+        from claim_batch import ClaimBatchResult
+        make_roster(self.path, [None, 2, None])
+        book = load_workbook(self.path)
+        for row in range(2, 5):
+            book.active.cell(row, 2).value = '谭勋策'
+        book.save(self.path)
+        book.close()
+        self.app.loaded(read_roster(self.path))
+        self.app.owner.set('谭勋策')
+        self.app.select_owner()
+        self.app.bridge = Mock(online=True)
+        self.app.automation_panel.batch_limit.set('2')
+        self.app.skipped['demo-003'] = '本次会话已标红'
+
+        def result_for(roster, *_args, **_kwargs):
+            return ClaimBatchResult(roster, (), (), {}, 0, False, False)
+
+        with patch('automation_panel.run_claim_batch', side_effect=result_for) as run, \
+                patch.object(self.app, 'run', side_effect=self.sync_run):
+            self.app.automation_panel.claim_batch()
+        self.assertEqual([item.sa_id for item in run.call_args.args[1]], ['demo-001'])
+        self.assertEqual(run.call_args.kwargs['limit'], 2)
+        self.assertFalse(run.call_args.kwargs['retry_skipped'])
+
+        with patch('automation_panel.run_claim_batch', side_effect=result_for) as run, \
+                patch.object(self.app, 'run', side_effect=self.sync_run):
+            self.app.automation_panel.claim_batch(retry_skipped=True)
+        self.assertEqual([item.sa_id for item in run.call_args.args[1]], ['demo-002'])
+        self.assertEqual(run.call_args.kwargs['limit'], 2)
+        self.assertTrue(run.call_args.kwargs['retry_skipped'])
 
     def test_warning_is_quiet_non_modal_and_can_be_updated(self):
         self.root.deiconify()
@@ -405,6 +447,7 @@ class UITests(unittest.TestCase):
         record = self.app.current
         self.app.set_busy(True)
         self.assertEqual(str(self.app.owner_box['state']), 'disabled')
+        self.assertEqual(str(self.app.automation_panel.limit_box['state']), 'disabled')
         self.app.next_record()
         self.assertEqual(self.app.current, record)
         with patch('app.mark_complete') as write:

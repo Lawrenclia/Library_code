@@ -31,6 +31,14 @@ class Completion:
     previous: str
 
 
+@dataclass
+class RosterUpdate:
+    roster: Roster
+    backup: Path
+    cells: tuple
+    previous: dict
+
+
 def column_name(number):
     result = ""
     while number:
@@ -76,8 +84,10 @@ def worksheet_member(archive, name):
     return result
 
 
-def patch_cell(data, reference, row_number):
+def patch_cell(data, reference, row_number, value=1):
     """Preserve XML namespaces, styles, extensions and all surrounding bytes."""
+    if type(value) is not int or value not in (1, 2):
+        raise SafetyStop("名单状态只能写入数字 1（完成）或 2（跳过）。")
     document = ET.fromstring(data)
     protection = document.find(f"{{{NS}}}sheetProtection")
     if document.tag != f"{{{NS}}}worksheet" or (protection is not None and protection.get("sheet", "1") not in {"0", "false"}):
@@ -113,10 +123,10 @@ def patch_cell(data, reference, row_number):
             raise SafetyStop("备注包含特殊元数据，请人工处理。")
         start = found[0].group().split(">", 1)[0].rstrip("/")
         start = re.sub(r'\s+t="[^"]*"', "", start)
-        replacement = start + ' t="n"><v>1</v></c>'
+        replacement = start + f' t="n"><v>{value}</v></c>'
         segment = segment[:found[0].start()] + replacement + segment[found[0].end():]
     else:
-        replacement = f'<c r="{reference}" t="n"><v>1</v></c>'
+        replacement = f'<c r="{reference}" t="n"><v>{value}</v></c>'
         from openpyxl.utils.cell import coordinate_to_tuple
         destination = coordinate_to_tuple(reference)[1]
         offset = segment.rfind("</row>")
@@ -130,36 +140,55 @@ def patch_cell(data, reference, row_number):
     return changed
 
 
-def mark_complete(roster, record, backup_dir=None):
-    """Back up and mark one verified record complete in the local roster."""
+def _mark_values(roster, updates, backup_dir=None):
+    """Atomically write one or more workflow states after full-file verification."""
     path = roster.path
     if path.name.lower() != "list.xlsx" or not roster.completion_column:
         raise SafetyStop("只允许回写当前 list.xlsx 的完成备注列。")
-    if record not in roster.records or record.done:
-        raise SafetyStop("该任务已完成或不属于当前名单，请重新读取。")
+    updates = list(updates)
+    if not updates:
+        raise SafetyStop("没有需要写入的名单状态。")
+    rows = set()
+    for record, value in updates:
+        if record not in roster.records or record.done or type(value) is not int or value not in (1, 2):
+            raise SafetyStop("任务已完成、状态无效或不属于当前名单，请重新读取。")
+        if record.row in rows or (value == 2 and record.skipped):
+            raise SafetyStop("跳过任务已标记或目标行重复，请重新读取。")
+        rows.add(record.row)
     temporary = None
     try:
         with write_lock(path):
             if path.with_name("~$" + path.name).exists():
                 raise SafetyStop("Excel 正在使用名单。请保存并关闭 list.xlsx，再重新读取后确认。")
             roster.assert_unchanged()
-            reference = f"{column_name(roster.completion_column)}{record.row}"
             descriptor, name = tempfile.mkstemp(prefix=".list-write-", suffix=".xlsx", dir=path.parent)
             os.close(descriptor)
             temporary = Path(name)
             with zipfile.ZipFile(path) as source, zipfile.ZipFile(temporary, "w") as output:
                 member = worksheet_member(source, roster.sheet_name)
-                changed = patch_cell(source.read(member), reference, record.row)
+                changed = source.read(member)
+                references = []
+                for record, value in updates:
+                    reference = f"{column_name(roster.completion_column)}{record.row}"
+                    references.append(reference)
+                    changed = patch_cell(changed, reference, record.row, value)
                 output.comment = source.comment
                 for entry in source.infolist():
                     output.writestr(copy.copy(entry), changed if entry.filename == member else source.read(entry))
             verified = read_roster(temporary)
-            expected = [r for r in verified.records if r.row == record.row and r.sa_id == record.sa_id]
-            if len(expected) != 1 or not expected[0].done or expected[0].key != record.key:
-                fields = "目标行或 ID" if len(expected) != 1 else ("完成标记类型" if not expected[0].done else "其他任务字段")
-                raise SafetyStop(f"第 {record.row} 行回读失败（{fields}），原名单未修改。请重启最新版助手并重读名单；若仍失败，请反馈此行号。")
+            target_values = {record.row: (record, value) for record, value in updates}
+            for row_number, (record, value) in target_values.items():
+                expected = [r for r in verified.records if r.row == row_number and r.sa_id == record.sa_id]
+                state_ok = (value == 1 and expected and expected[0].done and not expected[0].skipped) or \
+                           (value == 2 and expected and expected[0].skipped and not expected[0].done)
+                if len(expected) != 1 or not state_ok or expected[0].key != record.key:
+                    fields = "目标行或 ID" if len(expected) != 1 else ("状态标记类型" if not state_ok else "其他任务字段")
+                    raise SafetyStop(f"第 {row_number} 行回读失败（{fields}），原名单未修改。请重启最新版助手并重读名单；若仍失败，请反馈此行号。")
             from dataclasses import replace
-            intended = [replace(r, done=True, remark="1") if r.row == record.row else r for r in roster.records]
+            intended = [replace(r, done=target_values[r.row][1] == 1,
+                                skipped=target_values[r.row][1] == 2,
+                                remark=str(target_values[r.row][1]))
+                        if r.row in target_values else r for r in roster.records]
             if verified.records != intended:
                 raise SafetyStop("回读发现非目标行发生变化，原名单未修改。")
             # A content-addressed complete backup also preserves overwritten notes.
@@ -184,12 +213,24 @@ def mark_complete(roster, record, backup_dir=None):
             verified.path = path
             verified.mtime_ns = path.stat().st_mtime_ns
             verified.assert_unchanged()
-            return Completion(verified, backup, reference, record.remark)
+            return RosterUpdate(verified, backup, tuple(references),
+                                {record.sa_id: record.remark for record, _ in updates})
     except PermissionError as exc:
-        raise SafetyStop("名单被占用或没有写权限。请保存并关闭 Excel，再重新读取；当前条目尚未确认完成。") from exc
+        raise SafetyStop("名单被占用或没有写权限。请保存并关闭 Excel，再重新读取；当前状态尚未写入。") from exc
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+
+
+def mark_complete(roster, record, backup_dir=None):
+    """Back up and mark one verified record complete in the local roster."""
+    result = _mark_values(roster, [(record, 1)], backup_dir)
+    return Completion(result.roster, result.backup, result.cells[0], result.previous[record.sa_id])
+
+
+def mark_skipped_many(roster, records, backup_dir=None):
+    """Back up and mark several safely skipped records with numeric 2."""
+    return _mark_values(roster, [(record, 2) for record in records], backup_dir)
 
 
 def reconcile_processed(roster, record, remote_row, owner="谭勋策"):

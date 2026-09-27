@@ -400,6 +400,7 @@ class App:
         self.note.configure(state="disabled" if busy else "normal")
         for tab in self.view_buttons:
             tab.configure(state="disabled" if busy else "normal")
+        self.automation_panel.limit_box.configure(state="disabled" if busy else "normal")
         self.model_panel.set_busy(busy)
         if self.classifier:
             self.classifier.set_external_busy(busy)
@@ -513,13 +514,17 @@ class App:
 
     def loaded(self, roster):
         self.roster = roster
+        self.skipped = {record.sa_id: "Excel 备注为数字 2，已持久标记为跳过。"
+                        for record in roster.records if record.skipped and not record.done}
         self.owner_box["values"] = sorted({record.owner for record in roster.records})
         self.update_counts(roster.records)
-        self.status.set("请选择负责人。黄色待办，绿色已完成。")
+        self.status.set("请选择负责人。黄色待办，红色跳过，绿色已完成。")
 
     def update_counts(self, records):
         done = sum(record.done for record in records)
-        self.pending_count.set(f"未完成 {len(records) - done}")
+        skipped = sum(record.skipped and not record.done for record in records)
+        suffix = f" · 跳过 {skipped}" if skipped else ""
+        self.pending_count.set(f"未完成 {len(records) - done}{suffix}")
         self.done_count.set(f"已完成 {done}")
 
     def populate(self):
@@ -529,7 +534,7 @@ class App:
         self.by_id = {r.sa_id: r for r in self.records}
         self.tree.delete(*self.tree.get_children())
         for record in self.records:
-            tag = "done" if record.done else "skipped" if record.sa_id in self.skipped else "pending"
+            tag = "done" if record.done else "skipped" if record.skipped or record.sa_id in self.skipped else "pending"
             state = "已完成" if record.done else "跳过" if tag == "skipped" else "未完成"
             self.tree.insert("", "end", iid=record.sa_id, values=(record.sa_id, record.title, state), tags=(tag,))
         self.update_counts(scope)
@@ -565,6 +570,8 @@ class App:
         self.set_approval(record.done)
         self.current_id.set(f"ID：{record.sa_id}")
         skipped = self.skipped.get(record.sa_id)
+        if record.skipped and not skipped:
+            skipped = "Excel 备注为数字 2，已持久标记为跳过。"
         self.show_text(f"{record.title}\n\n工号 {record.staff_id or '—'}    匹配 {record.matches}\n"
                        f"{record.reason or '未提供差异原因'}" +
                        (f"\n\n自动认领已跳过：{skipped}" if skipped else ""))

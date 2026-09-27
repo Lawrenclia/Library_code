@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from approval import auto_complete_claim, claim_completion_note, verify_claim_result
+from approval import auto_complete_claim, claim_completion_note, complete_claim, verify_claim_result
 from automation import classify
 from claim import sa_claim_source
 from core import SafetyStop
-from roster_write import reconcile_processed
+from remarks import CLAIMED, detail_value
+from roster_write import mark_skipped_many, reconcile_processed
 
 
 @dataclass
@@ -53,13 +54,18 @@ def automatic_claim_selection(record, before, comparison, result):
 
 
 def run_claim_batch(roster, records, bridge, cancel=lambda: False, progress=lambda text: None,
-                    audit=lambda action, result, sa_id: None, limit=100):
+                    audit=lambda action, result, sa_id: None, limit=100,
+                    retry_skipped=False, skip_writer=None):
     """Process at most ``limit`` rows; never continue after an uncertain write."""
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
         raise SafetyStop("单次自动认领数量必须为 1–100。")
+    if type(retry_skipped) is not bool:
+        raise SafetyStop("跳过任务处理模式无效。")
     ids = []
     for record in records:
-        if record.sa_id not in ids:
+        # Normal automation never re-enters a persistent red row. The dedicated
+        # retry action does the inverse and accepts only numeric-2 rows.
+        if not record.done and record.skipped == retry_skipped and record.sa_id not in ids:
             ids.append(record.sa_id)
     ids = ids[:limit]
     current_roster = roster
@@ -73,12 +79,36 @@ def run_claim_batch(roster, records, bridge, cancel=lambda: False, progress=lamb
         except Exception:
             progress("log.txt 未能保存自动认领记录，请检查文件权限和格式。")
 
+    def finish(cancelled=False):
+        """Persist newly skipped owned rows as numeric 2 in one atomic write."""
+        nonlocal current_roster, halted
+        targets = []
+        for sa_id in skipped:
+            item = next((candidate for candidate in current_roster.records
+                         if candidate.sa_id == sa_id), None)
+            # Never modify another owner's row. A retry row already contains 2.
+            if item and item.owner == "谭勋策" and not item.done and not item.skipped:
+                targets.append(item)
+        if targets:
+            writer = skip_writer or mark_skipped_many
+            try:
+                update = writer(current_roster, targets)
+                current_roster = update.roster
+                for item in targets:
+                    note("写入跳过标记", "已执行", item.sa_id)
+            except Exception as exc:
+                halted = True
+                for item in targets:
+                    skipped[item.sa_id] += "；Excel 数字 2 写入失败：" + str(exc)
+                    note("写入跳过标记", "已暂停", item.sa_id)
+        return ClaimBatchResult(current_roster, tuple(completed), tuple(synced), skipped,
+                                checked, cancelled, halted)
+
     for sa_id in ids:
         if cancel():
-            return ClaimBatchResult(current_roster, tuple(completed), tuple(synced), skipped,
-                                    checked, True, halted)
+            return finish(cancelled=True)
         record = next((item for item in current_roster.records if item.sa_id == sa_id), None)
-        if not record or record.done:
+        if not record or record.done or record.skipped != retry_skipped:
             continue
         checked += 1
         progress(f"自动认领 {checked}/{len(ids)}：{sa_id}")
@@ -113,12 +143,42 @@ def run_claim_batch(roster, records, bridge, cancel=lambda: False, progress=lamb
             note("自动认领列表条目", "已执行", sa_id)
             continue
         try:
-            plan = classify(record, found)
-            if plan.route != "claim":
-                raise SafetyStop(plan.reason)
             before, comparison = found["row"], found.get("comparison")
             if before.get("reason") != record.reason or str(before.get("matchCount")) != str(record.matches):
                 raise SafetyStop("网页待处理原因或匹配数与名单不一致，本条保留人工核验。")
+            claim_state = detail_value(comparison, "认领状态", "library")
+        except Exception as exc:
+            skipped[sa_id] = str(exc)
+            note("自动认领列表条目", "已跳过", sa_id)
+            continue
+
+        # A pending author-mismatch row can already have a valid claim. Do not
+        # duplicate the claim; verify the fresh detail and close it as 已认领.
+        if claim_state == CLAIMED:
+            try:
+                completion_note = claim_completion_note(record, comparison, claimed=True)
+            except Exception as exc:
+                skipped[sa_id] = str(exc)
+                note("已认领记录核验", "已跳过", sa_id)
+                continue
+            note("已认领记录结案意图", "已执行", sa_id)
+            try:
+                closed = complete_claim(current_roster, record, bridge, before, comparison,
+                                        reviewed=True, note=completion_note)
+            except Exception as exc:
+                skipped[sa_id] = "已认领，但批注或结案未全部核验：" + str(exc)
+                note("已认领记录结案", "已暂停", sa_id)
+                halted = True
+                break
+            current_roster = closed.completion.roster
+            completed.append(sa_id)
+            note("已认领记录结案", "已执行", sa_id)
+            continue
+
+        try:
+            plan = classify(record, found)
+            if plan.route != "claim":
+                raise SafetyStop(plan.reason)
             completion_note = claim_completion_note(record, comparison, claimed=False)
             source, staff_id = sa_claim_source(comparison)
             payload = {"sa_id": sa_id, "expected": before, "sa_text": source,
@@ -179,5 +239,4 @@ def run_claim_batch(roster, records, bridge, cancel=lambda: False, progress=lamb
         completed.append(sa_id)
         note("自动认领列表条目", "已执行", sa_id)
 
-    return ClaimBatchResult(current_roster, tuple(completed), tuple(synced), skipped,
-                            checked, False, halted)
+    return finish()
