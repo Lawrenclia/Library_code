@@ -143,7 +143,7 @@ class KeyStore:
 
     def load(self):
         if not self.configured():
-            raise SafetyStop("尚未配置模型密钥，请点击“密钥设置”。")
+            raise SafetyStop("尚未配置模型密钥，请进入“设置”配置 API。")
         try:
             return self.validate(self._crypt(self.path.read_bytes(), decrypt=True).decode("ascii"))
         except SafetyStop:

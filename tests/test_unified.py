@@ -32,7 +32,8 @@ class UnifiedTests(unittest.TestCase):
         self.app.close()
 
     def test_all_features_in_one_notebook_and_shared_busy_state(self):
-        self.assertEqual([self.app.tabs.tab(t,'text') for t in self.app.tabs.tabs()],['人工处理','自动化 / 认领','模型辅助','批量分类 / 导入渠道','零匹配提交准备'])
+        self.assertEqual([self.app.tabs.tab(t,'text') for t in self.app.tabs.tabs()],['人工处理','自动化 / 认领','批量分类 / 核对','零匹配提交准备','设置'])
+        self.assertEqual([self.app.analysis_tabs.tab(t,'text') for t in self.app.analysis_tabs.tabs()],['批量分类 / 导入渠道','单条核对'])
         self.assertIs(self.app.classifier.root,self.root)
         self.app.classifier.set_busy(True)
         self.assertTrue(self.app.busy)

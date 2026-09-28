@@ -14,12 +14,13 @@ from ui_theme import P, install_theme, style_text
 
 
 class ClassifyApp:
-    def __init__(self, root, parent=None, on_busy=None, on_review=None, on_export=None):
+    def __init__(self, root, parent=None, on_busy=None, on_review=None, on_export=None, on_settings=None):
         self.root = root
         self.embedded = parent is not None
         self.on_busy = on_busy
         self.on_review = on_review
         self.on_export = on_export
+        self.on_settings = on_settings
         self.external_busy = False
         self.queue = queue.Queue()
         self.stop = threading.Event()
@@ -63,7 +64,7 @@ class ClassifyApp:
         self.model = tk.StringVar(value='deepseek-chat')
         self.combo = ttk.Combobox(settings,textvariable=self.model,values=MODELS,state='readonly',width=22)
         self.combo.pack(side='left',padx=8)
-        self.key_button = ttk.Button(settings,text='密钥设置',command=self.configure_key)
+        self.key_button = ttk.Button(settings,text='API 设置' if on_settings else '密钥设置',command=self.configure_key)
         self.key_button.pack(side='left')
         ttk.Label(settings,text='每批').pack(side='left',padx=(14,0))
         self.batch = tk.StringVar(value=str(limits(self.model.get())['batch_size']))
@@ -157,6 +158,11 @@ class ClassifyApp:
             self.summary.set('名单未就绪：请将包含“题名”列的 list.xlsx 放在程序目录。')
 
     def configure_key(self):
+        if self.busy or self.external_busy:
+            return
+        if self.on_settings:
+            self.on_settings()
+            return
         key = simpledialog.askstring('交大模型密钥','输入密钥（仅使用 Windows 加密保存）',show='*',parent=self.root)
         if key:
             try:

@@ -33,6 +33,8 @@ class App:
         self.unified = unified
         self.classifier = None
         self.submission_panel = None
+        self.settings_panel = None
+        self.wos_import_panel = None
         self.closing = False
         self.journal = journal or Journal(BASE / "runtime" / "progress.sqlite3")
         self.operation_log = operation_log or OperationLog(BASE / "log.txt")
@@ -69,6 +71,10 @@ class App:
             self.build_classification()
             if initial_tab == 'classification':
                 self.tabs.select(self.classification_page)
+        from settings_panel import SettingsPanel
+        self.settings_page = ttk.Frame(self.tabs, padding=18)
+        self.tabs.add(self.settings_page, text="设置")
+        self.settings_panel = SettingsPanel(self, self.settings_page, BASE / "runtime")
         self.reviewed.trace_add("write", lambda *_: self.refresh_approval())
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.pump_id = self.root.after(120, self.pump)
@@ -82,17 +88,27 @@ class App:
         width=min(1180,self.root.winfo_screenwidth()-80)
         self.root.geometry(f'{width}x{height}+30+25')
         self.root.minsize(960,740)
-        self.classification_page=ttk.Frame(self.tabs)
-        self.tabs.add(self.classification_page,text='批量分类 / 导入渠道')
+        self.classification_page=self.analysis_page
+        self.tabs.tab(self.classification_page,text='批量分类 / 核对')
+        self.batch_classification_page=ttk.Frame(self.analysis_tabs)
+        self.analysis_tabs.insert(0,self.batch_classification_page,text='批量分类 / 导入渠道')
+        self.analysis_tabs.select(self.batch_classification_page)
         self.tabs.tab(self.automation_page,text='自动化 / 认领')
-        self.classifier=ClassifyApp(self.root,parent=self.classification_page,
+        self.classifier=ClassifyApp(self.root,parent=self.batch_classification_page,
                                    on_busy=self.set_busy,on_review=self.review_classified,
-                                   on_export=self.export_wos_metadata)
+                                   on_export=self.export_wos_metadata,on_settings=self.open_settings)
         from submission_panel import SubmissionPanel
         self.submission_page=ttk.Frame(self.tabs,padding=20)
         self.tabs.add(self.submission_page,text='零匹配提交准备')
         self.submission_panel=SubmissionPanel(self,self.submission_page)
         self.tabs.bind('<<NotebookTabChanged>>',self.refresh_workspace)
+
+    def open_settings(self):
+        if self.busy or not self.settings_panel:
+            return
+        self.settings_panel.refresh()
+        self.tabs.select(self.settings_page)
+        self.settings_panel.entry.focus_set()
 
     def refresh_workspace(self,_event=None):
         if self.classifier and str(self.tabs.select())==str(self.classification_page):
@@ -258,8 +274,12 @@ class App:
         self.automation_page = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(self.manual_page, text="人工处理")
         self.tabs.add(self.automation_page, text="自动化")
-        self.model_page = ttk.Frame(self.tabs, padding=12)
-        self.tabs.add(self.model_page, text="模型辅助")
+        self.analysis_page = ttk.Frame(self.tabs)
+        self.tabs.add(self.analysis_page, text="资料核对")
+        self.analysis_tabs = ttk.Notebook(self.analysis_page)
+        self.analysis_tabs.pack(fill="both", expand=True)
+        self.model_page = ttk.Frame(self.analysis_tabs, padding=12)
+        self.analysis_tabs.add(self.model_page, text="单条核对")
         self.model_panel = ModelPanel(self, self.model_page, self.model_client)
         ttk.Label(self.automation_page, textvariable=self.current_id, wraplength=440).pack(anchor="w", pady=(0, 8))
         self.automation_panel = AutomationPanel(self, self.automation_page, BASE / "runtime" / "wos-imports")
@@ -399,6 +419,10 @@ class App:
             self.classifier.set_external_busy(busy)
         if self.submission_panel:
             self.submission_panel.set_external_busy(busy)
+        if self.settings_panel:
+            self.settings_panel.set_busy(busy)
+        if self.wos_import_panel:
+            self.wos_import_panel.set_busy(busy)
         if not busy and self.closing:
             self.root.after_idle(self.close)
         self.refresh_approval()
@@ -846,6 +870,8 @@ class App:
         if self.busy:
             return
         try:
+            if not self.owner.get().strip():
+                raise SafetyStop("请选择负责人。")
             record, roster = self.current, self.roster
             if (not roster or not record or record.owner != "谭勋策" or record.done or
                     record not in self.records or not self.reviewed.get()):

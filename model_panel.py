@@ -28,10 +28,9 @@ class ModelPanel:
         self.model_box = ttk.Combobox(selection, textvariable=self.model, values=MODELS, state="readonly", width=20)
         self.model_box.pack(side="left", fill="x", expand=True, padx=6)
         self.model_box.bind("<<ComboboxSelected>>", lambda _e: self.clear())
-        app.button(selection, "密钥设置", self.configure_key).pack(side="right")
+        app.button(selection, "API 设置", app.open_settings).pack(side="right")
         network = ttk.Frame(page)
         network.grid(row=2, column=0, sticky="ew", pady=(6, 8))
-        app.button(network, "测试连接", self.test_connection).pack(side="left")
         app.button(network, "查看发送内容", self.preview).pack(side="left", padx=6)
         ttk.Label(network, text="仅交大服务 · 校园网/VPN", style="Muted.TLabel").pack(side="right")
         evidence_frame = ttk.Frame(page)
@@ -115,36 +114,8 @@ class ModelPanel:
             app.current, app.snapshot, app.comparison, evidence, self.model.get())
 
     def configure_key(self):
-        if self.app.busy:
-            return
-        popup = tk.Toplevel(self.app.root)
-        popup.title("模型密钥 · 仅本机保存")
-        popup.transient(self.app.root)
-        popup.attributes("-topmost", True)
-        popup.geometry("460x220")
-        popup.resizable(False, False)
-        frame = ttk.Frame(popup, padding=15)
-        frame.pack(fill="both", expand=True)
-        configured = self.client.key_store.configured()
-        ttk.Label(frame, text="已配置加密密钥；粘贴新密钥可替换。" if configured else "粘贴校方提供的 API key。", wraplength=420).pack(anchor="w")
-        key = tk.StringVar()
-        entry = ttk.Entry(frame, textvariable=key, show="●")
-        entry.pack(fill="x", pady=10)
-        ttk.Label(frame, text="Windows 账号绑定加密，不显示已保存密钥。\n不会进入代码、Git 或日志。", wraplength=420).pack(anchor="w")
-        def save():
-            if self.app.busy:
-                return
-            try:
-                self.client.key_store.save(key.get())
-                self.client.available = None
-                key.set("")
-                popup.destroy()
-                self.clear()
-                self.info.set("密钥已加密保存，可测试连接。")
-            except Exception:
-                messagebox.showwarning("未保存", "密钥格式或本机加密保存失败，请检查后重试。", parent=popup)
-        ttk.Button(frame, text="加密保存", command=save).pack(anchor="e", pady=10)
-        entry.focus_set()
+        # Compatibility entry point; configuration now lives in one shared page.
+        return self.app.open_settings()
 
     def preview(self):
         if self.app.busy:

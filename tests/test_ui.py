@@ -205,7 +205,7 @@ class UITests(unittest.TestCase):
         self.root.deiconify()
         self.root.update()
         self.assertTrue(self.root.attributes('-topmost'))
-        self.assertEqual([self.app.tabs.tab(tab, 'text') for tab in self.app.tabs.tabs()], ['人工处理', '自动化', '模型辅助'])
+        self.assertEqual([self.app.tabs.tab(tab, 'text') for tab in self.app.tabs.tabs()], ['人工处理', '自动化', '资料核对', '设置'])
         self.assertIsNone(self.app.bridge)
         for size in ('560x700', '520x600'):
             self.root.geometry(size)

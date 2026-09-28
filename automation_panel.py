@@ -79,6 +79,8 @@ class AutomationPanel:
         if app.busy:
             return
         try:
+            if not app.owner.get().strip():
+                raise SafetyStop("请选择负责人。")
             if not app.roster or app.owner.get() != OWNER or app.task_view.get() != "pending":
                 raise SafetyStop("请先在人工页选择谭勋策，并切换到未完成列表。")
             app.roster.assert_unchanged()
@@ -146,6 +148,8 @@ class AutomationPanel:
 
     def guard(self):
         app = self.app
+        if not app.owner.get().strip():
+            raise SafetyStop("请选择负责人。")
         if not app.current or not app.roster or app.current.done:
             raise SafetyStop("请先选择一条未完成记录。")
         if app.current.owner != "谭勋策":
@@ -175,6 +179,8 @@ class AutomationPanel:
         if app.busy:
             return
         try:
+            if not app.owner.get().strip():
+                raise SafetyStop("请选择负责人。")
             if not app.roster or app.owner.get() != OWNER:
                 raise SafetyStop("请先在人工页选择负责人谭勋策。")
             app.roster.assert_unchanged()

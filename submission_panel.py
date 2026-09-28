@@ -39,7 +39,7 @@ class SubmissionPanel:
         self.controls.append(retry)
         actions=ttk.Frame(page)
         actions.pack(fill='x',pady=10)
-        for text,command in [('检查名单与模板',self.preview),('开始 / 继续准备',self.start),('密钥设置',app.model_panel.configure_key)]:
+        for text,command in [('检查名单与模板',self.preview),('开始 / 继续准备',self.start),('API 设置',app.open_settings)]:
             button=ttk.Button(actions,text=text,command=command)
             button.pack(side='left',padx=(0,8))
             self.controls.append(button)
