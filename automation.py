@@ -204,6 +204,23 @@ class ImportStore:
         parse_wos(raw)
         return raw
 
+    def other_writes(self, record, candidate):
+        """A second SA row must not re-import the same paper, even after restart."""
+        with self.connect() as db:
+            rows = db.execute("SELECT sa_id,data FROM imports WHERE sa_id<>?", (record.sa_id,)).fetchall()
+        found = []
+        for sa_id, raw in rows:
+            try:
+                state = json.loads(raw)
+                previous = state["candidate"]
+                same = previous.get("wos") == candidate["wos"] or (
+                    candidate.get("doi") and previous.get("doi") == candidate["doi"])
+                if same and state["phase"] in ("upload_intent", "import_intent", "imported", "push_intent", "pushed"):
+                    found.append(sa_id)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                raise SafetyStop("历史导入日志结构异常，请核对后继续；不会忽略重复导入风险。") from None
+        return found
+
 
 class WOSFlow:
     def __init__(self, bridge, store, unchanged=lambda: None, progress=lambda text: None,
@@ -249,6 +266,32 @@ class WOSFlow:
         self.store.save(record, state)
         return state
 
+    def prepare_file(self, record, path, expected_sha=None):
+        """Adopt genuine single-record exports without searching or downloading again."""
+        self.unchanged()
+        path = Path(path)
+        if path.is_symlink() or path.suffix.lower() != ".txt" or not path.is_file():
+            raise SafetyStop("请选择真实 WOS 制表符 TXT 文件。")
+        if not 1 <= path.stat().st_size <= MAX_TXT:
+            raise SafetyStop("WOS TXT 文件大小异常。")
+        raw = path.read_bytes()
+        candidate = parse_wos(raw)
+        if expected_sha and candidate["sha256"] != expected_sha:
+            raise SafetyStop("WOS 文件在预检后发生变化，请重新预检。")
+        strong = identity(record, candidate)
+        existing = self.store.get(record)
+        if existing:
+            if existing["candidate"]["sha256"] != candidate["sha256"]:
+                raise SafetyStop("本条已有不同的导入存档，不替换文件或重建批次。")
+            self.store.bytes(existing)
+            return existing
+        self.store.archive(raw)
+        state = {"phase": "exported", "candidate": candidate, "identity_confirmed": strong,
+                 "instructions": "SA补充-" + record.sa_id, "batch": None}
+        self.unchanged()
+        self.store.save(record, state)
+        return state
+
     def proceed(self, record, confirm_identity=False):
         state = self.store.get(record)
         if not state:
@@ -266,6 +309,9 @@ class WOSFlow:
         common = {"sa_id": record.sa_id, "instructions": state["instructions"], "candidate": candidate}
         # Recheck current SA status immediately before beginning a new upload.
         if state["phase"] == "exported":
+            others = self.store.other_writes(record, candidate)
+            if others:
+                raise SafetyStop("同一论文已有导入或提交记录（" + "、".join(others) + "），请核对并关联已有条目，不重复导入。")
             result = self.call("search", {"sa_id": record.sa_id})
             if classify(record, result).route != "wos":
                 raise SafetyStop("比对状态已变化，不再符合缺失条目的导入条件。")

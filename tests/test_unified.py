@@ -32,7 +32,7 @@ class UnifiedTests(unittest.TestCase):
         self.app.close()
 
     def test_all_features_in_one_notebook_and_shared_busy_state(self):
-        self.assertEqual([self.app.tabs.tab(t,'text') for t in self.app.tabs.tabs()],['人工处理','自动化 / 认领','批量分类 / 核对','零匹配提交准备','设置'])
+        self.assertEqual([self.app.tabs.tab(t,'text') for t in self.app.tabs.tabs()],['人工处理','自动化 / 认领','批量分类 / 核对','零匹配提交准备','WOS 导入','设置'])
         self.assertEqual([self.app.analysis_tabs.tab(t,'text') for t in self.app.analysis_tabs.tabs()],['批量分类 / 导入渠道','单条核对'])
         self.assertIs(self.app.classifier.root,self.root)
         self.app.classifier.set_busy(True)
@@ -52,6 +52,20 @@ class UnifiedTests(unittest.TestCase):
         self.assertEqual(str(self.app.tabs.select()),str(self.app.manual_page))
         self.assertIsNone(self.app.bridge)
         self.assertEqual(file_hash(self.path),before)
+
+    def test_analysis_subtabs_and_settings_share_configuration_without_requests(self):
+        self.app.classifier.configure_key()
+        self.assertEqual(self.app.tabs.select(), str(self.app.settings_page))
+        self.root.deiconify()
+        self.root.geometry('960x740')
+        self.app.tabs.select(self.app.classification_page)
+        for tab in self.app.analysis_tabs.tabs():
+            self.app.analysis_tabs.select(tab)
+            self.root.update()
+            widget = self.app.model_panel.copy_button if tab == str(self.app.model_page) else self.app.classifier.export_button
+            self.assertTrue(widget.winfo_viewable())
+            self.assertLessEqual(widget.winfo_rooty()+widget.winfo_height(), self.root.winfo_rooty()+self.root.winfo_height())
+        self.assertIsNone(self.app.bridge)
 
     def test_close_waits_for_batch(self):
         self.app.classifier.set_busy(True)

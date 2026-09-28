@@ -77,3 +77,8 @@ class SettingsTests(unittest.TestCase):
         with patch('app.messagebox.showwarning') as notice:
             self.app.confirm_claim_done()
             self.assertEqual(notice.call_args.args[1], '请选择负责人。')
+        with patch('wos_import_panel.messagebox.showwarning') as notice:
+            self.app.wos_import_panel.preview()
+            self.assertEqual(notice.call_args.args[1], '请选择负责人。')
+            self.app.wos_import_panel.start()
+            self.assertEqual(notice.call_args.args[1], '请选择负责人。')

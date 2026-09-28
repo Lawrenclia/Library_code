@@ -71,6 +71,10 @@ class App:
             self.build_classification()
             if initial_tab == 'classification':
                 self.tabs.select(self.classification_page)
+        from wos_import_panel import WOSImportPanel
+        self.wos_import_page = ttk.Frame(self.tabs, padding=14)
+        self.tabs.add(self.wos_import_page, text="WOS 导入")
+        self.wos_import_panel = WOSImportPanel(self, self.wos_import_page)
         from settings_panel import SettingsPanel
         self.settings_page = ttk.Frame(self.tabs, padding=18)
         self.tabs.add(self.settings_page, text="设置")

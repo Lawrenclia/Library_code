@@ -2,7 +2,7 @@
 import queue
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 from notices import messages as messagebox
 
 from automation import ImportStore, WOSFlow, classify
@@ -46,6 +46,8 @@ class AutomationPanel:
         self.subtabs.select(self.claim_page)
         wos = self.wos_page
         ttk.Label(wos, text="检索 → 完整记录 → 核验 → 导入 → 推送", wraplength=425).pack(anchor="w", pady=(0, 5))
+        footer = ttk.Frame(wos)
+        footer.pack(side="bottom", fill="x")
         box = ttk.Frame(wos)
         box.pack(fill="both", expand=True)
         self.output = tk.Text(box, wrap="word", height=6, width=25, state="disabled", relief="flat",
@@ -55,9 +57,13 @@ class AutomationPanel:
         self.output.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self.output.pack(fill="both", expand=True)
-        app.button(wos, "继续 / 核验导入结果", self.resume, style="Complete.TButton").pack(fill="x", pady=(8, 4))
-        app.button(wos, "导出当前 WOS 文献", lambda: self.start(current_wos=True)).pack(fill="x", pady=3)
-        ttk.Label(wos, text="扩展可打开导入页：数据管理 → 数据导入与批次管理。\n绑定 WOS 和该页；不上传 PDF，完成仍需人工批准。", wraplength=425,
+        app.button(footer, "继续 / 核验导入结果", self.resume, style="Complete.TButton").pack(fill="x", pady=(8, 4))
+        local = ttk.Frame(footer)
+        local.pack(fill="x", pady=3)
+        app.button(local, "读取本地 TXT", self.load_file).pack(side="left")
+        app.button(local, "检索并导入当前条目", self.start).pack(side="left", padx=5)
+        app.button(footer, "导出当前 WOS 文献", lambda: self.start(current_wos=True)).pack(fill="x", pady=3)
+        ttk.Label(footer, text="扩展可打开导入页：数据管理 → 数据导入与批次管理。\n绑定 WOS 和该页；不上传 PDF，完成仍需人工批准。", wraplength=425,
                   style="Muted.TLabel").pack(anchor="w", pady=(3, 0))
 
     def show(self, value):
@@ -65,6 +71,25 @@ class AutomationPanel:
         self.output.delete("1.0", "end")
         self.output.insert("1.0", value)
         self.output.configure(state="disabled")
+
+    def load_file(self):
+        app = self.app
+        if app.busy:
+            return
+        try:
+            record = self.guard(require_connection=False)
+            if record.matches != 0:
+                raise SafetyStop("本地 TXT 仅用于零匹配补录。")
+            selected = filedialog.askopenfilename(parent=app.root, filetypes=[("WOS 单篇完整记录", "*.txt")])
+            if not selected:
+                return
+            self.cancelled.clear()
+            flow = self.engine()
+        except SafetyStop as exc:
+            messagebox.showwarning("暂未读取", str(exc), parent=app.root)
+            return
+        app.run(lambda: flow.prepare_file(record, selected), self.render_state,
+                "正在核验本地 WOS TXT；尚未上传或导入…", log_action="读取 WOS TXT")
 
     def clear(self):
         self.route.set("自动识别当前条目的处理路径")
@@ -146,7 +171,7 @@ class AutomationPanel:
                 f"正在{action}，无法安全判断的记录将标红跳过…",
                 log_action=action)
 
-    def guard(self):
+    def guard(self, require_connection=True):
         app = self.app
         if not app.owner.get().strip():
             raise SafetyStop("请选择负责人。")
@@ -155,7 +180,7 @@ class AutomationPanel:
         if app.current.owner != "谭勋策":
             raise SafetyStop("本次自动化试验只处理谭勋策负责的记录。")
         app.roster.assert_unchanged()
-        if not app.bridge or not app.bridge.online:
+        if require_connection and (not app.bridge or not app.bridge.online):
             raise SafetyStop("请先连接浏览器，并在扩展绑定两个工作页。")
         return app.current
 

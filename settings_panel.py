@@ -91,6 +91,7 @@ class SettingsPanel:
             self.app.model_panel.clear()
             self.status.set("密钥已加密保存，可测试连接。")
             self.refresh()
+            self.app.note_operation("保存 API 密钥")
         except Exception:
             messagebox.showwarning("未保存", "密钥格式或加密保存失败，请检查后重试。", parent=self.app.root)
 
@@ -115,6 +116,7 @@ class SettingsPanel:
             atomic_json(self.path, values)
             self.apply_models(values)
             self.status.set("模型偏好已保存并应用；各工作页仍可临时选择模型。")
+            self.app.note_operation("保存模型偏好")
         except (OSError, SafetyStop):
             self.status.set("模型偏好未保存，请检查目录权限。")
 
