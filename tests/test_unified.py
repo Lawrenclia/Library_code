@@ -20,6 +20,9 @@ class UnifiedTests(unittest.TestCase):
         self.reader=patch('classify_app.read_papers',return_value={'papers':[{'rows':[2]}]})
         self.reader.start()
         self.addCleanup(self.reader.stop)
+        self.owners=patch('classify_app.list_owners',return_value=['谭勋策','测试员'])
+        self.owners.start()
+        self.addCleanup(self.owners.stop)
         self.app=App(self.root,Journal(Path(self.tmp.name)/'unified.db'),auto_load=False,unified=True,
                      operation_log=OperationLog(Path(self.tmp.name)/'preview-log.txt'))
         self.app.loaded(read_roster(self.path))
@@ -77,6 +80,21 @@ class UnifiedTests(unittest.TestCase):
     def test_first_batch_initializes_archive_and_next_batch_reuses_it(self):
         self.app.automation_panel.runtime=Path(self.tmp.name)/'wos-imports'
         self.assertIsNone(self.app.automation_panel.store)
+
+    def test_wos_export_uses_classification_owner_scope(self):
+        owner=self.app.roster.records[0].owner
+        self.app.classifier.owner.set(owner)
+        captured=[]
+        with patch.object(self.app,'_wos_export_ready',return_value={}) as ready, \
+             patch.object(self.app,'_start_wos_export',side_effect=lambda targets,label,rows=None:
+                          captured.append((targets,label,rows))):
+            self.app.export_wos_metadata()
+        ready.assert_called_once_with(owner)
+        self.assertEqual(len(captured),1)
+        targets,label,rows=captured[0]
+        self.assertTrue(all(record.owner==owner and not record.done and not record.skipped and record.matches==0
+                            for record in targets))
+        self.assertIn(owner,label)
         record=self.app.roster.records[0]
         stores=[]
 

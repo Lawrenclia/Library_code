@@ -9,7 +9,7 @@ from tkinter import messagebox, simpledialog, ttk
 
 from core import SafetyStop
 from model_review import DEFAULT_MODEL, MODELS, KeyStore, limits
-from paper_classify import BASE, ClassificationClient, read_papers, run
+from paper_classify import BASE, ClassificationClient, list_owners, read_papers, run
 from ui_theme import P, install_theme, style_text
 
 
@@ -32,6 +32,8 @@ class ClassifyApp:
         self.result_folder = None
         self.records = []
         self.roster_hash = None
+        self.scope_count = 0
+        self.owner = tk.StringVar()
         self.poll_id = None
         if not self.embedded:
             root.title('论文工作台 · AI 分类与导入渠道')
@@ -57,10 +59,13 @@ class ClassifyApp:
             card.grid(row=0,column=column,sticky='ew',padx=(0,10 if column<len(self.metrics)-1 else 0))
             ttk.Label(card,text=name,style='Card.TLabel').pack(anchor='w')
             ttk.Label(card,textvariable=value,style='Metric.TLabel').pack(anchor='w',pady=(3,0))
-        self.reload()
         settings = ttk.Frame(page)
         settings.pack(fill='x')
-        ttk.Label(settings,text='分类模型').pack(side='left')
+        ttk.Label(settings,text='负责人').pack(side='left')
+        self.owner_box = ttk.Combobox(settings,textvariable=self.owner,state='readonly',width=10)
+        self.owner_box.pack(side='left',padx=8)
+        self.owner_box.bind('<<ComboboxSelected>>',self.change_owner)
+        ttk.Label(settings,text='分类模型').pack(side='left',padx=(6,0))
         self.model = tk.StringVar(value='deepseek-chat')
         self.combo = ttk.Combobox(settings,textvariable=self.model,values=MODELS,state='readonly',width=22)
         self.combo.pack(side='left',padx=8)
@@ -140,22 +145,47 @@ class ClassifyApp:
         ds.pack(side='right',fill='y')
         self.detail.pack(fill='both',expand=True)
         self.set_detail('选择一篇论文，查看完整题名、分类理由、推荐入口和待确认条件。')
+        self.reload()
         self.load_results()
         self.poll_id=root.after(150,self.poll)
         root.bind('<Destroy>',lambda event:self.dispose() if event.widget is root else None,add='+')
 
     def reload(self):
         try:
-            data = read_papers(BASE/'list.xlsx')
+            owners = list_owners(BASE/'list.xlsx')
+            self.owner_box['values'] = owners
+            if self.owner.get() not in owners:
+                self.owner.set('')
+            if not self.owner.get():
+                self.roster_hash = None
+                self.scope_count = 0
+                self.metrics['名单记录'].set('—')
+                self.metrics['分类任务'].set('—')
+                self.summary.set('请选择负责人。分类与 WOS 下载都不会跨负责人处理。')
+                self._sync_start_button()
+                return
+            data = read_papers(BASE/'list.xlsx', owner=self.owner.get())
             self.roster_hash=data.get('sha256')
-            self.metrics['名单记录'].set(str(sum(len(p['rows']) for p in data['papers'])))
+            self.scope_count=sum(len(p['rows']) for p in data['papers'])
+            self.metrics['名单记录'].set(str(self.scope_count))
             self.metrics['分类任务'].set(str(len(data['papers'])))
-            self.summary.set(f'名单：{sum(len(p["rows"]) for p in data["papers"])} 条记录，合并为 {len(data["papers"])} 个题名/DOI 组合。')
-        except Exception:
+            self.summary.set(f'{self.owner.get()}：{self.scope_count} 条记录，'
+                             f'合并为 {len(data["papers"])} 个题名/DOI 组合。')
+        except (SafetyStop, OSError):
             self.roster_hash=None
+            self.scope_count=0
             self.metrics['名单记录'].set('—')
             self.metrics['分类任务'].set('—')
             self.summary.set('名单未就绪：请将包含“题名”列的 list.xlsx 放在程序目录。')
+        self._sync_start_button()
+
+    def change_owner(self, _event=None):
+        if self.busy or self.external_busy:
+            return
+        self.records=[]
+        self.result_folder=None
+        self.reload()
+        self.load_results()
 
     def configure_key(self):
         if self.busy or self.external_busy:
@@ -180,19 +210,27 @@ class ClassifyApp:
                         f'单次请求最长约 {limits(self.model.get())["request_timeout"]} 秒。')
         self.load_results()
 
+    def _sync_start_button(self):
+        if hasattr(self,'start_button'):
+            ready=bool(self.owner.get() and self.scope_count and not self.busy and not self.external_busy)
+            self.start_button.configure(state='normal' if ready else 'disabled')
+
     def _sync_export_button(self):
         if hasattr(self,'export_button'):
-            ready=(bool(self.records) and not self.busy and not self.external_busy
+            ready=(bool(self.owner.get() and self.records) and not self.busy and not self.external_busy
                    and not self.exporting)
             self.export_button.configure(state='normal' if ready else 'disabled')
 
     def export_wos(self):
         if self.busy or self.external_busy or self.exporting or not self.on_export:
             return
+        if not self.owner.get().strip():
+            messagebox.showinfo('请选择负责人','请选择负责人。',parent=self.root)
+            return
         # The batch reuses this same stop flag, so "本批完成后停止" also halts an export
         # run instead of leaving the window disabled with no way out.
         self.stop.clear()
-        self.status.set('正在按名单检索 WOS 并下载完整记录；可点“本批完成后停止”。')
+        self.status.set(f'正在检索 {self.owner.get()} 的 WOS 记录；可点“本批完成后停止”。')
         self.on_export()
 
     def set_exporting(self,value):
@@ -205,12 +243,13 @@ class ClassifyApp:
         self.busy = value
         if not value:
             self.exporting=False
-        self.start_button.configure(state='disabled' if value else 'normal')
         self.key_button.configure(state='disabled' if value else 'normal')
+        self.owner_box.configure(state='disabled' if value else 'readonly')
         self.combo.configure(state='disabled' if value else 'readonly')
         self.batch_combo.configure(state='disabled' if value else 'readonly')
         self.stop_button.configure(state='normal' if (value or self.exporting) else 'disabled')
         self.start_button.configure(text='正在分类…' if value else '开始 / 继续分类')
+        self._sync_start_button()
         self._sync_export_button()
         if self.on_busy:
             self.on_busy(value)
@@ -220,23 +259,31 @@ class ClassifyApp:
         if not value:
             self.exporting=False
         if not self.busy:
-            self.start_button.configure(state='disabled' if value else 'normal')
             self.key_button.configure(state='disabled' if value else 'normal')
+            self.owner_box.configure(state='disabled' if value else 'readonly')
             self.combo.configure(state='disabled' if value else 'readonly')
             self.batch_combo.configure(state='disabled' if value else 'readonly')
         self.stop_button.configure(state='normal' if (self.exporting or self.busy) else 'disabled')
         if hasattr(self,'review_button'):
             self.review_button.configure(state='disabled' if value else 'normal')
+        self._sync_start_button()
         self._sync_export_button()
 
     def start(self):
         if self.busy or self.external_busy:
+            return
+        owner=self.owner.get().strip()
+        if not owner:
+            messagebox.showinfo('请选择负责人','请选择负责人。',parent=self.root)
             return
         if not self.store.configured():
             self.configure_key()
             if not self.store.configured():
                 return
         self.reload()
+        if not self.scope_count:
+            self.status.set('当前负责人没有可分类记录。')
+            return
         self.stop.clear()
         self.set_busy(True)
         self.status.set('正在准备名单及已保存进度…')
@@ -249,7 +296,8 @@ class ClassifyApp:
         def worker():
             try:
                 folder = run(model=model,batch_size=batch_size,client=ClassificationClient(self.store),stop=self.stop,
-                             progress=lambda value:self.queue.put(('progress',value)),resilient=True)
+                             progress=lambda value:self.queue.put(('progress',value)),resilient=True,
+                             owner=owner)
                 self.queue.put(('done',folder))
             except SafetyStop as exc:
                 self.queue.put(('error',str(exc)))
@@ -287,7 +335,10 @@ class ClassifyApp:
         for path in candidates:
             try:
                 data=json.loads(path.read_text(encoding='utf-8'))
-                if data.get('model')!=self.model.get() or not self.roster_hash or data.get('source',{}).get('sha256')!=self.roster_hash:
+                source=data.get('source',{})
+                if (data.get('model')!=self.model.get() or not self.roster_hash or
+                        source.get('sha256')!=self.roster_hash or source.get('owner')!=self.owner.get() or
+                        source.get('pending_only') is not False):
                     continue
                 if not isinstance(data.get('records'),list):
                     continue
@@ -315,10 +366,12 @@ class ClassifyApp:
                 self.status.set(f'已加载保存结果 · {done}/{len(self.records)} 个任务'
                                 + (f'，其中 {failed} 个分类失败' if failed else ''))
             else:
-                self.status.set('暂无当前名单及模型的结果，点击开始分类。')
+                self.status.set('请选择负责人。' if not self.owner.get() else
+                                '暂无当前负责人及模型的结果，点击开始分类。')
         for button,filename in ((self.report_button,'分类建议.md'),(self.channel_button,'导入渠道分类.md')):
             button.configure(state='normal' if self.result_folder and (self.result_folder/filename).is_file() else 'disabled')
         self._sync_export_button()
+        self._sync_start_button()
         self.filter_results()
 
     def filter_results(self):

@@ -56,11 +56,53 @@ evidence_ids 只能引用该篇输入 evidence 的 id。所有输出均是建议
 成果类型：''' + '、'.join(TYPES) + '\n来源库：' + '、'.join(DATABASES) + '\n导入渠道：' + '、'.join(CHANNELS)
 
 
-def read_papers(path):
-    """Exact title+DOI grouping; different/absent DOI remain separate for traceability."""
+def list_owners(path):
+    """Return roster owners without exposing them to the model payload."""
     path = Path(path).resolve()
     if path.suffix.lower() != '.xlsx':
         raise SafetyStop('名单必须是 .xlsx 文件。')
+    fingerprint = file_hash(path)
+    book = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    try:
+        matches = []
+        for sheet in book:
+            header = next(sheet.iter_rows(values_only=True), ())
+            labels = [str(x).strip() if x is not None else '' for x in header]
+            if '题名' in labels:
+                if labels.count('题名') != 1 or labels.count('负责人') != 1:
+                    raise SafetyStop('名单存在缺失或重复的题名、负责人列。')
+                matches.append((sheet, labels))
+        if len(matches) != 1:
+            raise SafetyStop('需要且只能有一个包含“题名”表头的工作表。')
+        sheet, labels = matches[0]
+        owner_col, title_col = labels.index('负责人'), labels.index('题名')
+        owners = set()
+        for number, cells in enumerate(sheet.iter_rows(min_row=2), 2):
+            if all(c.value is None for c in cells):
+                continue
+            owner_cell, title_cell = cells[owner_col], cells[title_col]
+            if owner_cell.data_type == 'f':
+                raise SafetyStop(f'第 {number} 行负责人是公式，请先提供确定值。')
+            if title_cell.value is not None:
+                owners.add(str(owner_cell.value or '').strip() or '（未分配）')
+    finally:
+        book.close()
+    if file_hash(path) != fingerprint:
+        raise SafetyStop('读取期间名单发生变化，请重新开始。')
+    return sorted(owners)
+
+
+def read_papers(path, owner=None, pending_only=False):
+    """Group exact title+DOI pairs, optionally inside one pending owner scope."""
+    path = Path(path).resolve()
+    if path.suffix.lower() != '.xlsx':
+        raise SafetyStop('名单必须是 .xlsx 文件。')
+    if owner is not None:
+        owner = str(owner).strip()
+        if not owner:
+            raise SafetyStop('请选择负责人。')
+    if pending_only and owner is None:
+        raise SafetyStop('待分类范围必须指定负责人。')
     fingerprint = file_hash(path)
     book = openpyxl.load_workbook(path, read_only=True, data_only=False)
     groups = {}
@@ -78,7 +120,31 @@ def read_papers(path):
         sheet, labels = matches[0]
         title_col = labels.index('题名')
         doi_col = labels.index('DOI') if 'DOI' in labels else None
+        owner_col = None
+        done_col = None
+        if owner is not None:
+            if labels.count('负责人') != 1:
+                raise SafetyStop('名单存在缺失或重复的负责人列。')
+            owner_col = labels.index('负责人')
+        if pending_only:
+            from core import completion_column
+            done_col = completion_column(labels)
         for number, cells in enumerate(sheet.iter_rows(min_row=2), 2):
+            if all(c.value is None for c in cells):
+                continue
+            if owner_col is not None:
+                owner_cell = cells[owner_col]
+                if owner_cell.data_type == 'f':
+                    raise SafetyStop(f'第 {number} 行负责人是公式，请先提供确定值。')
+                row_owner = str(owner_cell.value or '').strip() or '（未分配）'
+                if row_owner != owner:
+                    continue
+            if done_col is not None:
+                flag = cells[done_col]
+                if flag.data_type == 'f':
+                    raise SafetyStop(f'第 {number} 行完成备注是公式，不能自动判断。')
+                if flag.data_type == 'n' and type(flag.value) in (int, float) and flag.value in (1, 2):
+                    continue
             title_cell = cells[title_col]
             doi_cell = cells[doi_col] if doi_col is not None else None
             if title_cell.data_type == 'f' or (doi_cell and doi_cell.data_type == 'f'):
@@ -92,10 +158,12 @@ def read_papers(path):
             key = digest({'title': title, 'doi': doi})
             paper = groups.setdefault(key, {'id': key, 'title': title, 'doi': doi, 'rows': []})
             paper['rows'].append(number)
-        if not groups:
+        if not groups and owner is None:
             raise SafetyStop('名单没有可分类的题名。')
         result = {'input': str(path), 'sha256': fingerprint, 'sheet': sheet.title,
                   'papers': list(groups.values())}
+        if owner is not None:
+            result.update({'owner': owner, 'pending_only': bool(pending_only)})
     finally:
         book.close()
     if file_hash(path) != fingerprint:
@@ -244,13 +312,16 @@ def export_report(folder, roster, results, model, failures=None):
 
 
 def run(input_path=BASE/'list.xlsx', output=BASE/'runtime'/'classification', model=DEFAULT_MODEL,
-        batch_size=5, client=None, stop=None, progress=None, evidence_path=None, resilient=False):
+        batch_size=5, client=None, stop=None, progress=None, evidence_path=None, resilient=False,
+        owner=None, pending_only=False):
     if model not in MODELS or type(batch_size) is not int or not 1<=batch_size<=10:
         raise SafetyStop('请使用支持的模型，批量大小为 1–10。')
     stop = stop or threading.Event()
     progress = progress or (lambda text: None)
-    roster = read_papers(input_path)
+    roster = read_papers(input_path, owner=owner, pending_only=pending_only)
     papers = roster['papers']
+    if not papers:
+        raise SafetyStop('当前负责人没有可分类记录。')
     if evidence_path:
         # {paper_id: [{"id":"E1","text":"原文摘录及出处"}]} from --prepare output.
         evidence = _json(Path(evidence_path).read_text(encoding='utf-8'))

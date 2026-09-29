@@ -59,6 +59,13 @@ class TargetsTests(unittest.TestCase):
         self.assertEqual(len(roster_rows(FakeRoster(records))), 2)
         self.assertEqual(len(all_targets(FakeRoster(records))), 1)
 
+    def test_owner_scope_and_skipped_rows_are_excluded(self):
+        records = [record(), record(row=3,sa_id='other-owner',owner='Other'),
+                   record(row=4,sa_id='skipped',skipped=True)]
+        roster=FakeRoster(records)
+        self.assertEqual([r.sa_id for r in roster_rows(roster,'测试员')],['demo-001'])
+        self.assertEqual([r.sa_id for r in all_targets(roster,'测试员')],['demo-001'])
+
     def test_all_targets_ignores_the_classification_hint(self):
         # The roster decides the scope: a record the model did not label WOS is still
         # searched, because that is exactly the record that needs the lookup.

@@ -32,7 +32,7 @@ def per_record_outcome(message):
     return any(marker in text for marker in PER_RECORD_OUTCOMES)
 
 
-def wos_targets(roster, classification, papers):
+def wos_targets(roster, classification, papers, owner=None):
     """Zero-match, unfinished records whose saved classification recommends WOS."""
     channel = {}
     for paper in papers:
@@ -42,15 +42,17 @@ def wos_targets(roster, classification, papers):
         for number in paper['rows']:
             channel[number] = value
     return [record for record in roster.records
-            if record.matches == 0 and not record.done and channel.get(record.row) == 'WOS']
+            if record.matches == 0 and not record.done and not record.skipped
+            and (owner is None or record.owner == owner) and channel.get(record.row) == 'WOS']
 
 
-def roster_rows(roster):
-    """Every zero-match, unfinished roster row, before duplicate papers are merged."""
-    return [record for record in roster.records if record.matches == 0 and not record.done]
+def roster_rows(roster, owner=None):
+    """Eligible rows for one optional owner, before duplicate papers are merged."""
+    return [record for record in roster.records if record.matches == 0 and not record.done
+            and not record.skipped and (owner is None or record.owner == owner)]
 
 
-def all_targets(roster):
+def all_targets(roster, owner=None):
     """One record per paper, across every zero-match, unfinished paper.
 
     Two things are deliberate here:
@@ -63,7 +65,7 @@ def all_targets(roster):
       row of the group represents the paper and supplies the SA ID in the filename.
     """
     seen, targets = set(), []
-    for record in roster_rows(roster):
+    for record in roster_rows(roster, owner):
         key = (record.title, record.doi)
         if key in seen:
             continue

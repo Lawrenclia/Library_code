@@ -9,7 +9,7 @@ import openpyxl
 
 from core import SafetyStop, file_hash
 from paper_classify import (ClassificationClient, DEFAULT_MODEL, MAX_CONSECUTIVE_FAILURES,
-                            read_papers, run, validate_result, InvalidClassification,
+                            list_owners, read_papers, run, validate_result, InvalidClassification,
                             ModelRequestError)
 
 
@@ -49,6 +49,39 @@ class ClassificationTests(unittest.TestCase):
         encoded=json.dumps(self.papers)
         self.assertNotIn('private-owner',encoded)
         self.assertNotIn('secret-staff',encoded)
+
+    def test_owner_scope_does_not_leak_other_owners_to_model_tasks(self):
+        book=openpyxl.load_workbook(self.path)
+        book.active.append(['another-owner','Other paper','10.1000/other','other-staff'])
+        book.save(self.path)
+        book.close()
+        self.assertEqual(list_owners(self.path),['another-owner','private-owner'])
+        scoped=read_papers(self.path,owner='private-owner')
+        self.assertEqual(sum(len(p['rows']) for p in scoped['papers']),5)
+        self.assertEqual((scoped['owner'],scoped['pending_only']),('private-owner',False))
+        encoded=json.dumps(scoped['papers'])
+        self.assertNotIn('private-owner',encoded)
+        self.assertNotIn('another-owner',encoded)
+        self.assertNotIn('Other paper',encoded)
+        client=self.client()
+        folder=run(self.path,self.root/'owner-out',client=client,owner='private-owner')
+        self.assertNotIn('Other paper',[p['title'] for p in client.classify.call_args.args[0]])
+        saved=json.loads((folder/'分类结果.json').read_text(encoding='utf-8'))
+        self.assertEqual((saved['source']['owner'],saved['source']['pending_only']),('private-owner',False))
+
+    def test_pending_owner_scope_excludes_numeric_one_and_two_only(self):
+        book=openpyxl.Workbook()
+        sheet=book.active
+        sheet.append(['备注','负责人','题名','DOI'])
+        sheet.append([None,'owner-a','Pending','10.1000/pending'])
+        sheet.append([1,'owner-a','Done','10.1000/done'])
+        sheet.append([2,'owner-a','Skipped','10.1000/skipped'])
+        sheet.append(['2','owner-a','Text two','10.1000/text'])
+        sheet.append([None,'owner-b','Other','10.1000/other'])
+        book.save(self.path)
+        book.close()
+        scoped=read_papers(self.path,owner='owner-a',pending_only=True)
+        self.assertEqual([p['title'] for p in scoped['papers']],['Pending','Text two'])
 
     def test_reject_formula_and_nonempty_row_without_title(self):
         for value in ('=A1',None):
@@ -288,21 +321,49 @@ class ClassificationTests(unittest.TestCase):
 
 
 class DesktopTests(unittest.TestCase):
+    def test_owner_must_be_selected_and_scopes_the_summary(self):
+        import tkinter as tk
+        from classify_app import ClassifyApp
+        root=tk.Tk()
+        root.withdraw()
+        self.addCleanup(root.destroy)
+        def scoped(_path,owner=None,pending_only=False):
+            self.assertFalse(pending_only)
+            count=2 if owner=='owner-a' else 1
+            return {'sha256':'fixture','owner':owner,'pending_only':False,
+                    'papers':[{'rows':list(range(2,2+count))}]}
+        with patch('classify_app.list_owners',return_value=['owner-a','owner-b']), \
+             patch('classify_app.read_papers',side_effect=scoped) as reader:
+            app=ClassifyApp(root)
+            self.assertEqual(app.owner.get(),'')
+            self.assertEqual(str(app.start_button['state']),'disabled')
+            app.owner.set('owner-a')
+            app.change_owner()
+            self.assertEqual(app.metrics['名单记录'].get(),'2')
+            self.assertIn('owner-a',app.summary.get())
+            self.assertEqual(str(app.start_button['state']),'normal')
+            self.assertEqual(reader.call_args.kwargs,{'owner':'owner-a'})
+
     def test_saved_results_filter_details_and_model_switch(self):
         import tkinter as tk
         from classify_app import ClassifyApp
         root=tk.Tk()
         root.withdraw()
         self.addCleanup(root.destroy)
-        with patch('classify_app.read_papers',return_value={'sha256':'fixture','papers':[{'rows':[2,3]}]}):
+        source={'sha256':'fixture','owner':'测试员','pending_only':False,'papers':[{'rows':[2,3]}]}
+        with patch('classify_app.list_owners',return_value=['测试员']), \
+             patch('classify_app.read_papers',return_value=source):
             app=ClassifyApp(root)
+            app.owner.set('测试员')
+            app.change_owner()
         with tempfile.TemporaryDirectory() as tmp:
             app.output=Path(tmp)
             folder=app.output/'fixture'
             folder.mkdir()
             records=[{'id':'a','rows':[2],'title':'Alpha paper','doi':'10.1/a','status':'AI建议待复核','classification':{'type':'期刊论文','reason':'期刊资料','missing_evidence':['收录证据']},'import_route':{'recommended_channel':'WOS','reason':'核实导出文件','available_buttons':['WOS数据导入(Excel)']}},
                      {'id':'b','rows':[3],'title':'Beta paper','doi':'','status':'AI建议待复核','classification':{'type':None},'import_route':{'recommended_channel':None}}]
-            (folder/'分类结果.json').write_text(json.dumps({'model':'deepseek-chat','source':{'sha256':'fixture'},'records':records}),encoding='utf-8')
+            (folder/'分类结果.json').write_text(json.dumps({'model':'deepseek-chat','source':{
+                'sha256':'fixture','owner':'测试员','pending_only':False},'records':records}),encoding='utf-8')
             (folder/'导入渠道分类.md').write_text('fixture',encoding='utf-8')
             app.load_results()
             self.assertEqual(app.metrics['已处理'].get(),'2')
@@ -328,8 +389,12 @@ class DesktopTests(unittest.TestCase):
         root=tk.Tk()
         root.withdraw()
         self.addCleanup(root.destroy)
-        with patch('classify_app.read_papers',return_value={'sha256':'fixture','papers':[{'rows':[2,3]}]}):
+        source={'sha256':'fixture','owner':'测试员','pending_only':False,'papers':[{'rows':[2,3]}]}
+        with patch('classify_app.list_owners',return_value=['测试员']), \
+             patch('classify_app.read_papers',return_value=source):
             app=ClassifyApp(root)
+            app.owner.set('测试员')
+            app.change_owner()
         self.assertEqual(app.batch.get(),'5')
         app.model.set('deepseek-reasoner')
         app.change_model()
@@ -342,7 +407,8 @@ class DesktopTests(unittest.TestCase):
             records=[{'id':'a','rows':[2],'title':'Failed paper','doi':'10.1/a','status':'分类失败',
                       'classification':None,'import_route':None,
                       'failure':{'rows':[2],'error':'模型连接失败、超时或响应损坏。'}}]
-            (folder/'分类结果.json').write_text(json.dumps({'model':'deepseek-reasoner','source':{'sha256':'fixture'},'records':records}),encoding='utf-8')
+            (folder/'分类结果.json').write_text(json.dumps({'model':'deepseek-reasoner','source':{
+                'sha256':'fixture','owner':'测试员','pending_only':False},'records':records}),encoding='utf-8')
             app.load_results()
             self.assertEqual(app.metrics['分类失败'].get(),'1')
             self.assertEqual(app.metrics['已处理'].get(),'0')
@@ -358,8 +424,12 @@ class DesktopTests(unittest.TestCase):
         root=tk.Tk()
         root.withdraw()
         self.addCleanup(root.destroy)
-        with patch('classify_app.read_papers',return_value={'papers':[{'rows':[2,3]}]}):
+        source={'sha256':'fixture','owner':'测试员','pending_only':False,'papers':[{'rows':[2,3]}]}
+        with patch('classify_app.list_owners',return_value=['测试员']), \
+             patch('classify_app.read_papers',return_value=source):
             app=ClassifyApp(root,on_export=lambda:None)
+            app.owner.set('测试员')
+            app.change_owner()
         self.assertEqual(str(app.stop_button['state']),'disabled')
         app.set_exporting(True)
         # The export runs through the app's shared busy state, so the classifier's own
@@ -379,8 +449,12 @@ class DesktopTests(unittest.TestCase):
         root.withdraw()
         self.addCleanup(root.destroy)
         started=[]
-        with patch('classify_app.read_papers',return_value={'papers':[{'rows':[2,3]}]}):
+        source={'sha256':'fixture','owner':'测试员','pending_only':False,'papers':[{'rows':[2,3]}]}
+        with patch('classify_app.list_owners',return_value=['测试员']), \
+             patch('classify_app.read_papers',return_value=source):
             app=ClassifyApp(root,on_export=lambda:started.append(app.stop.is_set()))
+            app.owner.set('测试员')
+            app.change_owner()
         app.stop.set()
         app.export_wos()
         self.assertEqual(started,[False],'a previous stop must not cancel the new batch')
@@ -391,8 +465,12 @@ class DesktopTests(unittest.TestCase):
         root=tk.Tk()
         root.withdraw()
         self.addCleanup(root.destroy)
-        with patch('classify_app.read_papers',return_value={'papers':[{'rows':[2,3]}]}):
+        source={'sha256':'fixture','owner':'测试员','pending_only':False,'papers':[{'rows':[2,3]}]}
+        with patch('classify_app.list_owners',return_value=['测试员']), \
+             patch('classify_app.read_papers',return_value=source):
             app=ClassifyApp(root)
+            app.owner.set('测试员')
+            app.change_owner()
         self.assertIn('2 条记录',app.summary.get())
         app.set_busy(True)
         self.assertEqual(str(app.start_button['state']),'disabled')

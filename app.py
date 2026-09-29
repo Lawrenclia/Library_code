@@ -166,9 +166,12 @@ class App:
         ttk.Button(frame,text='打开所选记录',command=confirm).pack(anchor='e',pady=(12,0))
         popup.grab_set()
 
-    def _wos_export_ready(self):
+    def _wos_export_ready(self, owner):
         """Shared guard: returns the roster document, or None after telling the user."""
         if self.busy:
+            return None
+        if not str(owner).strip():
+            messagebox.showinfo('请选择负责人','请选择负责人。',parent=self.root)
             return None
         if not self.roster:
             messagebox.showinfo('请先读取名单','请在人工处理页读取 list.xlsx。',parent=self.root)
@@ -182,7 +185,9 @@ class App:
             return None
         from paper_classify import read_papers
         try:
-            return read_papers(BASE/'list.xlsx')
+            if owner not in {record.owner for record in self.roster.records}:
+                raise SafetyStop('所选负责人不在当前名单中，请重新读取名单。')
+            return read_papers(BASE/'list.xlsx', owner=owner)
         except SafetyStop as exc:
             messagebox.showwarning('无法读取名单',str(exc),parent=self.root)
             return None
@@ -193,11 +198,12 @@ class App:
         Every WOS export is download-only. Upload, import and push write to the
         production library and stay single-record with confirmation on the other page.
         """
-        if self._wos_export_ready() is None:
+        owner=self.classifier.owner.get().strip() if self.classifier else ''
+        if self._wos_export_ready(owner) is None:
             return
         from wos_batch import all_targets, roster_rows
-        rows=len(roster_rows(self.roster))
-        self._start_wos_export(all_targets(self.roster),'下载 WOS 元数据',rows=rows)
+        rows=len(roster_rows(self.roster,owner))
+        self._start_wos_export(all_targets(self.roster,owner),f'下载 WOS 元数据·{owner}',rows=rows)
 
     def _start_wos_export(self, targets, label, rows=None):
         if not targets:
