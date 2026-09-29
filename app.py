@@ -100,7 +100,8 @@ class App:
         self.tabs.tab(self.automation_page,text='自动化 / 认领')
         self.classifier=ClassifyApp(self.root,parent=self.batch_classification_page,
                                    on_busy=self.set_busy,on_review=self.review_classified,
-                                   on_export=self.export_wos_metadata,on_settings=self.open_settings)
+                                   on_export=self.export_wos_metadata,on_settings=self.open_settings,
+                                   on_export_skipped=self.export_skipped_wos_metadata)
         from submission_panel import SubmissionPanel
         self.submission_page=ttk.Frame(self.tabs,padding=20)
         self.tabs.add(self.submission_page,text='零匹配提交准备')
@@ -204,6 +205,15 @@ class App:
         from wos_batch import all_targets, roster_rows
         rows=len(roster_rows(self.roster,owner))
         self._start_wos_export(all_targets(self.roster,owner),f'下载 WOS 元数据·{owner}',rows=rows)
+
+    def export_skipped_wos_metadata(self):
+        """Search only numeric-2 rows without changing their persistent skip marker."""
+        owner=self.classifier.owner.get().strip() if self.classifier else ''
+        if self._wos_export_ready(owner) is None:
+            return
+        from wos_batch import skipped_roster_rows, skipped_targets
+        rows=len(skipped_roster_rows(self.roster,owner))
+        self._start_wos_export(skipped_targets(self.roster,owner),f'搜索跳过项·{owner}',rows=rows)
 
     def _start_wos_export(self, targets, label, rows=None):
         if not targets:

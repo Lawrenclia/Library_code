@@ -1,6 +1,7 @@
 import tempfile
 import tkinter as tk
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 from app import App
@@ -116,6 +117,27 @@ class UnifiedTests(unittest.TestCase):
         self.assertEqual(len(stores),2)
         self.assertEqual(stores[0].path,stores[1].path)
         self.assertIsNone(self.app.automation_panel.store)
+
+    def test_search_skipped_items_uses_only_owner_numeric_two_rows(self):
+        owner=self.app.roster.records[0].owner
+        self.app.roster.records=[replace(record,matches=0,skipped=True)
+                                 if index==0 else record
+                                 for index,record in enumerate(self.app.roster.records)]
+        self.app.classifier.owner.set(owner)
+        captured=[]
+        with patch.object(self.app,'_wos_export_ready',return_value={}) as ready, \
+             patch.object(self.app,'_start_wos_export',side_effect=lambda targets,label,rows=None:
+                          captured.append((targets,label,rows))):
+            self.app.export_skipped_wos_metadata()
+        ready.assert_called_once_with(owner)
+        self.assertEqual(len(captured),1)
+        targets,label,rows=captured[0]
+        self.assertTrue(targets)
+        self.assertTrue(all(record.owner==owner and record.skipped and not record.done
+                            and record.matches==0 for record in targets))
+        self.assertIn('搜索跳过项',label)
+        self.assertEqual(rows,sum(record.owner==owner and record.skipped and not record.done
+                                  and record.matches==0 for record in self.app.roster.records))
 
     def test_integrated_layout_controls_within_window(self):
         self.root.deiconify()

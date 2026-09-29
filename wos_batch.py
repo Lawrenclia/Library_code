@@ -52,6 +52,29 @@ def roster_rows(roster, owner=None):
             and not record.skipped and (owner is None or record.owner == owner)]
 
 
+def skipped_roster_rows(roster, owner=None):
+    """Persistently skipped rows in one optional owner scope.
+
+    This is deliberately separate from :func:`roster_rows`: the normal WOS queue must
+    continue to exclude numeric-2 rows, while the dedicated retry entry may inspect
+    them without clearing or otherwise changing their Excel workflow marker.
+    """
+    return [record for record in roster.records if record.matches == 0 and not record.done
+            and record.skipped and (owner is None or record.owner == owner)]
+
+
+def _one_per_paper(records):
+    """Return the first row for each exact title+DOI paper key."""
+    seen, targets = set(), []
+    for record in records:
+        key = (record.title, record.doi)
+        if key in seen:
+            continue
+        seen.add(key)
+        targets.append(record)
+    return targets
+
+
 def all_targets(roster, owner=None):
     """One record per paper, across every zero-match, unfinished paper.
 
@@ -64,14 +87,12 @@ def all_targets(roster, owner=None):
       several times (each row carrying its own SA ID) produces a single TXT. The first
       row of the group represents the paper and supplies the SA ID in the filename.
     """
-    seen, targets = set(), []
-    for record in roster_rows(roster, owner):
-        key = (record.title, record.doi)
-        if key in seen:
-            continue
-        seen.add(key)
-        targets.append(record)
-    return targets
+    return _one_per_paper(roster_rows(roster, owner))
+
+
+def skipped_targets(roster, owner=None):
+    """One record per zero-match paper whose Excel workflow marker is numeric 2."""
+    return _one_per_paper(skipped_roster_rows(roster, owner))
 
 
 def safe_name(record):

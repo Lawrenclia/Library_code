@@ -14,12 +14,14 @@ from ui_theme import P, install_theme, style_text
 
 
 class ClassifyApp:
-    def __init__(self, root, parent=None, on_busy=None, on_review=None, on_export=None, on_settings=None):
+    def __init__(self, root, parent=None, on_busy=None, on_review=None, on_export=None,
+                 on_settings=None, on_export_skipped=None):
         self.root = root
         self.embedded = parent is not None
         self.on_busy = on_busy
         self.on_review = on_review
         self.on_export = on_export
+        self.on_export_skipped = on_export_skipped
         self.on_settings = on_settings
         self.external_busy = False
         self.queue = queue.Queue()
@@ -118,6 +120,9 @@ class ClassifyApp:
         if self.on_export:
             self.export_button=ttk.Button(footer,text='下载 WOS 元数据',command=self.export_wos)
             self.export_button.pack(side='left',padx=8)
+        if self.on_export_skipped:
+            self.skipped_export_button=ttk.Button(footer,text='搜索跳过项',command=self.export_skipped_wos)
+            self.skipped_export_button.pack(side='left')
         ttk.Button(footer,text='结果文件夹',command=self.open_output).pack(side='right')
         panes=ttk.Panedwindow(page,orient='vertical')
         panes.pack(fill='both',expand=True)
@@ -216,10 +221,12 @@ class ClassifyApp:
             self.start_button.configure(state='normal' if ready else 'disabled')
 
     def _sync_export_button(self):
+        ready=(bool(self.owner.get() and self.records) and not self.busy and not self.external_busy
+               and not self.exporting)
         if hasattr(self,'export_button'):
-            ready=(bool(self.owner.get() and self.records) and not self.busy and not self.external_busy
-                   and not self.exporting)
             self.export_button.configure(state='normal' if ready else 'disabled')
+        if hasattr(self,'skipped_export_button'):
+            self.skipped_export_button.configure(state='normal' if ready else 'disabled')
 
     def export_wos(self):
         if self.busy or self.external_busy or self.exporting or not self.on_export:
@@ -232,6 +239,16 @@ class ClassifyApp:
         self.stop.clear()
         self.status.set(f'正在检索 {self.owner.get()} 的 WOS 记录；可点“本批完成后停止”。')
         self.on_export()
+
+    def export_skipped_wos(self):
+        if self.busy or self.external_busy or self.exporting or not self.on_export_skipped:
+            return
+        if not self.owner.get().strip():
+            messagebox.showinfo('请选择负责人','请选择负责人。',parent=self.root)
+            return
+        self.stop.clear()
+        self.status.set(f'正在检索 {self.owner.get()} 的数字 2 跳过项；可点“本批完成后停止”。')
+        self.on_export_skipped()
 
     def set_exporting(self,value):
         """A batch export runs through the app's shared busy state, not set_busy()."""

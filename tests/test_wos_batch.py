@@ -8,7 +8,8 @@ from automation import ImportStore
 from core import Record, SafetyStop
 from submission_prepare import matches_paper
 from tests.test_automation import sample
-from wos_batch import all_targets, export, plan, roster_rows, safe_name, wos_targets
+from wos_batch import (all_targets, export, plan, roster_rows, safe_name,
+                       skipped_roster_rows, skipped_targets, wos_targets)
 
 
 def record(**kwargs):
@@ -65,6 +66,17 @@ class TargetsTests(unittest.TestCase):
         roster=FakeRoster(records)
         self.assertEqual([r.sa_id for r in roster_rows(roster,'测试员')],['demo-001'])
         self.assertEqual([r.sa_id for r in all_targets(roster,'测试员')],['demo-001'])
+
+    def test_skipped_targets_only_include_numeric_two_scope_and_merge_papers(self):
+        records = [record(), record(row=3,sa_id='skip-a',skipped=True),
+                   record(row=4,sa_id='skip-a-copy',skipped=True),
+                   record(row=5,sa_id='skip-other',owner='Other',skipped=True),
+                   record(row=6,sa_id='skip-matched',skipped=True,matches=1),
+                   record(row=7,sa_id='skip-done',skipped=True,done=True)]
+        roster=FakeRoster(records)
+        self.assertEqual([r.sa_id for r in skipped_roster_rows(roster,'测试员')],
+                         ['skip-a','skip-a-copy'])
+        self.assertEqual([r.sa_id for r in skipped_targets(roster,'测试员')],['skip-a'])
 
     def test_all_targets_ignores_the_classification_hint(self):
         # The roster decides the scope: a record the model did not label WOS is still
