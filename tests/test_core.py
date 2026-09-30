@@ -159,6 +159,15 @@ class BridgeTests(unittest.TestCase):
         worker.join(4)
         self.assertEqual(responses, [{"verified": True}])
 
+    def test_valid_result_refreshes_connection_after_a_long_command(self):
+        self.post("/poll", {"client": "1"})
+        with self.bridge.lock:
+            self.bridge.last_seen = time.monotonic() - 20
+        self.assertFalse(self.bridge.online)
+        self.post("/result", {"id": "already-finished", "client": "1",
+                              "result": {"ok": False, "error": "synthetic"}})
+        self.assertTrue(self.bridge.online)
+
     def test_offline_stops(self):
         with self.assertRaises(SafetyStop):
             self.bridge.call("search", {})

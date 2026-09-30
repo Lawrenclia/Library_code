@@ -113,6 +113,24 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
     const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
     assert.equal(r.ok,false);assert.match(r.error,/唯一/);assert.ok(page.url().includes('/summary/'));
   });
+  test('WOS Chinese and English zero-result banners finish without URL navigation or timeout',async()=>{
+    await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
+    await page.evaluate(()=>{
+      window.zeroMessages=['您的检索未找到结果','Your search did not return any results'];
+      document.querySelector('button').onclick=()=>{
+        searches++;
+        document.querySelector('[role="alert"]')?.remove();
+        const alert=document.createElement('section');alert.setAttribute('role','alert');
+        alert.textContent=zeroMessages.shift();document.getElementById('main').prepend(alert);
+      };
+    });
+    for(const title of ['First missing paper','Second missing paper']){
+      const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title});
+      assert.equal(r.ok,false);assert.match(r.error,/WOS 未找到记录/);
+      assert.ok(page.url().endsWith('/wos/woscc/basic-search'));
+    }
+    assert.equal(await page.evaluate(()=>searches),2);
+  });
   test('WOS Oops page reports site failure before field selection or any search',async()=>{
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
     await page.evaluate(()=>document.getElementById('main').innerHTML="<h1>Oops, something went wrong!</h1><p>Please click on 'Search' at the top of the screen.</p>");

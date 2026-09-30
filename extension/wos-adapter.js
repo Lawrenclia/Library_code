@@ -94,6 +94,19 @@ async function runWOSCommand(command) {
     el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));
   };
   const fullRecord = () => /^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodeURI(location.pathname));
+  // A zero-result search stays on basic-search in the current WOS SPA. It is a
+  // completed per-paper outcome, not a navigation/connection timeout. Keep the
+  // phrases narrow so help text and search-history labels cannot become results.
+  const noResultPattern=/(?:no (?:results?|records?|documents?) (?:were )?found|your search (?:did not return any|returned no) results?|您的?(?:检索|搜索|檢索|搜尋)(?:未找到|没有找到|沒有找到|未檢索到)(?:任何)?(?:结果|結果)|未找到(?:任何)?(?:结果|結果)|没有(?:检索|搜索)结果|沒有(?:檢索|搜尋)結果)/i;
+  const noResults=()=>noResultPattern.test(norm(document.body?.innerText||""));
+  const noResultTextNodes=()=>{
+    const found=[];
+    if(!document.body)return found;
+    const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+    for(let node=walker.nextNode();node;node=walker.nextNode())
+      if(visible(node.parentElement)&&noResultPattern.test(norm(node.nodeValue)))found.push(node);
+    return found;
+  };
   const fingerprint = () => {
     if(!fullRecord())fail("未处于 WOS 核心合集单篇完整记录页");
     const ut=decodeURI(location.pathname).match(/WOS:\d{15}/)[0];
@@ -141,10 +154,30 @@ async function runWOSCommand(command) {
       searchButton(field,input); // Ambiguity stops before replacing the query.
       set(input,query);
       const previous=location.href;
-      click(searchButton(field,input)); // Input events may have replaced the button.
-      await wait(()=>location.href!==previous,"WOS 检索结果");
-      await wait(()=>all('a[href*="/full-record/WOS:"]').length || /No results found|未找到结果|没有检索结果/.test(document.body.innerText),"加载结果");
-      if(/No results found|未找到结果|没有检索结果/.test(document.body.innerText))fail("WOS 未找到记录；这不等于未发表，也不自动标记完成");
+      // A previous zero-result banner may still be mounted when the next query is
+      // entered. Only accept a banner that is new or changed after this click.
+      const zeroBefore=noResults(), oldZeroNodes=new Set(noResultTextNodes());
+      let zeroChanged=false;
+      const observer=zeroBefore?new MutationObserver(records=>{
+        for(const change of records){
+          if(change.type==="characterData"&&oldZeroNodes.has(change.target)){zeroChanged=true;break;}
+          if(change.type==="attributes"&&[...oldZeroNodes].some(node=>node.parentElement===change.target)){zeroChanged=true;break;}
+          const changed=[...(change.addedNodes||[]),...(change.removedNodes||[])];
+          if(changed.some(node=>noResultPattern.test(norm(node.textContent||node.nodeValue||"")) ||
+              [...oldZeroNodes].some(old=>node===old||(node.nodeType===Node.ELEMENT_NODE&&node.contains(old))))) {
+            zeroChanged=true;break;
+          }
+        }
+      }):null;
+      if(observer)observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:["hidden","aria-hidden","class","style"]});
+      const resultLinks=()=>all('a[href*="/full-record/WOS:"]');
+      const freshZero=()=>noResults()&&(!zeroBefore||zeroChanged);
+      try {
+        click(searchButton(field,input)); // Input events may have replaced the button.
+        await wait(()=>location.href!==previous||resultLinks().length||freshZero(),"WOS 检索结果");
+        await wait(()=>resultLinks().length||freshZero(),"加载结果");
+      } finally {if(observer)observer.disconnect();}
+      if(freshZero())fail("WOS 未找到记录；这不等于未发表，也不自动标记完成");
       const links=all('a[href*="/wos/woscc/full-record/WOS:"]');
       const urls=new Map();for(const a of links){const url=new URL(a.href);if(url.origin===location.origin)urls.set(url.origin+url.pathname,a);}
       // Full results total must be one, not simply one rendered/visible match.

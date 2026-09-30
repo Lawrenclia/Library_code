@@ -25,11 +25,25 @@ PER_RECORD_OUTCOMES = (
     '禁止导入',
 )
 
+# This exact bridge state means no subsequent paper can be dispatched. Other WOS
+# page outcomes remain per-record/session diagnostics and are allowed to continue.
+DISCONNECTED_OUTCOMES = (
+    '浏览器未连接',
+    '浏览器通信已断开',
+    '扩展连接已断开',
+)
+
 
 def per_record_outcome(message):
     """True when the message describes this paper, not a broken session."""
     text = str(message)
     return any(marker in text for marker in PER_RECORD_OUTCOMES)
+
+
+def disconnected_outcome(message):
+    """True only for an unavailable desktop-to-extension command channel."""
+    text = str(message)
+    return any(marker in text for marker in DISCONNECTED_OUTCOMES)
 
 
 def wos_targets(roster, classification, papers, owner=None):
@@ -161,11 +175,14 @@ def export(targets, bridge, store, inbox,
     inbox.mkdir(parents=True, exist_ok=True)
     flow = WOSDownload(bridge, store, unchanged, stop, audit)
     exported, failed, unconfirmed = [], {}, []
+    disconnected = False
+    attempted = 0
     for index, record in enumerate(targets):
         if stop is not None and stop.is_set():
             progress(f'WOS 导出已暂停：已成功 {len(exported)} 条。')
             break
         progress(f'WOS 导出：已处理 {index}/{len(targets)}；原表第 {record.row} 行')
+        attempted += 1
         try:
             # prepare() is idempotent: an already archived export is reused, not re-downloaded.
             state = flow.prepare(record)
@@ -174,6 +191,10 @@ def export(targets, bridge, store, inbox,
             message = str(exc)
             failed[record.sa_id] = {'row': record.row, 'error': message,
                                     'per_record': per_record_outcome(message)}
+            if disconnected_outcome(message):
+                disconnected = True
+                progress(f'浏览器通信已断开，已停止整批；剩余 {len(targets)-attempted} 条未执行。')
+                break
             progress(f'第 {record.row} 行未导出，已记录并继续下一条：{message}')
             continue
         sha = state['candidate']['sha256']
@@ -194,7 +215,9 @@ def export(targets, bridge, store, inbox,
     return {'total': len(targets), 'exported': exported, 'failed': failed,
             'unconfirmed': unconfirmed, 'inbox': str(inbox),
             'not_exported': per_record, 'session_failures': len(failed) - per_record,
-            'stopped': bool(stop is not None and stop.is_set())}
+            'attempted': attempted, 'remaining': len(targets)-attempted,
+            'disconnected': disconnected,
+            'stopped': bool(disconnected or (stop is not None and stop.is_set()))}
 
 
 def plan(document, classification_dir=None):

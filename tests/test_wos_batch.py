@@ -8,8 +8,8 @@ from automation import ImportStore
 from core import Record, SafetyStop
 from submission_prepare import matches_paper
 from tests.test_automation import sample
-from wos_batch import (all_targets, export, plan, roster_rows, safe_name,
-                       skipped_roster_rows, skipped_targets, wos_targets)
+from wos_batch import (all_targets, disconnected_outcome, export, plan, roster_rows,
+                       safe_name, skipped_roster_rows, skipped_targets, wos_targets)
 
 
 def record(**kwargs):
@@ -243,21 +243,23 @@ class ExportTests(unittest.TestCase):
         bridge.call.assert_not_called()
 
     def test_expected_lookup_misses_do_not_trip_the_circuit_breaker(self):
-        # A roster whose titles are wrong produces "no record" / "not unique" answers.
-        # Those are results, not failures: a long list-driven run must keep going.
+        # A zero-result page is a completed result for this paper. It must continue
+        # without attempting export, and must not be treated as a lost browser.
         records = self.distinct(8)
         def call(action, payload, timeout=75):
-            if action == "wos_export":
-                raise SafetyStop('WOS 结果不是可确认的唯一记录，请人工选择并核对后使用“导出当前 WOS 文献”')
-            return {}
+            if action != "wos_search":
+                raise AssertionError('zero-result search must not attempt export')
+            raise SafetyStop('WOS 未找到记录；这不等于未发表，也不自动标记完成')
         bridge = Mock(call=Mock(side_effect=call))
         result = export(all_targets(FakeRoster(records)), bridge,
                         ImportStore(self.root / "imports"), self.inbox)
         self.assertEqual(len(result["failed"]), len(records))
         self.assertEqual(result["not_exported"], len(records))
         self.assertEqual(result["session_failures"], 0)
+        self.assertEqual(bridge.call.call_count,len(records))
+        self.assertFalse(result['stopped'])
 
-    def test_session_level_failures_visit_every_record(self):
+    def test_non_connection_page_failures_visit_every_record(self):
         records = self.distinct(8)
         bridge = Mock(call=Mock(side_effect=SafetyStop('绑定的工作标签页已切换或未登录，请人工返回')))
         result=export(all_targets(FakeRoster(records)), bridge,
@@ -265,6 +267,20 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(result['session_failures'],8)
         self.assertEqual(bridge.call.call_count,8)
         self.assertFalse(result['stopped'])
+
+    def test_true_browser_disconnect_stops_the_whole_batch(self):
+        records = self.distinct(8)
+        bridge = Mock(call=Mock(side_effect=SafetyStop(
+            '浏览器未连接。请在已登录的 WOS 或比对页打开扩展并配对。')))
+        result=export(all_targets(FakeRoster(records)),bridge,
+                      ImportStore(self.root/'imports'),self.inbox)
+        self.assertEqual(bridge.call.call_count,1)
+        self.assertEqual(len(result['failed']),1)
+        self.assertEqual(result['session_failures'],1)
+        self.assertEqual(result['remaining'],7)
+        self.assertTrue(result['disconnected'])
+        self.assertTrue(result['stopped'])
+        self.assertTrue(disconnected_outcome(result['failed'][records[0].sa_id]['error']))
 
     def test_success_after_three_failures_is_still_downloaded(self):
         records=self.distinct(3)+[self.record]

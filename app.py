@@ -255,6 +255,9 @@ class App:
                         f'· 原表第 {v["row"]} 行：{v["error"]}' for v in broken[:5])
                     if len(broken)>5:
                         detail+=f'\n…共 {len(broken)} 条。'
+            if result.get('disconnected'):
+                detail+=(f'\n\n浏览器通信已断开，整批已经停止；剩余 '
+                         f'{result.get("remaining",0)} 条尚未执行。重新连接并绑定 WOS 页后再继续。')
             messagebox.showinfo(f'{label}结束',
                 f'{scope}，成功 {len(result["exported"])} 条，'
                 f'身份待核验 {len(result.get("unconfirmed",[]))} 条，'

@@ -82,7 +82,15 @@ class Bridge:
                 if self.path == "/result":
                     with bridge.lock:
                         pending = bridge.pending
-                        if pending and payload.get("id") == pending["command"]["id"] and str(payload.get("client", "")) == bridge.connected:
+                        client = str(payload.get("client", ""))
+                        # A valid result POST is stronger liveness evidence than a
+                        # poll. WOS commands can run longer than the eight-second
+                        # poll freshness window, during which the service worker is
+                        # busy and cannot poll. Without this refresh the very next
+                        # paper is falsely rejected as "浏览器未连接".
+                        if bridge.connected and client == bridge.connected:
+                            bridge.last_seen = time.monotonic()
+                        if pending and payload.get("id") == pending["command"]["id"] and client == bridge.connected:
                             try:
                                 pending["result"].put_nowait(payload.get("result", {}))
                             except queue.Full:
