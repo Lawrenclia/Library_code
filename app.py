@@ -230,11 +230,55 @@ class App:
         def job():
             from wos_batch import default_store
             store=default_store()
-            return export_batch(targets,bridge,store,default_inbox(),
+            result=export_batch(targets,bridge,store,default_inbox(),
                                 stop=self.classifier.stop,unchanged=roster.assert_unchanged,
                                 progress=report)
+            # Provenance is recorded only for files that passed the existing strong
+            # identity check and were actually copied into the intake directory.
+            # Zero results, ambiguous results and archived weak matches stay blank.
+            if result.get('exported'):
+                successful={entry['sa_id'] for entry in result['exported']}
+                keys={(record.owner,record.title,record.doi,record.skipped)
+                      for record in targets if record.sa_id in successful}
+                source_rows=[record for record in roster.records
+                             if (record.owner,record.title,record.doi,record.skipped) in keys
+                             and record.matches==0 and not record.done]
+                try:
+                    from roster_write import record_data_sources
+                    update=record_data_sources(roster,source_rows,'WOS')
+                    result['_source_update']=update
+                    if update.roster.sha256!=roster.sha256:
+                        try:
+                            from paper_classify import rebind_classification_sources
+                            result['classification_rebound']=rebind_classification_sources(
+                                roster.sha256,update.roster.sha256)
+                        except Exception as exc:
+                            result['classification_rebind_error']=str(exc)
+                except Exception as exc:
+                    result['source_error']=str(exc)
+            return result
         def done(result):
             detail=''
+            source_update=result.pop('_source_update',None)
+            if source_update is not None:
+                self.roster=source_update.roster
+                self.skipped={record.sa_id:"Excel 备注为数字 2，已持久标记为跳过。"
+                              for record in self.roster.records if record.skipped and not record.done}
+                self.owner_box['values']=sorted({record.owner for record in self.roster.records})
+                if self.owner.get():
+                    self.populate()
+                if self.classifier:
+                    self.classifier.reload()
+                    self.classifier.load_results()
+                if source_update.rows:
+                    detail+=(f'\n\n已在 list.xlsx 的“数据来源”列为 '
+                             f'{len(source_update.rows)} 行记录 WOS。')
+            if result.get('source_error'):
+                detail+=('\n\nTXT 已成功导出，但“数据来源”尚未写入：'
+                         +result['source_error'])
+            if result.get('classification_rebind_error'):
+                detail+=('\n\n数据来源已写入；旧分类结果索引刷新失败，请重新打开分类页：'
+                         +result['classification_rebind_error'])
             if result.get('unconfirmed'):
                 shown=result['unconfirmed'][:5]
                 detail+=('\n\n身份未获强匹配（未放入待收目录，需人工核验）：\n'

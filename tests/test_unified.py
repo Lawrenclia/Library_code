@@ -104,6 +104,7 @@ class UnifiedTests(unittest.TestCase):
             self.assertIsNone(store.get(record))
             self.assertTrue(store.path.is_file())
             stores.append(store)
+            return {'exported': []}
 
         def run(job,callback,status,**kwargs):
             job()

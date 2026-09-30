@@ -21,6 +21,7 @@ HEADERS = {
     "mark": "标记状态", "reason": "标记为待处理原因",
 }
 QUERY_HEADER = "查询方式（DOI和WOS_ID：1   题名： 2）"
+SOURCE_HEADER = "数据来源"
 ROSTER_FILENAME = "list.xlsx"
 
 
@@ -57,6 +58,7 @@ class Record:
     done: bool = False
     skipped: bool = False
     remark: str = ""
+    source: str = ""
 
     @property
     def key(self):
@@ -65,6 +67,9 @@ class Record:
         values.pop("done")
         values.pop("skipped")
         values.pop("remark")
+        # Provenance is an output of this workflow, not part of the task facts.
+        # Adding a verified source must not invalidate an otherwise identical task.
+        values.pop("source")
         return digest(values)
 
 
@@ -76,6 +81,8 @@ class Roster:
     mtime_ns: int
     sheet_name: str = ""
     completion_column: int = 0
+    source_column: int = 0
+    header_column_count: int = 0
 
     def assert_unchanged(self):
         if self.path.stat().st_mtime_ns != self.mtime_ns or file_hash(self.path) != self.sha256:
@@ -117,6 +124,11 @@ def read_roster(path):
             raise SafetyStop("应恰好有一个包含 sa_lzk表ID 表头的工作表。")
         sheet, labels = choices[0]
         done_column = completion_column(labels)
+        source_columns = [i for i, label in enumerate(labels) if label == SOURCE_HEADER]
+        if len(source_columns) > 1:
+            raise SafetyStop(f"重复表头：{SOURCE_HEADER}")
+        source_column = source_columns[0] if source_columns else None
+        header_column_count = max((i + 1 for i, label in enumerate(labels) if label), default=0)
         mapping = {}
         for key, label in HEADERS.items():
             if labels.count(label) != 1:
@@ -138,6 +150,12 @@ def read_roster(path):
             # booleans and formulas never silently become workflow states.
             done = flag.data_type == "n" and type(flag.value) in (int, float) and flag.value == 1
             skipped = flag.data_type == "n" and type(flag.value) in (int, float) and flag.value == 2
+            source = ""
+            if source_column is not None:
+                source_cell = cells[source_column]
+                if source_cell.data_type == "f":
+                    raise SafetyStop(f"第 {number} 行数据来源是公式，不能自动读取或覆盖。")
+                source = text(source_cell.value)
             for key, index in mapping.items():
                 cell = cells[index]
                 if cell.data_type == "f":
@@ -161,12 +179,15 @@ def read_roster(path):
             if not values["owner"]:
                 values["owner"] = "（未分配）"
             values["matches"] = count
-            records.append(Record(row=number, done=done, skipped=skipped, remark=text(flag.value), **values))
+            records.append(Record(row=number, done=done, skipped=skipped,
+                                  remark=text(flag.value), source=source, **values))
         if not records:
             raise SafetyStop("名单没有记录。")
     finally:
         book.close()
-    result = Roster(path, checksum, records, stamp, sheet.title, done_column + 1)
+    result = Roster(path, checksum, records, stamp, sheet.title, done_column + 1,
+                    (source_column + 1) if source_column is not None else 0,
+                    header_column_count)
     result.assert_unchanged()
     return result
 

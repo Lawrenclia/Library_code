@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from core import Record, Roster, SafetyStop, file_hash, read_roster
+from core import Record, Roster, SOURCE_HEADER, SafetyStop, file_hash, read_roster
 
 NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -37,6 +37,15 @@ class RosterUpdate:
     backup: Path
     cells: tuple
     previous: dict
+
+
+@dataclass
+class SourceUpdate:
+    roster: Roster
+    backup: Path | None
+    cells: tuple
+    rows: tuple
+    source: str
 
 
 def column_name(number):
@@ -140,6 +149,192 @@ def patch_cell(data, reference, row_number, value=1):
     changed = (xml[:match.start()] + segment + xml[match.end():]).encode("utf-8")
     ET.fromstring(changed)
     return changed
+
+
+def patch_text_cell(data, reference, row_number, value, expand_dimension=False):
+    """Insert or replace one plain inline-string cell without resaving the workbook."""
+    from html import escape
+    from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter, range_boundaries
+
+    if not isinstance(value, str) or not value or len(value) > 200 or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", value):
+        raise SafetyStop("数据来源文本无效，停止回写。")
+    document = ET.fromstring(data)
+    protection = document.find(f"{{{NS}}}sheetProtection")
+    if document.tag != f"{{{NS}}}worksheet" or (protection is not None and protection.get("sheet", "1") not in {"0", "false"}):
+        raise SafetyStop("工作表格式不支持或已受保护。")
+    target_row, target_column = coordinate_to_tuple(reference)
+    for merged in document.findall(f"{{{NS}}}mergeCells/{{{NS}}}mergeCell"):
+        left, top, right, bottom = range_boundaries(merged.get("ref"))
+        if left <= target_column <= right and top <= target_row <= bottom:
+            raise SafetyStop("数据来源位于合并单元格，停止回写。")
+    rows = [row for row in document.findall(f"{{{NS}}}sheetData/{{{NS}}}row") if row.get("r") == str(row_number)]
+    if len(rows) != 1:
+        raise SafetyStop("名单行定位不唯一。")
+    cells = [cell for cell in rows[0] if cell.get("r") == reference]
+    if len(cells) > 1 or any(cell.find(f"{{{NS}}}f") is not None for cell in cells):
+        raise SafetyStop("数据来源是公式或重复单元格，不能覆盖。")
+    xml = data.decode("utf-8")
+    row_pattern = re.compile(r'<row\b[^>]*\br="' + str(row_number) + r'"[^>]*>.*?</row>', re.S)
+    matches = list(row_pattern.finditer(xml))
+    if len(matches) != 1:
+        raise SafetyStop("未知工作表行格式，请人工处理。")
+    match = matches[0]
+    segment = match.group()
+    cell_pattern = re.compile(r'<c\b(?=[^>]*\br="' + reference + r'")[^>]*?(?:/>|>.*?</c>)', re.S)
+    found = list(cell_pattern.finditer(segment))
+    if len(found) != len(cells):
+        raise SafetyStop("未知单元格格式，请人工处理。")
+    content = f'<is><t>{escape(value, quote=False)}</t></is>'
+    if cells:
+        if set(cells[0].attrib) - {"r", "s", "t"} or any(
+                child.tag not in {f"{{{NS}}}v", f"{{{NS}}}is"} for child in cells[0]):
+            raise SafetyStop("数据来源包含特殊元数据，请人工处理。")
+        start = found[0].group().split(">", 1)[0].rstrip("/")
+        start = re.sub(r'\s+t="[^"]*"', "", start)
+        replacement = start + f' t="inlineStr">{content}</c>'
+        segment = segment[:found[0].start()] + replacement + segment[found[0].end():]
+    else:
+        style = ""
+        previous = []
+        for cell in rows[0]:
+            cell_reference = cell.get("r", "")
+            try:
+                column = coordinate_to_tuple(cell_reference)[1]
+            except ValueError:
+                continue
+            if column < target_column:
+                previous.append((column, cell.get("s")))
+        if previous and max(previous)[1] is not None:
+            style = f' s="{max(previous)[1]}"'
+        replacement = f'<c r="{reference}"{style} t="inlineStr">{content}</c>'
+        offset = segment.rfind("</row>")
+        for cell in re.finditer(r'<c\b[^>]*\br="([A-Z]+[0-9]+)"', segment):
+            if coordinate_to_tuple(cell.group(1))[1] > target_column:
+                offset = cell.start()
+                break
+        segment = segment[:offset] + replacement + segment[offset:]
+    # Some producers emit an advisory row span. Keep it consistent with the new cell.
+    opening_end = segment.find(">")
+    opening = segment[:opening_end + 1]
+    span = re.search(r'\bspans="(\d+):(\d+)"', opening)
+    if span and int(span.group(2)) < target_column:
+        opening = opening[:span.start()] + f'spans="{span.group(1)}:{target_column}"' + opening[span.end():]
+        segment = opening + segment[opening_end + 1:]
+    changed_text = xml[:match.start()] + segment + xml[match.end():]
+    if expand_dimension:
+        dimensions = list(re.finditer(r'(<dimension\b[^>]*\bref=")([^"]+)(")', changed_text))
+        if len(dimensions) > 1:
+            raise SafetyStop("工作表范围信息不唯一，停止回写。")
+        if dimensions:
+            dim = dimensions[0]
+            left, top, right, bottom = range_boundaries(dim.group(2))
+            if target_column > right or target_row > bottom:
+                new_ref = f"{get_column_letter(left)}{top}:{get_column_letter(max(right, target_column))}{max(bottom, target_row)}"
+                changed_text = changed_text[:dim.start(2)] + new_ref + changed_text[dim.end(2):]
+    changed = changed_text.encode("utf-8")
+    ET.fromstring(changed)
+    return changed
+
+
+def _validated_source(source):
+    value = str(source or "").strip()
+    if (not value or len(value) > 40 or re.search(r"[\x00-\x1f；;]", value)
+            or value[0] in "=+-@"):
+        raise SafetyStop("数据来源名称无效；请使用不含分隔符的简短名称。")
+    return value
+
+
+def _append_source(existing, source):
+    values = [part.strip() for part in re.split(r"[；;]", existing or "") if part.strip()]
+    if source.casefold() not in {value.casefold() for value in values}:
+        values.append(source)
+    return "；".join(values)
+
+
+def record_data_sources(roster, records=(), source="WOS", backup_dir=None):
+    """Append one verified provenance label to selected rows and ensure the last column.
+
+    The method is deliberately independent from the numeric workflow flag. A skipped
+    row can have a successfully exported source, while a failed search remains blank.
+    """
+    source = _validated_source(source)
+    records = list(records)
+    if roster.path.name.lower() != "list.xlsx" or not roster.sheet_name:
+        raise SafetyStop("只允许回写当前 code/list.xlsx。")
+    if len({record.row for record in records}) != len(records) or any(record not in roster.records for record in records):
+        raise SafetyStop("数据来源目标行重复或不属于当前名单，请重新读取。")
+    destination = roster.source_column or roster.header_column_count + 1
+    if destination <= 0 or destination > 16384:
+        raise SafetyStop("无法确定数据来源列。")
+    if not roster.source_column and destination != roster.header_column_count + 1:
+        raise SafetyStop("数据来源必须追加在名单最后一列。")
+    intended_values = {record.row: _append_source(record.source, source) for record in records}
+    changed_rows = [record for record in records if intended_values[record.row] != record.source]
+    header_needed = not roster.source_column
+    if not header_needed and not changed_rows:
+        return SourceUpdate(roster, None, (), (), source)
+    path = roster.path
+    temporary = None
+    try:
+        with write_lock(path):
+            if path.with_name("~$" + path.name).exists():
+                raise SafetyStop("Excel 正在使用名单。请保存并关闭 list.xlsx，再重新读取后继续。")
+            roster.assert_unchanged()
+            descriptor, name = tempfile.mkstemp(prefix=".list-source-", suffix=".xlsx", dir=path.parent)
+            os.close(descriptor)
+            temporary = Path(name)
+            references = []
+            with zipfile.ZipFile(path) as original, zipfile.ZipFile(temporary, "w") as output:
+                member = worksheet_member(original, roster.sheet_name)
+                changed = original.read(member)
+                if header_needed:
+                    reference = f"{column_name(destination)}1"
+                    changed = patch_text_cell(changed, reference, 1, SOURCE_HEADER, expand_dimension=True)
+                    references.append(reference)
+                for record in changed_rows:
+                    reference = f"{column_name(destination)}{record.row}"
+                    changed = patch_text_cell(changed, reference, record.row, intended_values[record.row],
+                                              expand_dimension=header_needed)
+                    references.append(reference)
+                output.comment = original.comment
+                for entry in original.infolist():
+                    output.writestr(copy.copy(entry), changed if entry.filename == member else original.read(entry))
+            verified = read_roster(temporary)
+            if verified.source_column != destination:
+                raise SafetyStop("数据来源列回读失败，原名单未修改。")
+            from dataclasses import replace
+            intended = [replace(record, source=intended_values.get(record.row, record.source))
+                        for record in roster.records]
+            if verified.records != intended:
+                raise SafetyStop("回读发现数据来源以外的内容发生变化，原名单未修改。")
+            backups = Path(backup_dir) if backup_dir else path.parent / "runtime" / "backups"
+            backups.mkdir(parents=True, exist_ok=True)
+            backup = backups / f"list-{roster.sha256}.xlsx"
+            if not backup.exists():
+                with path.open("rb") as source_stream, backup.open("xb") as target:
+                    import shutil
+                    shutil.copyfileobj(source_stream, target)
+                    target.flush()
+                    os.fsync(target.fileno())
+            if file_hash(backup) != roster.sha256:
+                raise SafetyStop("备份校验失败，未修改名单。请检查备份目录。")
+            roster.assert_unchanged()
+            if path.with_name("~$" + path.name).exists():
+                raise SafetyStop("名单又被 Excel 打开，暂停回写。")
+            with temporary.open("rb+") as stream:
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            temporary = None
+            verified.path = path
+            verified.mtime_ns = path.stat().st_mtime_ns
+            verified.assert_unchanged()
+            return SourceUpdate(verified, backup, tuple(references),
+                                tuple(record.row for record in changed_rows), source)
+    except PermissionError as exc:
+        raise SafetyStop("名单被占用或没有写权限。请保存并关闭 Excel，再重新读取；数据来源尚未写入。") from exc
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _mark_values(roster, updates, backup_dir=None):

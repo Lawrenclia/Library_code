@@ -116,7 +116,8 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
   test('WOS Chinese and English zero-result banners finish without URL navigation or timeout',async()=>{
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
     await page.evaluate(()=>{
-      window.zeroMessages=['您的检索未找到结果','Your search did not return any results'];
+      window.zeroMessages=['您的检索未找到结果','Your search did not return any results',
+        'Your search did not find any results'];
       document.querySelector('button').onclick=()=>{
         searches++;
         document.querySelector('[role="alert"]')?.remove();
@@ -124,12 +125,12 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
         alert.textContent=zeroMessages.shift();document.getElementById('main').prepend(alert);
       };
     });
-    for(const title of ['First missing paper','Second missing paper']){
+    for(const title of ['First missing paper','Second missing paper','Third missing paper']){
       const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title});
       assert.equal(r.ok,false);assert.match(r.error,/WOS 未找到记录/);
       assert.ok(page.url().endsWith('/wos/woscc/basic-search'));
     }
-    assert.equal(await page.evaluate(()=>searches),2);
+    assert.equal(await page.evaluate(()=>searches),3);
   });
   test('WOS Oops page reports site failure before field selection or any search',async()=>{
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
@@ -141,6 +142,16 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
   test('WOS Smart Search follows visible Advanced and Fielded tabs, without changing preferences',async()=>{
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
     await page.evaluate(()=>smartPage());
+    const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
+    assert.equal(r.ok,true,JSON.stringify(r));assert.equal(await page.evaluate(()=>searches),1);
+  });
+  test('WOS waits for the SPA to mount a selected Fielded Search row',async()=>{
+    await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
+    await page.evaluate(()=>{
+      const main=document.getElementById('main');
+      main.innerHTML='<button role="tab" aria-selected="true">字段检索</button><p>正在加载</p>';
+      setTimeout(()=>searchPage(),350);
+    });
     const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
     assert.equal(r.ok,true,JSON.stringify(r));assert.equal(await page.evaluate(()=>searches),1);
   });

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import threading
 import time
 from collections import Counter, deque
@@ -311,6 +312,94 @@ def export_report(folder, roster, results, model, failures=None):
     os.replace(channel_tmp,folder/'导入渠道分类.md')
 
 
+def rebind_classification_sources(old_sha256, new_sha256, output=BASE/'runtime'/'classification'):
+    """Rebind saved reports after a provenance-only ``list.xlsx`` revision.
+
+    Every paper identity and grouped row must still match before a report is updated;
+    this prevents an unrelated roster edit from silently adopting old model results.
+    """
+    if not all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+               for value in (old_sha256, new_sha256)):
+        raise SafetyStop('名单指纹格式无效，分类结果未迁移。')
+    if old_sha256 == new_sha256:
+        return 0
+    output = Path(output)
+    scopes = {}
+    changed = 0
+    for path in sorted(output.glob('*/分类结果.json')):
+        try:
+            data = _json(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        source = data.get('source',{}) if isinstance(data,dict) else {}
+        records = data.get('records') if isinstance(data,dict) else None
+        if source.get('sha256') != old_sha256 or not isinstance(records,list):
+            continue
+        if (path.parent/'run.lock').exists():
+            raise SafetyStop('分类任务仍在运行，暂不能写入数据来源；请等待该批保存完成。')
+        input_value = source.get('input')
+        if not isinstance(input_value,str):
+            continue
+        input_path = Path(input_value).resolve()
+        if not input_path.is_file() or file_hash(input_path) != new_sha256:
+            continue
+        owner = source.get('owner')
+        pending_only = source.get('pending_only') is True
+        scope = (str(input_path), owner, pending_only)
+        if scope not in scopes:
+            scopes[scope] = read_papers(input_path, owner=owner, pending_only=pending_only)
+        papers = scopes[scope]['papers']
+        expected = {paper['id']:(paper['title'],paper['doi'],paper['rows']) for paper in papers}
+        actual = {}
+        for record in records:
+            if not isinstance(record,dict) or not isinstance(record.get('id'),str):
+                actual = None
+                break
+            actual[record['id']] = (record.get('title'),record.get('doi'),record.get('rows'))
+        if actual != expected:
+            continue
+        data = dict(data)
+        data['source'] = {**source, 'sha256':new_sha256}
+        atomic_json(path,data)
+        changed += 1
+    return changed
+
+
+def reusable_results(roster, model, output):
+    """Load exact, validated successes for a new source-only checkpoint."""
+    expected = {paper['id']:(paper['title'],paper['doi'],paper['rows']) for paper in roster['papers']}
+    paper_by_id = {paper['id']:paper for paper in roster['papers']}
+    candidates = sorted(Path(output).glob('*/分类结果.json'),
+                        key=lambda path:path.stat().st_mtime, reverse=True)
+    for path in candidates:
+        try:
+            data = _json(path.read_text(encoding='utf-8'))
+        except (OSError,ValueError):
+            continue
+        source = data.get('source',{}) if isinstance(data,dict) else {}
+        records = data.get('records') if isinstance(data,dict) else None
+        if (data.get('model') != model or source.get('sha256') != roster['sha256']
+                or source.get('owner') != roster.get('owner')
+                or bool(source.get('pending_only')) != bool(roster.get('pending_only'))
+                or not isinstance(records,list)):
+            continue
+        actual = {record.get('id'):(record.get('title'),record.get('doi'),record.get('rows'))
+                  for record in records if isinstance(record,dict) and isinstance(record.get('id'),str)}
+        if actual != expected:
+            continue
+        saved = {}
+        try:
+            for record in records:
+                if isinstance(record.get('classification'),dict):
+                    saved.update(validate_result(
+                        json.dumps({'results':[record['classification']]},ensure_ascii=False),
+                        [paper_by_id[record['id']]]))
+        except (InvalidClassification, KeyError):
+            continue
+        return saved
+    return {}
+
+
 def run(input_path=BASE/'list.xlsx', output=BASE/'runtime'/'classification', model=DEFAULT_MODEL,
         batch_size=5, client=None, stop=None, progress=None, evidence_path=None, resilient=False,
         owner=None, pending_only=False):
@@ -371,6 +460,10 @@ def run(input_path=BASE/'list.xlsx', output=BASE/'runtime'/'classification', mod
             for pid, value in results.items():
                 validated.update(validate_result(json.dumps({'results':[value]},ensure_ascii=False),[known[pid]]))
             results = validated
+        else:
+            # Writing a verified data-source label changes the XLSX byte fingerprint,
+            # not the paper. Keep exact validated successes and retry only gaps.
+            results = reusable_results(roster,model,output)
         client = client or ClassificationClient(KeyStore(BASE/'runtime'))
         if isinstance(client,ModelClient):
             # Reasoning models answer far more slowly than interactive review assumes.

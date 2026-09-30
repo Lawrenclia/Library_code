@@ -162,7 +162,7 @@ class BridgeTests(unittest.TestCase):
     def test_valid_result_refreshes_connection_after_a_long_command(self):
         self.post("/poll", {"client": "1"})
         with self.bridge.lock:
-            self.bridge.last_seen = time.monotonic() - 20
+            self.bridge.last_seen = time.monotonic() - 40
         self.assertFalse(self.bridge.online)
         self.post("/result", {"id": "already-finished", "client": "1",
                               "result": {"ok": False, "error": "synthetic"}})

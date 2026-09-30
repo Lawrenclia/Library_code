@@ -13,6 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from core import SafetyStop
 
+HEARTBEAT_TIMEOUT = 30
+
 
 class LoopbackServer(ThreadingHTTPServer):
     # Windows SO_REUSEADDR can silently share a listener with another assistant,
@@ -106,7 +108,11 @@ class Bridge:
 
     @property
     def online(self):
-        return bool(self.connected) and time.monotonic() - self.last_seen < 8
+        # Chromium aggressively throttles timers in background tabs. Eight seconds
+        # produced false disconnects during long WOS batches even though the next
+        # result/poll was valid. A valid result still refreshes this timestamp; only
+        # a genuinely silent channel for thirty seconds is treated as disconnected.
+        return bool(self.connected) and time.monotonic() - self.last_seen < HEARTBEAT_TIMEOUT
 
     def re_pair(self):
         with self.lock:
@@ -133,7 +139,10 @@ class Bridge:
                 raise SafetyStop(str(response.get("error", "浏览器返回未知结果")) if isinstance(response, dict) else "浏览器结果格式异常")
             return response.get("data", {})
         except queue.Empty as exc:
-            raise SafetyStop("命令超时，结果不明。不要重复提交；先检查网页，等待请求结束，再只读重查。") from exc
+            with self.lock:
+                delivered = bool(self.pending and self.pending.get("delivered"))
+            detail = "网页已接收命令但未返回结果" if delivered else "扩展没有取得命令"
+            raise SafetyStop(f"命令超时（{detail}），结果不明。不要重复提交；先检查网页，等待请求结束，再只读重查。") from exc
         finally:
             with self.lock:
                 self.pending = None

@@ -97,7 +97,7 @@ async function runWOSCommand(command) {
   // A zero-result search stays on basic-search in the current WOS SPA. It is a
   // completed per-paper outcome, not a navigation/connection timeout. Keep the
   // phrases narrow so help text and search-history labels cannot become results.
-  const noResultPattern=/(?:no (?:results?|records?|documents?) (?:were )?found|your search (?:did not return any|returned no) results?|您的?(?:检索|搜索|檢索|搜尋)(?:未找到|没有找到|沒有找到|未檢索到)(?:任何)?(?:结果|結果)|未找到(?:任何)?(?:结果|結果)|没有(?:检索|搜索)结果|沒有(?:檢索|搜尋)結果)/i;
+  const noResultPattern=/(?:no (?:results?|records?|documents?) (?:were )?found|your search (?:did not (?:return|find) any|returned no) results?|您的?(?:检索|搜索|檢索|搜尋)(?:未找到|没有找到|沒有找到|未檢索到)(?:任何)?(?:结果|結果)|未找到(?:任何)?(?:结果|結果)|没有(?:检索|搜索)结果|沒有(?:檢索|搜尋)結果)/i;
   const noResults=()=>noResultPattern.test(norm(document.body?.innerText||""));
   const noResultTextNodes=()=>{
     const found=[];
@@ -125,14 +125,28 @@ async function runWOSCommand(command) {
       // New WOS defaults to Smart Search. Follow only visible, specifically
       // labelled links to Advanced -> Fielded Search; never invent route URLs
       // or change the account's Smart Search preference.
-      const navigation=["Fielded Search","字段检索","字段搜索","欄位檢索","Advanced Search","高级检索","高级搜索","進階檢索"];
-      for(let step=0;fields().length===0 && step<2;step++) {
-        const links=all('a,button,[role="tab"]').filter(el=>navigation.includes(caption(el)) && el.getAttribute("aria-selected")!=="true");
-        const fielded=links.filter(el=>["Fielded Search","字段检索","字段搜索","欄位檢索"].includes(caption(el)));
-        const next=fielded.length?fielded:links;
+      const fieldedLabels=["Fielded Search","字段检索","字段搜索","欄位檢索"];
+      const advancedLabels=["Advanced Search","高级检索","高级搜索","進階檢索"];
+      const navigation=[...fieldedLabels,...advancedLabels];
+      const navigationControls=()=>all('a,button,[role="tab"]').filter(el=>navigation.includes(caption(el)));
+      // Chrome may report the tab as complete before the WOS SPA mounts its search
+      // controls. Wait for semantic controls instead of treating an empty first
+      // render as a permanent selector mismatch.
+      await wait(()=>fields().length>0 || navigationControls().length>0,"加载字段检索页面",15000);
+      for(let step=0;fields().length===0 && step<3;step++) {
+        const controls=navigationControls();
+        const selectedFielded=controls.filter(el=>fieldedLabels.includes(caption(el)) && el.getAttribute("aria-selected")==="true");
+        if(selectedFielded.length===1) {
+          await wait(()=>fields().length>0,"加载字段检索条件",15000);
+          break;
+        }
+        const fielded=controls.filter(el=>fieldedLabels.includes(caption(el)) && el.getAttribute("aria-selected")!=="true");
+        const advanced=controls.filter(el=>advancedLabels.includes(caption(el)) && el.getAttribute("aria-selected")!=="true");
+        const next=fielded.length?fielded:advanced;
         if(next.length!==1)break;
         const clicked=next[0];click(clicked);
-        await wait(()=>fields().length>0 || (!clicked.isConnected && all('a,button,[role="tab"]').some(el=>navigation.includes(caption(el)))),"切换字段检索",15000);
+        await wait(()=>fields().length>0 || !clicked.isConnected || clicked.getAttribute("aria-selected")==="true",
+                   "切换字段检索",15000);
       }
       const combos=fields();
       if(combos.length!==1)fail(`检索字段选择器未唯一识别（识别到 ${combos.length} 个）。请进入 Advanced Search / 高级检索 → Fielded Search / 字段检索，只保留一行条件。可点扩展“检查工作页”复制控件诊断`);

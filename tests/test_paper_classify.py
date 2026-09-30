@@ -9,8 +9,8 @@ import openpyxl
 
 from core import SafetyStop, file_hash
 from paper_classify import (ClassificationClient, DEFAULT_MODEL, MAX_CONSECUTIVE_FAILURES,
-                            list_owners, read_papers, run, validate_result, InvalidClassification,
-                            ModelRequestError)
+                            list_owners, read_papers, rebind_classification_sources,
+                            run, validate_result, InvalidClassification, ModelRequestError)
 
 
 def answer(paper, **changes):
@@ -158,6 +158,26 @@ class ClassificationTests(unittest.TestCase):
         self.assertIn('WOS数据导入(Excel)',(folder/'导入渠道分类.md').read_text(encoding='utf-8'))
         self.assertIn('Paper &#124; A',(folder/'分类建议.md').read_text(encoding='utf-8'))
         self.assertFalse((folder/'run.lock').exists())
+
+    def test_provenance_only_revision_rebinds_and_reuses_exact_results(self):
+        output=self.root/'source-revision'
+        original=file_hash(self.path)
+        first=run(self.path,output,client=self.client())
+        book=openpyxl.load_workbook(self.path)
+        book.active.cell(1,book.active.max_column+1,'数据来源')
+        book.save(self.path)
+        book.close()
+        revised=file_hash(self.path)
+        self.assertNotEqual(revised,original)
+
+        self.assertEqual(rebind_classification_sources(original,revised,output),1)
+        report=json.loads((first/'分类结果.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['source']['sha256'],revised)
+        fresh=self.client()
+        second=run(self.path,output,client=fresh)
+        fresh.classify.assert_not_called()
+        self.assertNotEqual(second,first)
+        self.assertEqual(json.loads((second/'status.json').read_text(encoding='utf-8'))['completed'],4)
 
     def test_cancel_saves_current_batch_resume_only_remaining(self):
         stop=threading.Event()

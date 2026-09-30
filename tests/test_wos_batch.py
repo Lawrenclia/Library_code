@@ -268,6 +268,18 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(bridge.call.call_count,8)
         self.assertFalse(result['stopped'])
 
+    def test_field_selector_page_failures_visit_every_record(self):
+        records = self.distinct(8)
+        bridge = Mock(call=Mock(side_effect=SafetyStop(
+            '[扩展 0.3.20] [WOS 已暂停] 检索字段选择器未唯一识别（识别到 0 个）')))
+        result = export(all_targets(FakeRoster(records)), bridge,
+                        ImportStore(self.root / 'imports'), self.inbox)
+        self.assertEqual(result['session_failures'], 8)
+        self.assertEqual(result['remaining'], 0)
+        self.assertEqual(bridge.call.call_count, 8)
+        self.assertFalse(result['disconnected'])
+        self.assertFalse(result['stopped'])
+
     def test_true_browser_disconnect_stops_the_whole_batch(self):
         records = self.distinct(8)
         bridge = Mock(call=Mock(side_effect=SafetyStop(

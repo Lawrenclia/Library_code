@@ -9,7 +9,8 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
 
 from core import HEADERS, QUERY_HEADER, SafetyStop, file_hash, read_roster
-from roster_write import clear_skipped_many, mark_complete, mark_skipped_many, reconcile_processed
+from roster_write import (clear_skipped_many, mark_complete, mark_skipped_many,
+                          reconcile_processed, record_data_sources)
 
 
 def make_roster(path, flags=(None, 1, "1", 0, True)):
@@ -199,6 +200,62 @@ class RosterWriteTests(unittest.TestCase):
             self.assertEqual(book['保留页']['A1'].value, '=1+1')
         finally:
             book.close()
+
+    def test_source_column_is_appended_and_only_success_rows_are_recorded(self):
+        roster = read_roster(self.path)
+        before = self.path.read_bytes()
+        with zipfile.ZipFile(self.path) as archive:
+            parts = {name: archive.read(name) for name in archive.namelist()}
+
+        update = record_data_sources(roster, [roster.records[0], roster.records[2]], "WOS")
+
+        self.assertEqual(update.roster.source_column, roster.header_column_count + 1)
+        self.assertEqual(update.cells, ("N1", "N2", "N4"))
+        self.assertEqual(update.rows, (2, 4))
+        self.assertEqual(update.backup.read_bytes(), before)
+        self.assertEqual([record.source for record in update.roster.records],
+                         ["WOS", "", "WOS", "", ""])
+        self.assertEqual([record.remark for record in update.roster.records],
+                         ["", "1", "1", "0", "True"])
+        with zipfile.ZipFile(self.path) as archive:
+            changed = [name for name in archive.namelist() if archive.read(name) != parts[name]]
+        self.assertEqual(changed, ["xl/worksheets/sheet1.xml"])
+        book = load_workbook(self.path)
+        try:
+            sheet = book["名单"]
+            self.assertEqual(sheet["N1"].value, "数据来源")
+            self.assertEqual([sheet[cell].value for cell in ("N2", "N3", "N4")],
+                             ["WOS", None, "WOS"])
+            self.assertEqual(sheet["A2"].fill.fgColor.rgb, "00FFF4C2")
+            self.assertEqual(book["保留页"]["A1"].value, "=1+1")
+        finally:
+            book.close()
+
+    def test_source_values_append_uniquely_and_support_future_providers(self):
+        roster = read_roster(self.path)
+        first = record_data_sources(roster, [roster.records[0]], "WOS")
+        same = record_data_sources(first.roster, [first.roster.records[0]], "WOS")
+        self.assertIsNone(same.backup)
+        self.assertEqual(same.cells, ())
+        second = record_data_sources(same.roster, [same.roster.records[0]], "CNKI")
+        self.assertEqual(second.roster.records[0].source, "WOS；CNKI")
+        self.assertEqual(second.cells, ("N2",))
+
+    def test_source_header_can_be_added_before_any_success(self):
+        roster = read_roster(self.path)
+        update = record_data_sources(roster, [], "WOS")
+        self.assertEqual(update.cells, ("N1",))
+        self.assertTrue(update.roster.source_column)
+        self.assertTrue(all(not record.source for record in update.roster.records))
+
+    def test_source_formula_stops_without_overwrite(self):
+        book = load_workbook(self.path)
+        book.active["N1"] = "数据来源"
+        book.active["N2"] = "=1+1"
+        book.save(self.path)
+        book.close()
+        with self.assertRaisesRegex(SafetyStop, "数据来源是公式"):
+            read_roster(self.path)
 
     def test_sequential_completion_updates_fingerprint(self):
         roster = read_roster(self.path)
