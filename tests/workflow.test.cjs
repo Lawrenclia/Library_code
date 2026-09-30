@@ -9,7 +9,7 @@ const fixture=fs.readFileSync(path.join(__dirname,'fixtures/import.html'),'utf8'
 const wosFixture=fs.readFileSync(path.join(__dirname,'fixtures/wos.html'),'utf8');
 const edge='C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const candidate={title:'Synthetic paper',doi:'10.1234/test',wos:'WOS:000123456789012',sjtu:true,sha256:'a'.repeat(64)};
-const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-demo-001',candidate,expires:Date.now()+15000,...more});
+const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-demo-001',candidate,expires:Date.now()+30000,...more});
 (async()=>{
   const browser=await chromium.launch({headless:true,...(fs.existsSync(edge)?{executablePath:edge}:{})});
   const context=await browser.newContext();

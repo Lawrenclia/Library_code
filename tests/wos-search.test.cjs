@@ -12,7 +12,7 @@ const edge='C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
   const context=await browser.newContext();
   await context.route('**/*',r=>r.fulfill({status:200,contentType:'text/html',body:fixture}));
   const page=await context.newPage();
-  const run=()=>page.evaluate(runWOSCommand,{action:'wos_search',sa_id:'synthetic',title:'Synthetic paper',expires:Date.now()+12000});
+  const run=()=>page.evaluate(runWOSCommand,{action:'wos_search',sa_id:'synthetic',title:'Synthetic paper',expires:Date.now()+30000});
   const success=async()=>{const result=await run();assert.equal(result.ok,true,JSON.stringify(result));assert.equal(await page.evaluate(()=>searches),1);};
   const stopped=async count=>{const result=await run();assert.equal(result.ok,false);assert.match(result.error,new RegExp('识别到 '+count+' 个'));assert.equal(await page.evaluate(()=>searches),0);};
   const tests=[];const test=(name,fn)=>tests.push([name,fn]);

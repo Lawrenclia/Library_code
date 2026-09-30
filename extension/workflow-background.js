@@ -166,7 +166,9 @@ async function dispatchWorkflow(command,pair) {
   try {
     const clicked=await execute(runWOSCommand,{...command,action:"wos_download"});
     if(!clicked.ok)return clicked;
-    const end=Math.min(Date.now()+35000,command.expires-3000);
+    // Leave the same result-delivery margin used by the page adapter. The
+    // authenticated /result POST has its own eight-second timeout.
+    const end=Math.min(Date.now()+35000,command.expires-12000);
     let completed;
     while(Date.now()<end){
       if(found.length>1)throw new Error("导出期间出现多个候选下载，请人工核验，未上传任何文件");

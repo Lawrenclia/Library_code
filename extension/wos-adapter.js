@@ -2,6 +2,10 @@
  * Export uses WOS's own controls. Layout/language changes stop for the user. */
 async function runWOSCommand(command) {
   const fail = text => {throw new Error(text);};
+  // background.js may need up to eight seconds to POST the result back to the
+  // desktop bridge. Finish every page-side WOS step with a separate margin so a
+  // completed action is not reported as an unknown desktop timeout.
+  const resultMargin=12000;
   const norm = s => String(s??"").normalize("NFKC").replace(/\s+/g," ").trim();
   const visible = el => el && el.getClientRects().length>0 && getComputedStyle(el).visibility!=="hidden";
   const all = (sel,root=document)=>[...root.querySelectorAll(sel)].filter(visible);
@@ -21,14 +25,14 @@ async function runWOSCommand(command) {
     // with workflow-background.js and manifest.json (covered by browser tests).
     if(!["https://www.webofscience.com","https://webofscience.clarivate.cn"].includes(location.origin) || new URL(location.href).username || new URL(location.href).password)
       fail("WOS 网址不受支持，请在 www.webofscience.com 或 webofscience.clarivate.cn 的 HTTPS 文献检索页操作");
-    if(!Number.isFinite(command.expires) || Date.now()>=command.expires-2500)fail("WOS 操作超时，请人工查看网页");
+    if(!Number.isFinite(command.expires) || Date.now()>=command.expires-resultMargin)fail("WOS 操作超时，请人工查看网页");
     if(/Oops,?\s*something went wrong!?/i.test(document.body?.innerText||""))
       fail("WOS 网站自身报错：Oops, something went wrong! 这不是导入管理页的问题。请先点击 WOS 网页顶部 Search 或导航菜单重新进入检索；若仍报错，请人工检查登录、校园网/机构访问。网页恢复前不继续检索或导入");
     if(!location.pathname.startsWith("/wos/woscc/"))fail("请在 WOS 核心合集的文献检索页登录，不能使用作者检索");
     if(all('iframe[src*="captcha"],input[type="password"],#challenge-form').length)fail("登录或验证码需要人工处理");
   };
   const wait=async(fn,label,ms=30000)=>{
-    const end=Math.min(Date.now()+ms,command.expires-3000);
+    const end=Math.min(Date.now()+ms,command.expires-resultMargin);
     while(Date.now()<end){check();if(fn())return;await new Promise(r=>setTimeout(r,180));}
     fail(label+"超时，未自动重复操作");
   };
