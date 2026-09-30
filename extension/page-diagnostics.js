@@ -36,8 +36,19 @@ function inspectWorkPage() {
     in_navigation:!!el.closest('nav,header,footer,aside,[role="navigation"],[role="banner"]'),
     in_form:!!el.closest('form'),form_associated:!!el.form,
     disabled:!!el.disabled||el.getAttribute('aria-disabled')==='true'}));
+  const recordLinks=[...document.querySelectorAll('a[href]')].filter(visible).filter(anchor=>{
+    try {const link=new URL(anchor.href,location.href);return link.origin===u.origin&&
+      !/%(?:2f|5c)/i.test(link.pathname)&&
+      /^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodeURIComponent(link.pathname));}
+    catch{return false;}
+  });
+  const noResult=/(?:no (?:results?|records?|documents?) (?:were )?found|your search (?:did not (?:return|find) any|returned no) results?|您的?(?:检索|搜索|檢索|搜尋)(?:未找到|没有找到|沒有找到|未檢索到)(?:任何)?(?:结果|結果)|未找到(?:任何)?(?:结果|結果)|没有(?:检索|搜索)结果|沒有(?:檢索|搜尋)結果)/i.test(text);
+  const busy=[...document.querySelectorAll('[aria-busy="true"],[role="progressbar"],mat-spinner,mat-progress-bar,.mat-mdc-progress-spinner')].some(visible);
   return {site:u.hostname,path:u.pathname,route:u.hash.split("?")[0],
     wos_error:/Oops,?\s*something went wrong!?/i.test(text),
+    summary_route:/\/wos\/woscc\/summary\//.test(u.pathname),zero_result:noResult,busy,
+    canonical_record_link_count:recordLinks.length,
+    encoded_record_link_count:recordLinks.filter(anchor=>/%3a/i.test(new URL(anchor.href,location.href).pathname)).length,
     smart_search:/Smart Search|智能检索|智能搜索/i.test(text),
     fielded_search:/Fielded Search|字段检索|字段搜索/i.test(text),
     wos_import_button:/WOS\s*数据导入\s*[（(]\s*Txt\s*[）)]/i.test(text),

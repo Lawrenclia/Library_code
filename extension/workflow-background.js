@@ -1,6 +1,8 @@
 /* Called only by the authenticated bridge dispatcher, never by webpage messages. */
 const workflowRole = action => action.startsWith("import_") ? "importTabId" : action.startsWith("wos_") ? "wosTabId" : null;
 const wosOrigins = ["https://www.webofscience.com", "https://webofscience.clarivate.cn"];
+const staleWOSZeroError = "[WOS 已暂停] WOS 检索页保留上一条零结果，需刷新检索页";
+const shouldReloadWOSSearch = result => result?.ok === false && result.error === staleWOSZeroError;
 const isWOSPage = url => {
   try {const u=new URL(url);return wosOrigins.includes(u.origin) && !u.username && !u.password && u.pathname.startsWith("/wos/");}
   catch {return false;}
@@ -28,14 +30,16 @@ function workflowBindingError(url,role,sameSATab) {
 function isExpectedWOSDownload(item,recordURL) {
   try {
     const record=new URL(recordURL), download=new URL(item.url);
-    if(!isWOSPage(recordURL) || !/^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodeURI(record.pathname)))return false;
+    const recordPath=!/%(?:2f|5c)/i.test(record.pathname)&&isWOSPage(recordURL)?decodeURIComponent(record.pathname):"";
+    if(!/^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(recordPath))return false;
     // Empty referrers are allowed only for a blob created on the bound origin.
     // Another supported WOS domain must not supply this task's download.
     if(download.protocol==="blob:") {if(download.origin!==record.origin)return false;}
     else if(download.protocol!=="https:" || download.username || download.password)return false;
     if(item.referrer) {
       const ref=new URL(item.referrer);
-      return !ref.username && !ref.password && ref.origin===record.origin && ref.pathname===record.pathname;
+      const refPath=/%(?:2f|5c)/i.test(ref.pathname)?"":decodeURIComponent(ref.pathname);
+      return !ref.username && !ref.password && ref.origin===record.origin && refPath===recordPath;
     }
     return download.protocol==="blob:";
   } catch {return false;}
@@ -69,8 +73,18 @@ async function dispatchWorkflow(command,pair) {
   }
   if(command.action==="wos_search") {
     // User explicitly binds a disposable working WOS tab. Never navigate SA tab.
-    if(!/^\/wos\/woscc\/(?:basic-search|advanced-search|fielded-search)\/?$/.test(new URL(tab.url).pathname)){
-      await chrome.tabs.update(id,{url:workOrigin+"/wos/woscc/basic-search"});
+    // A forced reset happens only when the adapter found the previous query's
+    // no-result banner BEFORE clicking Search, so the real query remains at-most-once.
+    const ensureSearchPage=async force=>{
+      tab=await chrome.tabs.get(id);
+      const path=new URL(tab.url).pathname;
+      const alreadySearch=/^\/wos\/woscc\/(?:basic-search|advanced-search|fielded-search)\/?$/.test(path);
+      if(!force&&alreadySearch)return;
+      if(force&&new URL(tab.url).origin===workOrigin&&path==="/wos/woscc/basic-search"){
+        await chrome.tabs.reload(id);
+        // Do not mistake the pre-reload `complete` state for the new document.
+        await new Promise(r=>setTimeout(r,350));
+      } else await chrome.tabs.update(id,{url:workOrigin+"/wos/woscc/basic-search"});
       const end=Math.min(Date.now()+25000,command.expires-10000);
       let ready=false;
       while(Date.now()<end){
@@ -82,8 +96,14 @@ async function dispatchWorkflow(command,pair) {
         await new Promise(r=>setTimeout(r,200));
       }
       if(!ready)throw new Error("WOS 文献检索页未加载完成，请核验登录/页面后再继续");
+    };
+    await ensureSearchPage(false);
+    let result=await execute(runWOSCommand,command);
+    if(shouldReloadWOSSearch(result)){
+      await ensureSearchPage(true);
+      result=await execute(runWOSCommand,command);
     }
-    return execute(runWOSCommand,command);
+    return result;
   }
   if(command.action!=="wos_export")throw new Error("未知 WOS 调度命令");
   const prepared=await execute(runWOSCommand,{...command,action:"wos_prepare_export"});
@@ -116,4 +136,5 @@ async function dispatchWorkflow(command,pair) {
     return {ok:true,data:{path:completed.filename,download_id:completed.id,sa_id:command.sa_id,record_url:recordURL}};
   } finally {chrome.downloads.onCreated.removeListener(listener);}
 }
-if(typeof module!=="undefined")module.exports={validRolePage,workflowBindingError,isExpectedWOSDownload};
+if(typeof module!=="undefined")module.exports={validRolePage,workflowBindingError,isExpectedWOSDownload,
+  shouldReloadWOSSearch};

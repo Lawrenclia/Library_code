@@ -93,7 +93,20 @@ async function runWOSCommand(command) {
     Object.getOwnPropertyDescriptor(proto,"value").set.call(el,value);
     el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));
   };
-  const fullRecord = () => /^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodeURI(location.pathname));
+  const decodedPath = value => {try{return /%(?:2f|5c)/i.test(value)?"":decodeURIComponent(value);}catch{return "";}};
+  const fullRecordPath = value => /^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodedPath(value));
+  const fullRecord = () => fullRecordPath(location.pathname);
+  const recordLinks=()=>{
+    const links=new Map();
+    for(const anchor of all('a[href]')){
+      try{
+        const url=new URL(anchor.href,location.href);
+        const path=decodedPath(url.pathname);
+        if(url.origin===location.origin&&fullRecordPath(url.pathname))links.set(path,anchor);
+      }catch{}
+    }
+    return links;
+  };
   // A zero-result search stays on basic-search in the current WOS SPA. It is a
   // completed per-paper outcome, not a navigation/connection timeout. Keep the
   // phrases narrow so help text and search-history labels cannot become results.
@@ -109,7 +122,7 @@ async function runWOSCommand(command) {
   };
   const fingerprint = () => {
     if(!fullRecord())fail("未处于 WOS 核心合集单篇完整记录页");
-    const ut=decodeURI(location.pathname).match(/WOS:\d{15}/)[0];
+    const ut=decodedPath(location.pathname).match(/WOS:\d{15}/)[0];
     if(command.wos && command.wos!==ut)fail("WOS 页面入藏号与名单不一致");
     return location.origin+location.pathname;
   };
@@ -120,6 +133,11 @@ async function runWOSCommand(command) {
     if(command.action==="wos_search") {
       if(!/\/(?:basic-search|advanced-search|fielded-search)\/?$/.test(location.pathname))fail("请先进入 WOS 核心合集的字段检索页");
       if(all('[role="dialog"],mat-dialog-container').length)fail("WOS 有弹窗，请人工处理");
+      // WOS can keep the exact same no-result node for the next query. The
+      // dispatcher treats this pre-click marker as a request to reload a clean
+      // search page, then invokes this command again. No Search click has occurred,
+      // so the real query is still submitted at most once.
+      if(noResults())fail("WOS 检索页保留上一条零结果，需刷新检索页");
       const choices=command.wos?["Accession Number","入藏号","入藏號"]:command.doi?["DOI"]:["Title","标题","题名","標題","題名"];
       const query=command.wos||command.doi||command.title;
       // New WOS defaults to Smart Search. Follow only visible, specifically
@@ -184,16 +202,15 @@ async function runWOSCommand(command) {
         }
       }):null;
       if(observer)observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:["hidden","aria-hidden","class","style"]});
-      const resultLinks=()=>all('a[href*="/full-record/WOS:"]');
       const freshZero=()=>noResults()&&(!zeroBefore||zeroChanged);
       try {
         click(searchButton(field,input)); // Input events may have replaced the button.
-        await wait(()=>location.href!==previous||resultLinks().length||freshZero(),"WOS 检索结果");
-        await wait(()=>resultLinks().length||freshZero(),"加载结果");
+        await wait(()=>location.href!==previous||fullRecord()||recordLinks().size||freshZero(),"WOS 检索结果");
+        await wait(()=>fullRecord()||recordLinks().size||freshZero(),"加载结果",60000);
       } finally {if(observer)observer.disconnect();}
       if(freshZero())fail("WOS 未找到记录；这不等于未发表，也不自动标记完成");
-      const links=all('a[href*="/wos/woscc/full-record/WOS:"]');
-      const urls=new Map();for(const a of links){const url=new URL(a.href);if(url.origin===location.origin)urls.set(url.origin+url.pathname,a);}
+      if(fullRecord())return {ok:true,data:{record_url:fingerprint()}};
+      const urls=recordLinks();
       // Full results total must be one, not simply one rendered/visible match.
       const text=norm(document.body.innerText);
       const single=/(?:^|\s)1 (?:result|results|document|documents)(?:\s|$)/i.test(text) || /(?:^|\s)1 条(?:结果|记录)(?:\s|$)/.test(text);

@@ -113,24 +113,66 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
     const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
     assert.equal(r.ok,false);assert.match(r.error,/唯一/);assert.ok(page.url().includes('/summary/'));
   });
-  test('WOS Chinese and English zero-result banners finish without URL navigation or timeout',async()=>{
+  test('WOS accepts one delayed same-origin record link with an encoded accession colon',async()=>{
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
     await page.evaluate(()=>{
-      window.zeroMessages=['您的检索未找到结果','Your search did not return any results',
-        'Your search did not find any results'];
       document.querySelector('button').onclick=()=>{
-        searches++;
-        document.querySelector('[role="alert"]')?.remove();
-        const alert=document.createElement('section');alert.setAttribute('role','alert');
-        alert.textContent=zeroMessages.shift();document.getElementById('main').prepend(alert);
+        searches++;history.pushState({},'', '/wos/woscc/summary/encoded');
+        document.getElementById('main').innerHTML='<p>Loading records</p>';
+        setTimeout(()=>{
+          document.getElementById('main').innerHTML='<h1>1 result</h1><a href="/wos/woscc/full-record/WOS%3A000123456789012">Synthetic paper</a>';
+          document.querySelector('a').onclick=event=>{event.preventDefault();history.pushState({},'',event.currentTarget.getAttribute('href'));};
+        },350);
       };
     });
-    for(const title of ['First missing paper','Second missing paper','Third missing paper']){
+    const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
+    assert.equal(r.ok,true,JSON.stringify(r));assert.match(r.data.record_url,/WOS%3A000123456789012/i);
+    assert.equal(await page.evaluate(()=>searches),1);
+  });
+  test('WOS encoded multiple records remain ambiguous and none is opened',async()=>{
+    await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
+    await page.evaluate(()=>{
+      window.openedEncoded=0;
+      document.querySelector('button').onclick=()=>{
+        searches++;history.pushState({},'', '/wos/woscc/summary/encoded-many');
+        document.getElementById('main').innerHTML='<h1>2 results</h1><a href="/wos/woscc/full-record/WOS%3A000123456789012">One</a><a href="/wos/woscc/full-record/WOS%3A000123456789013">Two</a>';
+        document.querySelectorAll('a').forEach(anchor=>anchor.onclick=event=>{event.preventDefault();openedEncoded++;});
+      };
+    });
+    const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
+    assert.equal(r.ok,false);assert.match(r.error,/唯一/);assert.equal(await page.evaluate(()=>openedEncoded),0);
+  });
+  test('WOS Chinese and English zero-result banners finish without URL navigation or timeout',async()=>{
+    const cases=[['First missing paper','您的检索未找到结果'],
+      ['Second missing paper','Your search did not return any results'],
+      ['Third missing paper','Your search did not find any results']];
+    for(const [title,message] of cases){
+      await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
+      await page.evaluate(message=>document.querySelector('button').onclick=()=>{
+        searches++;const alert=document.createElement('section');alert.setAttribute('role','alert');
+        alert.textContent=message;document.getElementById('main').prepend(alert);
+      },message);
       const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title});
       assert.equal(r.ok,false);assert.match(r.error,/WOS 未找到记录/);
       assert.ok(page.url().endsWith('/wos/woscc/basic-search'));
+      assert.equal(await page.evaluate(()=>searches),1);
     }
-    assert.equal(await page.evaluate(()=>searches),3);
+  });
+  test('WOS stale zero-result banner requests a clean reload before any new search click',async()=>{
+    await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
+    await page.evaluate(()=>{const alert=document.createElement('section');alert.setAttribute('role','alert');
+      alert.textContent='您的检索未找到结果';document.getElementById('main').prepend(alert);});
+    const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Next paper'});
+    assert.equal(r.ok,false);assert.match(r.error,/保留上一条零结果/);
+    assert.equal(await page.evaluate(()=>searches),0);
+  });
+  test('read-only diagnosis reports encoded WOS links without exposing titles or queries',async()=>{
+    await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
+    await page.evaluate(()=>{history.pushState({},'', '/wos/woscc/summary/diagnostic');
+      document.getElementById('main').innerHTML='<h1>1 result</h1><a href="/wos/woscc/full-record/WOS%3A000123456789012">DO_NOT_DISCLOSE_TITLE</a>';});
+    const d=await page.evaluate(inspectWorkPage);
+    assert.equal(d.summary_route,true);assert.equal(d.canonical_record_link_count,1);assert.equal(d.encoded_record_link_count,1);
+    assert.ok(!JSON.stringify(d).includes('DO_NOT_DISCLOSE_TITLE'));
   });
   test('WOS Oops page reports site failure before field selection or any search',async()=>{
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');

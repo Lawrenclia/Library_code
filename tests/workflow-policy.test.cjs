@@ -24,6 +24,10 @@ for (const origin of origins) {
     const blob = 'blob:' + origin + '/synthetic-id';
     assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:''}, record), true);
     assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:record + '?view=1#section'}, record), true);
+    const encodedRecord=origin+recordPath.replace('WOS:','WOS%3A');
+    assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:encodedRecord}, encodedRecord), true);
+    assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:record}, encodedRecord), true);
+    assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:encodedRecord}, record), true);
     assert.equal(policy.isExpectedWOSDownload({url:origin + '/export.txt', referrer:record}, record), true);
     assert.equal(policy.isExpectedWOSDownload({url:origin + '/export.txt', referrer:''}, record), false);
     assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:origin + '/wos/woscc/basic-search'}, record), false);
@@ -34,6 +38,8 @@ for (const origin of origins) {
     assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:other + recordPath}, record), false);
     assert.equal(policy.isExpectedWOSDownload({url:blob}, origin + '/wos/woscc/basic-search'), false);
     assert.equal(policy.isExpectedWOSDownload({url:'invalid'}, record), false);
+    assert.equal(policy.isExpectedWOSDownload({url:blob,referrer:origin+'/wos%2Fwoscc%2Ffull-record%2FWOS%3A000123456789012'},
+      origin+'/wos%2Fwoscc%2Ffull-record%2FWOS%3A000123456789012'),false);
   });
   test(`${origin}: navigation retains the bound regional origin`, async () => {
     const navigations = [], executions = [];
@@ -50,6 +56,21 @@ for (const origin of origins) {
     assert.equal(executions[0].target.tabId, 2);
   });
 }
+
+test('only the pre-click stale-zero marker requests one clean WOS reload', async()=>{
+  const stale='[WOS 已暂停] WOS 检索页保留上一条零结果，需刷新检索页';
+  assert.equal(policy.shouldReloadWOSSearch({ok:false,error:stale}),true);
+  assert.equal(policy.shouldReloadWOSSearch({ok:false,error:'WOS 检索页保留上一条零结果，需刷新检索页'}),false);
+  assert.equal(policy.shouldReloadWOSSearch({ok:false,error:'加载结果超时，未自动重复操作'}),false);
+  let tab={id:2,url:origins[0]+'/wos/woscc/basic-search',status:'complete'}, reloads=0, executions=0;
+  const sandbox={URL,Date,setTimeout,runWOSCommand(){},chrome:{
+    tabs:{get:async()=>tab,update:async()=>{},reload:async()=>{reloads++;tab={...tab,status:'complete'};}},
+    scripting:{executeScript:async()=>[{result:++executions===1?{ok:false,error:stale}:{ok:true}}]},
+  }};
+  vm.createContext(sandbox);vm.runInContext(source,sandbox);
+  const result=await sandbox.dispatchWorkflow({action:'wos_search',expires:Date.now()+30000},{tabId:1,wosTabId:2});
+  assert.equal(result.ok,true);assert.equal(reloads,1);assert.equal(executions,2);
+});
 
 test('binding errors distinguish SA reuse, wrong role, and wrong backend menu without echoing credentials', () => {
   assert.match(policy.workflowBindingError(origins[0] + '/wos/', 'wosTabId', true), /SA 比对.*独立标签页/);
