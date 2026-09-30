@@ -110,7 +110,11 @@ async function runWOSCommand(command) {
   // A zero-result search stays on basic-search in the current WOS SPA. It is a
   // completed per-paper outcome, not a navigation/connection timeout. Keep the
   // phrases narrow so help text and search-history labels cannot become results.
-  const noResultPattern=/(?:no (?:results?|records?|documents?) (?:were )?found|your search (?:did not (?:return|find) any|returned no) results?|您的?(?:检索|搜索|檢索|搜尋)(?:未找到|没有找到|沒有找到|未檢索到)(?:任何)?(?:结果|結果)|未找到(?:任何)?(?:结果|結果)|没有(?:检索|搜索)结果|沒有(?:檢索|搜尋)結果)/i;
+  // WOS renders parts of the Chinese message in separate elements. `norm()`
+  // therefore leaves spaces between words that look contiguous on screen.
+  // Allow only whitespace between the known phrase fragments; do not use a
+  // broad "0" match that could mistake search history or help text for a result.
+  const noResultPattern=/(?:no\s+(?:results?|records?|documents?)\s+(?:were\s+)?found|your\s+search\s+(?:did\s+not\s+(?:return|find)\s+any|returned\s+no)\s+results?|您的?\s*(?:检索|搜索|檢索|搜尋)\s*(?:未找到|没有找到|沒有找到|未檢索到)\s*(?:任何)?\s*(?:结果|結果)|未找到\s*(?:任何)?\s*(?:结果|結果)|没有\s*(?:检索|搜索)\s*结果|沒有\s*(?:檢索|搜尋)\s*結果)/i;
   const noResults=()=>noResultPattern.test(norm(document.body?.innerText||""));
   const noResultTextNodes=()=>{
     const found=[];
@@ -126,11 +130,31 @@ async function runWOSCommand(command) {
     if(command.wos && command.wos!==ut)fail("WOS 页面入藏号与名单不一致");
     return location.origin+location.pathname;
   };
+  const resultState = () => {
+    if(fullRecord())return {state:"record",record_url:fingerprint()};
+    if(noResults())return {state:"zero"};
+    const urls=recordLinks();
+    const text=norm(document.body?.innerText||"");
+    const countMatch=text.match(/(?:^|\s)(\d{1,6})\s+(?:results?|records?|documents?)(?:\s|$)/i) ||
+      text.match(/(?:^|\s)(\d{1,6})\s*(?:条|個|个|篇)?\s*(?:结果|結果|记录|紀錄|文献|文獻)(?:\s|$)/);
+    const count=countMatch?Number(countMatch[1]):null;
+    if((Number.isInteger(count)&&count>1)||urls.size>1)return {state:"multiple"};
+    if(count===1&&urls.size===1){
+      const anchor=[...urls.values()][0],url=new URL(anchor.href,location.href);
+      return {state:"single",navigate_url:url.origin+url.pathname};
+    }
+    return {state:"loading"};
+  };
   try {
     check();
-    if(!["wos_search","wos_prepare_export","wos_download"].includes(command.action))fail("未知 WOS 命令");
+    if(!["wos_search","wos_start_search","wos_read_results","wos_verify_record","wos_prepare_export","wos_download"].includes(command.action))fail("未知 WOS 命令");
     if(typeof command.title!=="string" || !command.title.trim() || command.title.length>1500)fail("题名缺失或过长");
-    if(command.action==="wos_search") {
+    if(command.action==="wos_read_results") {
+      if(all('[role="dialog"],mat-dialog-container').length)fail("WOS 有弹窗，请人工处理");
+      return {ok:true,data:resultState()};
+    }
+    if(command.action==="wos_verify_record")return {ok:true,data:{state:"record",record_url:fingerprint()}};
+    if(command.action==="wos_search" || command.action==="wos_start_search") {
       if(!/\/(?:basic-search|advanced-search|fielded-search)\/?$/.test(location.pathname))fail("请先进入 WOS 核心合集的字段检索页");
       if(all('[role="dialog"],mat-dialog-container').length)fail("WOS 有弹窗，请人工处理");
       // WOS can keep the exact same no-result node for the next query. The
@@ -185,6 +209,16 @@ async function runWOSCommand(command) {
       const input=one(inputs,"单行文献检索输入框");
       searchButton(field,input); // Ambiguity stops before replacing the query.
       set(input,query);
+      const action=searchButton(field,input); // Input events may replace the button.
+      if(action.disabled||action.getAttribute("aria-disabled")==="true")fail("控件尚不可用");
+      if(command.action==="wos_start_search") {
+        // Return before the click can navigate. A real WOS navigation may destroy
+        // an injected execution context; keeping that navigation inside this long
+        // command was the source of desktop timeouts and a permanently busy worker.
+        // The extension background performs the subsequent read-only polling.
+        setTimeout(()=>action.click(),0);
+        return {ok:true,data:{submitted:true}};
+      }
       const previous=location.href;
       // A previous zero-result banner may still be mounted when the next query is
       // entered. Only accept a banner that is new or changed after this click.
@@ -204,7 +238,7 @@ async function runWOSCommand(command) {
       if(observer)observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:["hidden","aria-hidden","class","style"]});
       const freshZero=()=>noResults()&&(!zeroBefore||zeroChanged);
       try {
-        click(searchButton(field,input)); // Input events may have replaced the button.
+        click(action);
         await wait(()=>location.href!==previous||fullRecord()||recordLinks().size||freshZero(),"WOS 检索结果");
         await wait(()=>fullRecord()||recordLinks().size||freshZero(),"加载结果",60000);
       } finally {if(observer)observer.disconnect();}

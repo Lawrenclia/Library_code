@@ -199,7 +199,8 @@ class ExportTests(unittest.TestCase):
         bridge=self.bridge_for(sample(C1='Another University'))
         result=export(self.selected(),bridge,ImportStore(self.root/'downloads'),self.inbox)
         self.assertEqual(len(result['exported']),1)
-        self.assertEqual([c.args[0] for c in bridge.call.call_args_list],['wos_search','wos_export'])
+        self.assertEqual([(c.args[0], c.kwargs['timeout']) for c in bridge.call.call_args_list],
+                         [('wos_search', 120), ('wos_export', 75)])
 
     def test_conflicting_doi_is_not_adopted(self):
         result=export(self.selected(),self.bridge_for(sample(DI='10.1234/other')),
@@ -280,6 +281,39 @@ class ExportTests(unittest.TestCase):
         self.assertFalse(result['disconnected'])
         self.assertFalse(result['stopped'])
 
+    def test_wos_page_timeout_does_not_stop_the_whole_batch(self):
+        records = self.distinct(4)
+        message = 'WOS 等待检索结果超时，未自动重复操作'
+        bridge = Mock(call=Mock(side_effect=SafetyStop(message)))
+        result = export(all_targets(FakeRoster(records)), bridge,
+                        ImportStore(self.root / 'imports'), self.inbox)
+        self.assertFalse(disconnected_outcome(message))
+        self.assertEqual(result['attempted'], 4)
+        self.assertEqual(result['remaining'], 0)
+        self.assertEqual(bridge.call.call_count, 4)
+        self.assertFalse(result['disconnected'])
+        self.assertFalse(result['stopped'])
+
+    def test_unavailable_bridge_states_stop_the_whole_batch(self):
+        records = self.distinct(8)
+        messages = (
+            '命令超时（网页已接收命令但未返回结果），结果不明。',
+            '上一条浏览器命令仍在执行，暂停等待人工核验',
+        )
+        for index, message in enumerate(messages):
+            with self.subTest(message=message):
+                bridge = Mock(call=Mock(side_effect=SafetyStop(message)))
+                result = export(all_targets(FakeRoster(records)), bridge,
+                                ImportStore(self.root / f'imports-{index}'),
+                                self.root / f'inbox-{index}')
+                self.assertEqual(bridge.call.call_count, 1)
+                self.assertEqual(result['attempted'], 1)
+                self.assertEqual(len(result['failed']), 1)
+                self.assertEqual(result['remaining'], 7)
+                self.assertTrue(result['disconnected'])
+                self.assertTrue(result['stopped'])
+                self.assertTrue(disconnected_outcome(message))
+
     def test_true_browser_disconnect_stops_the_whole_batch(self):
         records = self.distinct(8)
         bridge = Mock(call=Mock(side_effect=SafetyStop(
@@ -287,6 +321,7 @@ class ExportTests(unittest.TestCase):
         result=export(all_targets(FakeRoster(records)),bridge,
                       ImportStore(self.root/'imports'),self.inbox)
         self.assertEqual(bridge.call.call_count,1)
+        self.assertEqual(result['attempted'],1)
         self.assertEqual(len(result['failed']),1)
         self.assertEqual(result['session_failures'],1)
         self.assertEqual(result['remaining'],7)

@@ -14,6 +14,15 @@ const validRolePage = (url,role) => {
       u.hash.split("?")[0]==="#/collectItem/batchManage";
   } catch {return false;}
 };
+const decodedWOSPath = url => {
+  try {const u=new URL(url);return /%(?:2f|5c)/i.test(u.pathname)?"":decodeURIComponent(u.pathname);}
+  catch {return "";}
+};
+const isWOSRecordPage = (url,origin) => {
+  try {const u=new URL(url);return u.origin===origin && /^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodedWOSPath(url));}
+  catch {return false;}
+};
+const transientInjectionError = error => /(?:execution context (?:was )?destroyed|frame (?:with ID \d+ )?was removed|no frame with id|cannot find context with specified id)/i.test(String(error?.message||error));
 function workflowBindingError(url,role,sameSATab) {
   if(sameSATab)return "当前标签页已用于 SA 比对，请保留它，并在独立标签页打开 WOS 或导入管理页后绑定";
   if(validRolePage(url,role))return "";
@@ -98,12 +107,49 @@ async function dispatchWorkflow(command,pair) {
       if(!ready)throw new Error("WOS 文献检索页未加载完成，请核验登录/页面后再继续");
     };
     await ensureSearchPage(false);
-    let result=await execute(runWOSCommand,command);
+    // Search submission is deliberately a short injected step. The adapter
+    // schedules exactly one click and returns before a real WOS navigation can
+    // destroy the execution context. Results are then observed read-only.
+    const start=()=>execute(runWOSCommand,{...command,action:"wos_start_search"});
+    let result=await start();
     if(shouldReloadWOSSearch(result)){
       await ensureSearchPage(true);
-      result=await execute(runWOSCommand,command);
+      result=await start();
     }
-    return result;
+    if(!result.ok)return result;
+    const end=Math.min(Date.now()+90000,command.expires-12000);
+    let navigated=false;
+    while(Date.now()<end){
+      tab=await chrome.tabs.get(id);
+      let url;
+      try {url=new URL(tab.url);} catch {throw new Error("WOS 工作页网址无效，已停止整批");}
+      if(url.origin!==workOrigin)throw new Error("WOS 域名在检索中发生变化，请核验登录/机构访问后重新绑定");
+      if(!isWOSPage(tab.url))throw new Error("WOS 检索跳转离开了已绑定工作区，请人工核验");
+      if(tab.status!=="complete") {await new Promise(r=>setTimeout(r,500));continue;}
+      let probe;
+      try {probe=await execute(runWOSCommand,{...command,action:"wos_read_results"});}
+      catch(error){
+        if(transientInjectionError(error)){await new Promise(r=>setTimeout(r,500));continue;}
+        throw error;
+      }
+      if(!probe.ok)return probe;
+      const state=probe.data?.state;
+      if(state==="zero")return {ok:false,error:"[WOS 已暂停] WOS 未找到记录；这不等于未发表，也不自动标记完成"};
+      if(state==="multiple")return {ok:false,error:"[WOS 已暂停] WOS 结果不是可确认的唯一记录，请人工选择并核对后使用“导出当前 WOS 文献”"};
+      if(state==="record"){
+        if(!isWOSRecordPage(probe.data.record_url,workOrigin))throw new Error("WOS 单篇记录网址未通过安全校验");
+        return probe;
+      }
+      if(state==="single"){
+        const target=probe.data?.navigate_url;
+        if(navigated)throw new Error("WOS 唯一结果导航后仍返回结果列表，请人工核验");
+        if(!isWOSRecordPage(target,workOrigin))throw new Error("WOS 唯一结果链接未通过安全校验，未打开");
+        navigated=true;
+        await chrome.tabs.update(id,{url:target});
+      } else if(state!=="loading")throw new Error("WOS 返回了未知检索状态，请人工核验");
+      await new Promise(r=>setTimeout(r,500));
+    }
+    return {ok:false,error:"[WOS 已暂停] WOS 检索结果超时，未自动重复 Search；请检查当前网页后再继续"};
   }
   if(command.action!=="wos_export")throw new Error("未知 WOS 调度命令");
   const prepared=await execute(runWOSCommand,{...command,action:"wos_prepare_export"});
@@ -137,4 +183,4 @@ async function dispatchWorkflow(command,pair) {
   } finally {chrome.downloads.onCreated.removeListener(listener);}
 }
 if(typeof module!=="undefined")module.exports={validRolePage,workflowBindingError,isExpectedWOSDownload,
-  shouldReloadWOSSearch};
+  shouldReloadWOSSearch,isWOSRecordPage,transientInjectionError};

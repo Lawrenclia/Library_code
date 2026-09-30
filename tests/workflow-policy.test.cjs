@@ -46,14 +46,18 @@ for (const origin of origins) {
     let tab = {id:2, url:origin + '/wos/author/author-search', status:'complete'};
     const sandbox = {URL, Date, setTimeout, runWOSCommand(){}, chrome:{
       tabs:{get:async()=>tab, update:async(id, change)=>{navigations.push(change.url);tab={...tab,...change};}},
-      scripting:{executeScript:async input=>{executions.push(input);return [{result:{ok:true}}];}},
+      scripting:{executeScript:async input=>{executions.push(input);const action=input.args[0].action;
+        if(action==='wos_start_search'){tab={...tab,url:origin+recordPath,status:'complete'};return [{result:{ok:true,data:{submitted:true}}}];}
+        return [{result:{ok:true,data:{state:'record',record_url:origin+recordPath}}}];}},
     }};
     vm.createContext(sandbox);vm.runInContext(source, sandbox);
     const result = await sandbox.dispatchWorkflow({action:'wos_search', expires:Date.now()+30000}, {tabId:1,wosTabId:2});
     assert.equal(result.ok, true);
     assert.deepEqual(navigations, [origin + '/wos/woscc/basic-search']);
-    assert.equal(executions.length, 1);
+    assert.equal(executions.length, 2);
     assert.equal(executions[0].target.tabId, 2);
+    assert.equal(executions[0].args[0].action, 'wos_start_search');
+    assert.equal(executions[1].args[0].action, 'wos_read_results');
   });
 }
 
@@ -65,11 +69,29 @@ test('only the pre-click stale-zero marker requests one clean WOS reload', async
   let tab={id:2,url:origins[0]+'/wos/woscc/basic-search',status:'complete'}, reloads=0, executions=0;
   const sandbox={URL,Date,setTimeout,runWOSCommand(){},chrome:{
     tabs:{get:async()=>tab,update:async()=>{},reload:async()=>{reloads++;tab={...tab,status:'complete'};}},
-    scripting:{executeScript:async()=>[{result:++executions===1?{ok:false,error:stale}:{ok:true}}]},
+    scripting:{executeScript:async input=>{executions++;const action=input.args[0].action;
+      if(action==='wos_start_search'&&executions===1)return [{result:{ok:false,error:stale}}];
+      if(action==='wos_start_search'){tab={...tab,url:origins[0]+recordPath};return [{result:{ok:true,data:{submitted:true}}}];}
+      return [{result:{ok:true,data:{state:'record',record_url:origins[0]+recordPath}}}];}},
   }};
   vm.createContext(sandbox);vm.runInContext(source,sandbox);
   const result=await sandbox.dispatchWorkflow({action:'wos_search',expires:Date.now()+30000},{tabId:1,wosTabId:2});
-  assert.equal(result.ok,true);assert.equal(reloads,1);assert.equal(executions,2);
+  assert.equal(result.ok,true);assert.equal(reloads,1);assert.equal(executions,3);
+});
+
+test('one canonical result is navigated by the extension background, never clicked in-page', async()=>{
+  const origin=origins[0], navigations=[];
+  let tab={id:2,url:origin+'/wos/woscc/basic-search',status:'complete'}, reads=0;
+  const sandbox={URL,Date,setTimeout,runWOSCommand(){},chrome:{
+    tabs:{get:async()=>tab,update:async(id,change)=>{navigations.push(change.url);tab={...tab,...change,status:'complete'};}},
+    scripting:{executeScript:async input=>{const action=input.args[0].action;
+      if(action==='wos_start_search')return [{result:{ok:true,data:{submitted:true}}}];
+      if(action==='wos_read_results'&&reads++===0)return [{result:{ok:true,data:{state:'single',navigate_url:origin+recordPath}}}];
+      return [{result:{ok:true,data:{state:'record',record_url:origin+recordPath}}}];}},
+  }};
+  vm.createContext(sandbox);vm.runInContext(source,sandbox);
+  const result=await sandbox.dispatchWorkflow({action:'wos_search',title:'Synthetic',expires:Date.now()+30000},{tabId:1,wosTabId:2});
+  assert.equal(result.ok,true);assert.deepEqual(navigations,[origin+recordPath]);
 });
 
 test('binding errors distinguish SA reuse, wrong role, and wrong backend menu without echoing credentials', () => {

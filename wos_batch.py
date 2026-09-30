@@ -25,12 +25,17 @@ PER_RECORD_OUTCOMES = (
     '禁止导入',
 )
 
-# This exact bridge state means no subsequent paper can be dispatched. Other WOS
-# page outcomes remain per-record/session diagnostics and are allowed to continue.
+# These bridge states mean no subsequent paper can be dispatched safely. Keep the
+# timeout markers specific to the desktop/extension command channel: ordinary WOS
+# page/search timeouts are per-record diagnostics and must be allowed to continue.
 DISCONNECTED_OUTCOMES = (
     '浏览器未连接',
     '浏览器通信已断开',
     '扩展连接已断开',
+    '命令超时（网页已接收命令但未返回结果）',
+    '命令超时（扩展没有取得命令）',
+    '上一条浏览器命令仍在执行',
+    '已有命令正在执行',
 )
 
 
@@ -143,7 +148,7 @@ class WOSDownload:
             if self.stop is not None and self.stop.is_set():
                 raise SafetyStop('已暂停下载。')
             self.unchanged()
-            result=self.bridge.call(action,query,timeout=75)
+            result=self.bridge.call(action,query,timeout=120 if action == 'wos_search' else 75)
             self.audit(action,'已执行',record.sa_id)
         path=Path(result.get('path',''))
         if result.get('sa_id')!=record.sa_id or not path.is_absolute() or path.suffix.lower()!='.txt' or path.is_symlink():
@@ -193,7 +198,7 @@ def export(targets, bridge, store, inbox,
                                     'per_record': per_record_outcome(message)}
             if disconnected_outcome(message):
                 disconnected = True
-                progress(f'浏览器通信已断开，已停止整批；剩余 {len(targets)-attempted} 条未执行。')
+                progress(f'浏览器会话不可用，已停止整批；剩余 {len(targets)-attempted} 条未执行。')
                 break
             progress(f'第 {record.row} 行未导出，已记录并继续下一条：{message}')
             continue

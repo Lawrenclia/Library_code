@@ -107,6 +107,20 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
     assert.equal((await page.evaluate(runWOSCommand,{...base,action:'wos_download'})).ok,false);
     assert.equal(await page.evaluate(()=>exportsMade),1);
   });
+  test('WOS split search returns before navigation and exposes one safe read-only result',async()=>{
+    await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
+    const base={...cmd('wos_start_search'),title:'Synthetic paper',doi:'',wos:''};
+    const started=await page.evaluate(runWOSCommand,base);
+    assert.equal(started.ok,true,JSON.stringify(started));assert.equal(started.data.submitted,true);
+    await page.waitForFunction(()=>searches===1);
+    const read=await page.evaluate(runWOSCommand,{...base,action:'wos_read_results'});
+    assert.equal(read.ok,true,JSON.stringify(read));assert.equal(read.data.state,'single');
+    assert.ok(page.url().includes('/summary/'),'read-only probe must not click the result');
+    assert.match(read.data.navigate_url,/\/full-record\/WOS:000123456789012$/);
+    await page.goto(read.data.navigate_url);
+    const verified=await page.evaluate(runWOSCommand,{...base,action:'wos_read_results'});
+    assert.equal(verified.data.state,'record');assert.equal(verified.data.record_url,read.data.navigate_url);
+  });
   test('WOS multiple matches pause without opening the first record',async()=>{
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
     await page.evaluate(()=>wosMany=true);
@@ -157,6 +171,19 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
       assert.ok(page.url().endsWith('/wos/woscc/basic-search'));
       assert.equal(await page.evaluate(()=>searches),1);
     }
+  });
+  test('WOS read-only result probe recognizes a Chinese zero banner split across DOM nodes',async()=>{
+    await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
+    const base={...cmd('wos_start_search'),title:'Missing paper'};
+    await page.evaluate(()=>document.querySelector('button').onclick=()=>{
+      searches++;const alert=document.createElement('section');alert.setAttribute('role','alert');
+      alert.innerHTML='<span>您的</span><span>检索</span><span>未找到</span><span>结果</span>';
+      document.getElementById('main').prepend(alert);
+    });
+    const started=await page.evaluate(runWOSCommand,base);assert.equal(started.ok,true,JSON.stringify(started));
+    await page.waitForFunction(()=>searches===1);
+    const read=await page.evaluate(runWOSCommand,{...base,action:'wos_read_results'});
+    assert.equal(read.ok,true,JSON.stringify(read));assert.equal(read.data.state,'zero');
   });
   test('WOS stale zero-result banner requests a clean reload before any new search click',async()=>{
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
