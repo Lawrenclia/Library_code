@@ -1,0 +1,40 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Offline WOS navigation fixture</title></head><body>
+<main id="main"></main>
+<script>
+// An isolated synthetic page: real document navigation, no WOS API requests.
+const main=document.getElementById('main');
+const ut='WOS:000123456789012';
+const cn=location.hostname==='webofscience.clarivate.cn';
+window.exportsMade=0;
+if(location.pathname.includes('/summary/')){
+  main.innerHTML=`<div role="tab"><b>1</b><span>${cn?'篇文献':'Documents'}</span></div>
+    <article><a href="/wos/woscc/full-record/WOS%3A000123456789012" style="display:contents"><span>Synthetic paper</span></a></article>
+    <aside hidden><a href="/wos/woscc/full-record/WOS:000123456789013">Hidden recommendation</a></aside>`;
+}else if(location.pathname.includes('/full-record/')){
+  main.innerHTML='<h1>Synthetic paper</h1><button id="export"><mat-icon>download</mat-icon>'+(cn?'导出':'Export')+'<mat-icon>expand_more</mat-icon></button>';
+  document.getElementById('export').onclick=()=>{
+    const format=document.createElement('button');format.setAttribute('role','menuitem');
+    format.innerHTML='<mat-icon>description</mat-icon>'+(cn?'制表符分隔文件':'Tab delimited file');main.append(format);
+    format.onclick=()=>{
+      format.remove();const dialog=document.createElement('section');dialog.setAttribute('role','dialog');
+      dialog.innerHTML='<select aria-label="Record Content"><option>Author, Title, Source</option><option>'+(cn?'完整记录':'Full Record')+'</option></select><input type="number" value="4"><input type="number" value="7"><button><mat-icon>download</mat-icon>'+(cn?'导出':'Export')+'</button>';
+      main.append(dialog);
+      dialog.querySelector('button').onclick=()=>{
+        // A partial content/range never produces a successful fixture download.
+        if(!['Full Record','完整记录'].includes(dialog.querySelector('select').value)||[...dialog.querySelectorAll('input')].some(el=>el.value!=='1'))return;
+        exportsMade++;
+        const text='TI\tAU\tAF\tSO\tPY\tC1\tUT\tDI\r\nSynthetic paper\tTest, A\tAlice Test\tSynthetic Journal\t2026\tShanghai Jiao Tong Univ\t'+ut+'\t10.1234/test\r\n';
+        const file=document.createElement('a');file.href=URL.createObjectURL(new Blob([text],{type:'text/plain'}));file.download='wos-offline-'+(cn?'cn':'en')+'.txt';file.click();dialog.remove();
+      };
+    };
+  };
+}else{
+  main.innerHTML='<form><select><option>Topic</option><option>Title</option><option>DOI</option><option>Accession Number</option></select><input type="text"><button type="button"><mat-icon>search</mat-icon>'+(cn?'检索':'Search')+'</button></form>';
+  main.querySelector('button').onclick=()=>{
+    if(main.querySelector('input').value==='Missing synthetic paper'){
+      const banner=document.createElement('section');banner.setAttribute('role','alert');
+      banner.innerHTML=cn?'<span>您的</span><span>检索</span><span>未找到</span><span>结果</span>':'Your search did not return any results';main.prepend(banner);
+    }else location.assign('/wos/woscc/summary/offline');
+  };
+}
+</script></body></html>

@@ -122,3 +122,88 @@ test('manifest grants both exact WOS hosts, not broad wildcard hosts', () => {
   for(const origin of origins)assert.ok(manifest.host_permissions.includes(origin+'/*'));
   assert.ok(!manifest.host_permissions.some(x=>x.includes('*://')||x.includes('://*.')||x==='<all_urls>'));
 });
+
+test('WOS probes read a rendered loading tab immediately instead of waiting for document_idle', async()=>{
+  const origin=origins[1],calls=[],navigations=[];
+  let tab={id:2,url:origin+'/wos/woscc/summary/previous',status:'loading'};
+  const sandbox={URL,Date,setTimeout,runWOSCommand(){},chrome:{
+    tabs:{get:async()=>tab,update:async(id,change)=>{navigations.push(change.url);tab={...tab,...change,status:'loading'};}},
+    scripting:{executeScript:async options=>{
+      calls.push(options);
+      if(options.args[0].action==='wos_start_search'){
+        tab={...tab,url:origin+'/wos/woscc/summary/new',status:'loading'};
+        return [{result:{ok:true,data:{submitted:true}}}];
+      }
+      return [{result:{ok:true,data:tab.url.includes('/summary/')?
+        {state:'single',navigate_url:origin+recordPath}:{state:'record',record_url:origin+recordPath}}}];
+    }}
+  }};
+  vm.createContext(sandbox);vm.runInContext(source,sandbox);
+  const result=await sandbox.dispatchWorkflow({action:'wos_search',title:'Synthetic',expires:Date.now()+30000},{tabId:1,wosTabId:2});
+  assert.equal(result.ok,true);assert.equal(calls.length,3);
+  assert.ok(calls.every(call=>call.injectImmediately===true));
+  assert.deepEqual(navigations,[origin+'/wos/woscc/basic-search',origin+recordPath]);
+});
+
+test('a list still mounted after tabs.update is polled, not navigated twice', async()=>{
+  const origin=origins[0],navigations=[];
+  let tab={id:2,url:origin+'/wos/woscc/basic-search',status:'complete'},reads=0,starts=0;
+  const sandbox={URL,Date,setTimeout,runWOSCommand(){},chrome:{
+    tabs:{get:async()=>tab,update:async(id,change)=>{navigations.push(change.url);tab={...tab,...change};}},
+    scripting:{executeScript:async options=>{
+      if(options.args[0].action==='wos_start_search'){starts++;return [{result:{ok:true,data:{submitted:true}}}];}
+      reads++;
+      return [{result:{ok:true,data:reads<=2?{state:'single',navigate_url:origin+recordPath}:
+        {state:'record',record_url:origin+recordPath}}}];
+    }}
+  }};
+  vm.createContext(sandbox);vm.runInContext(source,sandbox);
+  const result=await sandbox.dispatchWorkflow({action:'wos_search',title:'Synthetic',expires:Date.now()+30000},{tabId:1,wosTabId:2});
+  assert.equal(result.ok,true);assert.equal(starts,1);assert.equal(reads,3);
+  assert.deepEqual(navigations,[origin+recordPath]);
+});
+
+test('navigation probes may transiently lose a frame, but never retry Search', async()=>{
+  const origin=origins[0];let reads=0,starts=0;
+  const sandbox={URL,Date,setTimeout,runWOSCommand(){},chrome:{
+    tabs:{get:async()=>({id:2,url:origin+'/wos/woscc/basic-search',status:'loading'})},
+    scripting:{executeScript:async options=>{
+      if(options.args[0].action==='wos_start_search'){starts++;return [{result:{ok:true,data:{submitted:true}}}];}
+      reads++;
+      if(reads===1)throw new Error('Execution context was destroyed');
+      if(reads===2)return [];
+      return [{result:{ok:true,data:{state:'zero'}}}];
+    }}
+  }};
+  vm.createContext(sandbox);vm.runInContext(source,sandbox);
+  const result=await sandbox.dispatchWorkflow({action:'wos_search',title:'Synthetic',expires:Date.now()+30000},{tabId:1,wosTabId:2});
+  assert.equal(result.ok,false);assert.match(result.error,/WOS 未找到记录/);
+  assert.equal(starts,1);assert.equal(reads,3);
+});
+
+test('a previous full-record DOM is not accepted for the new navigation target', async()=>{
+  const origin=origins[0],other=origin+recordPath.replace('789012','789013');
+  let tab={id:2,url:origin+'/wos/woscc/basic-search',status:'complete'},reads=0,navigations=0;
+  const sandbox={URL,Date,setTimeout,runWOSCommand(){},chrome:{
+    tabs:{get:async()=>tab,update:async(id,change)=>{navigations++;tab={...tab,...change};}},
+    scripting:{executeScript:async options=>{
+      if(options.args[0].action==='wos_start_search')return [{result:{ok:true,data:{submitted:true}}}];
+      reads++;
+      return [{result:{ok:true,data:reads===1?{state:'single',navigate_url:origin+recordPath}:
+        {state:'record',record_url:reads===2?other:origin+recordPath}}}];
+    }}
+  }};
+  vm.createContext(sandbox);vm.runInContext(source,sandbox);
+  const result=await sandbox.dispatchWorkflow({action:'wos_search',title:'Synthetic',expires:Date.now()+30000},{tabId:1,wosTabId:2});
+  assert.equal(result.ok,true);assert.equal(result.data.record_url,origin+recordPath);
+  assert.equal(reads,3);assert.equal(navigations,1);
+});
+
+test('timeout diagnostics distinguish missing totals/links without exposing arbitrary page data',()=>{
+  const message=policy.wosSearchTimeout({summary_route:true,result_total:1,canonical_record_link_count:0,busy:false,
+    title:'PRIVATE_TITLE',url:'https://example.invalid/?token=PRIVATE_KEY'});
+  assert.match(message,/结果页；文献总数 1；安全单篇链接 0；加载中 否/);
+  assert.ok(!message.includes('PRIVATE_'));
+  assert.match(policy.wosSearchTimeout({result_total:'PRIVATE_QUERY',canonical_record_link_count:'PRIVATE_ID'}),/文献总数 未确认；安全单篇链接 未确认/);
+  assert.equal(policy.isWOSRecordPage('https://user:secret@www.webofscience.com'+recordPath,origins[0]),false);
+});

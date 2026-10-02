@@ -36,9 +36,10 @@ async function runWOSCommand(command) {
     while(Date.now()<end){check();if(fn())return;await new Promise(r=>setTimeout(r,180));}
     fail(label+"超时，未自动重复操作");
   };
-  const button=(labels,root=document)=>one(all('button,[role="button"],a',root).filter(el=>labels.includes(caption(el))),labels.join(" / "));
-  // Read the action label, not decorative Material/SVG ligature text. Keep this
-  // search-only: export menus and all write-side checks retain their own guards.
+  const button=(labels,root=document)=>one(all('button,[role="button"],a',root).filter(el=>labels.includes(actionLabel(el))),labels.join(" / "));
+  // Read the action label, not decorative Material/SVG ligature text. Every
+  // action still requires its own exact fixed label; export content/range and
+  // all write-side checks retain their existing guards.
   const searchIcons='mat-icon,.mat-icon,svg,.material-icons,.material-icons-outlined,.material-symbols-outlined,.material-symbols-rounded,.material-symbols-sharp';
   const searchText=el=>{
     if(el.matches('input[type="submit"],input[type="button"]'))return norm(el.value);
@@ -53,6 +54,7 @@ async function runWOSCommand(command) {
     };
     visit(el);return norm(parts.join(''));
   };
+  const actionLabel=el=>searchText(el)||norm(el.getAttribute('aria-label'));
   const searchButton=(field,input)=>{
     if(!field.isConnected||!input.isConnected)fail("文献检索区域已变化，请重新核验页面");
     const short=['search','检索','搜索','檢索','搜尋'];
@@ -100,16 +102,68 @@ async function runWOSCommand(command) {
   const decodedPath = value => {try{return /%(?:2f|5c)/i.test(value)?"":decodeURIComponent(value);}catch{return "";}};
   const fullRecordPath = value => /^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodedPath(value));
   const fullRecord = () => fullRecordPath(location.pathname);
+  // Some WOS title wrappers use display:contents: the anchor has no own box,
+  // while its child text is rendered and clickable. Do not widen visibility for
+  // search/export controls; only this read-only record-link reader needs it.
+  const renderedLink=el=>{
+    if(!el || el.closest('[hidden],[inert],[aria-hidden="true"]'))return false;
+    const style=getComputedStyle(el);
+    if(style.display==='none'||style.visibility==='hidden'||style.visibility==='collapse')return false;
+    if(el.getClientRects().length)return true;
+    return style.display==='contents'&&[...el.querySelectorAll('*')].some(child=>
+      !child.closest('[hidden],[inert],[aria-hidden="true"]')&&visible(child));
+  };
   const recordLinks=()=>{
     const links=new Map();
-    for(const anchor of all('a[href]')){
-      try{
-        const url=new URL(anchor.href,location.href);
-        const path=decodedPath(url.pathname);
-        if(url.origin===location.origin&&fullRecordPath(url.pathname))links.set(path,anchor);
-      }catch{}
+    const controls=document.querySelectorAll('a[href],a[routerlink],a[ng-reflect-router-link],[role="link"][routerlink],[role="link"][ng-reflect-router-link]');
+    for(const anchor of controls){
+      if(!renderedLink(anchor))continue;
+      // Use only explicit route evidence already present in the DOM. Never
+      // construct a record URL from title text, IDs in arbitrary attributes,
+      // onclick code, or the first result. Different targets remain ambiguous.
+      for(const attr of ['href','routerlink','ng-reflect-router-link']){
+        const value=anchor.getAttribute(attr);
+        if(!value)continue;
+        try{
+          const url=new URL(value,location.href);
+          if(url.origin!==location.origin||url.username||url.password||!fullRecordPath(url.pathname))continue;
+          const path=decodedPath(url.pathname).replace(/\/$/,'');
+          const target=url.origin+path;
+          if(!links.has(target))links.set(target,{element:anchor,url:target});
+        }catch{}
+      }
     }
     return links;
+  };
+  const resultTotal=()=>{
+    // Result headers/tabs can render <b>1</b><span>Documents</span> with a CSS
+    // gap, but innerText contains "1Documents". Parse the exact count+unit
+    // label, not a whitespace requirement or the number of rendered cards.
+    const unit='(?:results?|records?|documents?|(?:条|個|个|篇)?\\s*(?:结果|結果|记录|紀錄|文献|文獻))';
+    const number='(?:\\d{1,3}(?:[,.]\\d{3})+|\\d{1,6})';
+    const exact=new RegExp('^('+number+')\\s*'+unit+'$','i');
+    const totals=new Set();
+    const add=match=>{if(match)totals.add(Number(match[1].replace(/[,.]/g,'')));};
+    for(const el of [...document.querySelectorAll('h1,h2,h3,[role="heading"],[role="tab"]')].filter(renderedLink)){
+      if(!el.closest('article,form,a[href*="full-record"],[hidden],[inert],[aria-hidden="true"]'))add(norm(el.innerText).match(exact));
+    }
+    if(!totals.size&&document.body){
+      // Plain containers are also used for counts. Inspect only short, exact
+      // labels and their two parents; a phrase inside a paper title, search
+      // history, or help paragraph must not become a result total.
+      const unitOnly=new RegExp('^'+unit+'$','i');
+      const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+      for(let node=walker.nextNode();node;node=walker.nextNode()){
+        const text=norm(node.nodeValue);
+        if(!exact.test(text)&&!unitOnly.test(text))continue;
+        let el=node.parentElement;
+        for(let depth=0;el&&depth<3;depth++,el=el.parentElement){
+          if(el.closest('article,form,a,[role="link"],nav,aside,[hidden],[inert],[aria-hidden="true"]'))break;
+          if(renderedLink(el))add(norm(el.innerText).match(exact));
+        }
+      }
+    }
+    return {value:totals.size===1?[...totals][0]:null,conflict:totals.size>1,values:[...totals]};
   };
   // A zero-result search stays on basic-search in the current WOS SPA. It is a
   // completed per-paper outcome, not a navigation/connection timeout. Keep the
@@ -135,19 +189,29 @@ async function runWOSCommand(command) {
     return location.origin+location.pathname;
   };
   const resultState = () => {
-    if(fullRecord())return {state:"record",record_url:fingerprint()};
-    if(noResults())return {state:"zero"};
     const urls=recordLinks();
-    const text=norm(document.body?.innerText||"");
-    const countMatch=text.match(/(?:^|\s)(\d{1,6})\s+(?:results?|records?|documents?)(?:\s|$)/i) ||
-      text.match(/(?:^|\s)(\d{1,6})\s*(?:条|個|个|篇)?\s*(?:结果|結果|记录|紀錄|文献|文獻)(?:\s|$)/);
-    const count=countMatch?Number(countMatch[1]):null;
-    if((Number.isInteger(count)&&count>1)||urls.size>1)return {state:"multiple"};
-    if(count===1&&urls.size===1){
-      const anchor=[...urls.values()][0],url=new URL(anchor.href,location.href);
-      return {state:"single",navigate_url:url.origin+url.pathname};
+    const summary=/^\/wos\/woscc\/summary\//.test(location.pathname);
+    const total=summary?resultTotal():{value:null,conflict:false,values:[]};
+    const busy=all('[aria-busy="true"],[role="progressbar"],mat-spinner,mat-progress-bar,.mat-mdc-progress-spinner')
+      .some(el=>!el.closest('[hidden],[inert],[aria-hidden="true"]'));
+    const diagnostic={summary_route:summary,record_route:fullRecord(),busy,result_total:total.value,result_total_conflict:total.conflict,
+      canonical_record_link_count:urls.size};
+    if(fullRecord()){
+      // A new URL alone does not prove the record's DOM has mounted. Avoid
+      // reporting success while the old results/search panel is still rendered.
+      const exports=all('button,[role="button"],a').filter(el=>["Export","导出"].includes(actionLabel(el)));
+      diagnostic.export_action_count=exports.length;
+      if(busy||exports.length!==1)return {state:"loading",diagnostic};
+      return {state:"record",record_url:fingerprint(),diagnostic};
     }
-    return {state:"loading"};
+    if(noResults())return {state:"zero",diagnostic};
+    if(!summary||busy)return {state:"loading",diagnostic};
+    if(total.values.some(count=>count>1)||urls.size>1)return {state:"multiple",diagnostic};
+    if(!total.conflict&&total.value===0&&urls.size===0)return {state:"zero",diagnostic};
+    if(!total.conflict&&total.value===1&&urls.size===1){
+      return {state:"single",navigate_url:[...urls.values()][0].url,diagnostic};
+    }
+    return {state:"loading",diagnostic};
   };
   try {
     check();
@@ -248,20 +312,18 @@ async function runWOSCommand(command) {
       } finally {if(observer)observer.disconnect();}
       if(freshZero())fail("WOS 未找到记录；这不等于未发表，也不自动标记完成");
       if(fullRecord())return {ok:true,data:{record_url:fingerprint()}};
-      const urls=recordLinks();
-      // Full results total must be one, not simply one rendered/visible match.
-      const text=norm(document.body.innerText);
-      const single=/(?:^|\s)1 (?:result|results|document|documents)(?:\s|$)/i.test(text) || /(?:^|\s)1 条(?:结果|记录)(?:\s|$)/.test(text);
-      if(!single || urls.size!==1)fail("WOS 结果不是可确认的唯一记录，请人工选择并核对后使用“导出当前 WOS 文献”");
-      click([...urls.values()][0]);await wait(fullRecord,"打开单篇记录");
+      // Legacy direct-adapter callers share the production result evidence.
+      // Full total must be one, not simply one rendered/visible match.
+      if(resultState().state!=="single")fail("WOS 结果不是可确认的唯一记录，请人工选择并核对后使用“导出当前 WOS 文献”");
+      click([...recordLinks().values()][0].element);await wait(fullRecord,"打开单篇记录");
       return {ok:true,data:{record_url:fingerprint()}};
     }
     const recordURL=fingerprint();
     if(command.action==="wos_prepare_export") {
       if(all('[role="dialog"],mat-dialog-container').length)fail("已有 WOS 弹窗，请人工关闭后再导出");
       click(button(["Export","导出"]));
-      await wait(()=>all('[role="menuitem"],button,a,mat-option').some(el=>["Tab delimited file","Tab-delimited file","Tab delimited","制表符分隔文件","制表符分隔","制表符"].includes(caption(el))),"导出格式",5000);
-      click(one(all('[role="menuitem"],button,a,mat-option').filter(el=>["Tab delimited file","Tab-delimited file","Tab delimited","制表符分隔文件","制表符分隔","制表符"].includes(caption(el))),"Tab delimited"));
+      await wait(()=>all('[role="menuitem"],button,a,mat-option').some(el=>["Tab delimited file","Tab-delimited file","Tab delimited","制表符分隔文件","制表符分隔","制表符"].includes(actionLabel(el))),"导出格式",5000);
+      click(one(all('[role="menuitem"],button,a,mat-option').filter(el=>["Tab delimited file","Tab-delimited file","Tab delimited","制表符分隔文件","制表符分隔","制表符"].includes(actionLabel(el))),"Tab delimited"));
       await wait(()=>all('mat-dialog-container,[role="dialog"]').length,"导出设置",5000);
       const dialogs=all('mat-dialog-container,[role="dialog"]');
       const dialog=one(dialogs.filter(el=>!dialogs.some(other=>other!==el&&el.contains(other))),"导出设置窗口");

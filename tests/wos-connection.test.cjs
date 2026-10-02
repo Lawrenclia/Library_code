@@ -15,7 +15,16 @@ test('WOS pairs and executes without an SA or import tab; rejects backend operat
     storage:{session:{get:async()=>({...state}),clear:async()=>{for(const k of Object.keys(state))delete state[k];},
       set:async values=>Object.assign(state,values)}},
     tabs:{get:async id=>{assert.equal(id,7);return tab;}},
-    scripting:{executeScript:async options=>{injections.push(options);return [{result:{ok:true,data:{}}}];}}
+    scripting:{executeScript:async options=>{
+      injections.push(options);
+      // Pairing is tested through the production split-search dispatcher. A
+      // bare data:{} stub no longer implements that read-only state contract.
+      if(options.args?.[0]?.action==='wos_start_search'){
+        tab.url='https://www.webofscience.com/wos/woscc/full-record/WOS:000123456789012';
+        return [{result:{ok:true,data:{submitted:true}}}];
+      }
+      return [{result:{ok:true,data:{state:'record',record_url:tab.url}}}];
+    }}
   };
   const context=vm.createContext({chrome,URL,Date,AbortSignal,importScripts:()=>{},
     runSACommand:()=>{throw Error('must not call SA');},
