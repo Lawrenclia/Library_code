@@ -235,7 +235,7 @@ class WOSFlow:
                        "import_submit": "提交导入一次…", "import_check": "回读批次和文献…",
                        "import_push": "按 PPT 设置推送一次…"}.get(action, "核验网页…"))
         try:
-            answer = self.bridge.call(action, payload, timeout=75)
+            answer = self.bridge.call(action, payload, timeout=120 if action == "wos_search" else 75)
         except Exception:
             self.audit(action, "已暂停", payload.get("sa_id", ""))
             raise

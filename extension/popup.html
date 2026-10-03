@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>连接 SA 比对助手</title>
+  <title>论文助手 · 浏览器连接</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -16,56 +16,58 @@
       <h1>论文助手</h1>
     </div>
   </header>
-  <p class="intro">连接浏览器，回到桌面继续工作。</p>
+  <p class="intro">这里连接工作页，具体任务在桌面助手中开始。</p>
   <main>
     <section class="card pairing" aria-labelledby="pairing-title">
       <div class="section-heading">
-        <h2 id="pairing-title">连接工作页</h2>
+        <h2 id="pairing-title">1. 连接桌面助手</h2>
         <span class="pill">桌面配对</span>
       </div>
-      <p class="hint">打开已登录的 WOS 页面，粘贴配对码即可连接。下载论文无需打开 SA 或导入页。</p>
+      <p class="hint">仅下载 TXT：在 WOS 文献检索页连接。<br>后台入库：先在「SA 数据比对 → 比对结果」页连接。</p>
       <div class="field-label">
         <label for="token">本次配对码</label>
         <span>来自桌面助手 · 非账号密码</span>
       </div>
       <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴配对码" aria-describedby="pairing-title">
       <div class="pair-actions">
-        <button id="pair" class="primary">连接当前标签页 <span aria-hidden="true">↗</span></button>
-        <button id="disconnect" class="secondary">断开</button>
+        <button id="pair" class="primary">连接此页与桌面助手 <span aria-hidden="true">↗</span></button>
+        <button id="disconnect" class="secondary">断开连接</button>
       </div>
     </section>
-    <details class="card workflow">
+    <details class="card workflow" open>
       <summary>
-        <span>后台处理 / 单条导入</span>
-        <span class="summary-trailing"><span class="optional">可选</span><span class="chevron" aria-hidden="true">›</span></span>
+        <span>2. 设置检索 / 入库页面</span>
+        <span class="summary-trailing"><span class="chevron" aria-hidden="true">›</span></span>
       </summary>
       <div class="workflow-content">
-        <p class="hint">保持 SA 页不动，切到对应标签页后绑定。WOS 支持 .com 与 clarivate.cn。</p>
-        <button id="open-import" class="secondary full-width">打开后台导入页面 <span aria-hidden="true">↗</span></button>
-        <div class="two-columns">
-          <button id="wos" class="secondary">绑定当前 WOS 页</button>
-          <button id="import" class="secondary">绑定导入管理页</button>
-        </div>
-        <p class="caption">导入页位于「数据管理 → 数据导入与批次管理」，不是普通数据列表。</p>
+        <h3>WOS 检索与下载</h3>
+        <p class="hint">在 WOS 文献检索标签页点击。仅下载无需连接后台。</p>
+        <button id="wos" class="secondary full-width">将此页用于 WOS 检索</button>
+        <div class="workflow-divider" aria-hidden="true"></div>
+        <h3>TXT 上传与入库</h3>
+        <p class="hint">先连接 SA 比对结果页并保持打开。另开「数据导入与批次管理」，在该标签页点击“将此页用于 TXT 入库”。</p>
+        <button id="open-import" class="secondary full-width">打开数据导入与批次管理 <span aria-hidden="true">↗</span></button>
+        <button id="import" class="secondary full-width import-binding">将此页用于 TXT 入库</button>
+        <p class="caption">这是「数据管理 → 数据导入与批次管理」，不是普通数据列表。绑定后回桌面检查 TXT，再确认导入。</p>
       </div>
     </details>
     <div class="utilities">
       <button id="inspect" class="utility">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m13 13 4 4M14.5 8.5a6 6 0 1 1-12 0 6 6 0 0 1 12 0Z"/></svg>
-        检查工作页<span class="utility-note">只读</span>
+        查看连接诊断<span class="utility-note">只读</span>
       </button>
       <button id="mute" class="utility">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m9 3-5 4H2v6h2l5 4ZM13 6a6 6 0 0 1 0 8M15.5 3.5a9 9 0 0 1 0 13"/></svg>
-        静音 / 恢复
+        WOS 静音 / 恢复
       </button>
     </div>
     <textarea id="diagnostics" rows="6" readonly hidden aria-label="只读控件诊断"></textarea>
     <section class="status-card" aria-labelledby="status-title">
       <h2 id="status-title"><span class="status-dot" aria-hidden="true"></span>连接状态</h2>
-      <p id="status" role="status">在 WOS 页直接连接即可下载；无需绑定后台工作页。</p>
+      <p id="status" role="status">请先粘贴桌面助手中的配对码，连接当前工作页。</p>
     </section>
   </main>
-  <footer>下载权限仅用于本次 WOS TXT，不读取历史下载、账号或登录令牌。</footer>
+  <footer>支持 WOS .com / clarivate.cn。下载权限仅用于本次 TXT，不读取历史下载、账号或登录令牌；不下载 PDF。</footer>
   <script src="popup.js"></script>
 </body>
 </html>

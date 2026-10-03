@@ -1,0 +1,47 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Offline import service fixture</title></head><body>
+<main id="app">OFFLINE TEST — intercepted synthetic service only
+  <div id="upload" style="display:none"><input type="file" accept=".txt"></div>
+  <div id="push" style="display:none"></div><div id="view" style="display:none"></div>
+</main>
+<script>
+// Public component contract used by the real adapter. Data survives reloads in
+// the test server, and every upload/import/push is a distinct asynchronous POST.
+async function request(route, payload) {
+  const response=await fetch('/__offline/'+route, payload===undefined ? {} : {
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  if(!response.ok)throw new Error('Synthetic service rejected the request');
+  return response.json();
+}
+function shown(component, id) {
+  let value=false;
+  Object.defineProperty(component,'drawer',{get:()=>value,set:next=>{
+    value=next;document.getElementById(id).style.display=next?'block':'none';}});
+}
+const tree={$options:{name:'selectTree'},treeData:[{id:'sjtu-offline',name:'上海交通大学'}],label:'',
+  handleNodeClick(node){this.label=node.name;drawer.form.datasetId=node.id;}};
+const drawer={$options:{name:'WosDataText'},$children:[tree],$el:document.getElementById('upload'),form:{},fileList:[],
+  showDrawer(){this.fileList=[];this.form={datasetId:'',instructions:''};this.drawer=true;},
+  async onSubmit(){await request('import',{...this.form,filename:this.fileList[0].response.data.name});this.drawer=false;}};
+shown(drawer,'upload');
+drawer.$el.querySelector('input').addEventListener('change',async event=>{
+  const file=event.target.files[0];
+  const response=await request('upload',{name:file.name,size:file.size,content:await file.text()});
+  drawer.fileList=[{name:file.name,size:file.size,status:'success',response}];
+});
+const push={$options:{name:'BatchPushModal'},modelFieldsList:[{fieldName:'title'}],form:{},
+  duplicateQueryTypes:[{value:'ppt-composite',label:'唯一标识 + (期刊 & 发表时间 & 页码 & 卷 & 期 & 题名相似度) + 题名相似度'}],
+  showDrawer(row){this.form={batchId:row.id,modelId:row.modelId};this.drawer=true;},
+  async onSubmit(){await request('push',this.form);this.drawer=false;}};
+shown(push,'push');
+const view={$options:{name:'BatchViewModal'},tableData:[],page:{total:0},loading:false,
+  async showDrawer(id){this.id=id;this.tableData=[];this.drawer=true;this.loading=true;
+    const data=await request('metadata?id='+encodeURIComponent(id));
+    this.tableData=data.items;this.page.total=data.total;this.loading=false;}};
+shown(view,'view');
+const vm={$options:{name:'BatchManage'},$children:[drawer,push,view],$refs:{wosDataText:drawer,batchPushModal:push,batchViewModal:view},
+  $nextTick:()=>Promise.resolve(),page:{currentPage:1,pageSize:100,total:0},tableData:[],loading:false,
+  async getData(page,size){this.loading=true;const data=await request('batches?page='+page+'&size='+size);
+    this.tableData=data.items;this.page.total=data.total;this.loading=false;},
+  importWosDataText(){drawer.showDrawer();},batchPush(row){push.showDrawer(row);}};
+document.getElementById('app').__vue__=vm;
+</script></body></html>

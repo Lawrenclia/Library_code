@@ -15,13 +15,14 @@ from ui_theme import P, install_theme, style_text
 
 class ClassifyApp:
     def __init__(self, root, parent=None, on_busy=None, on_review=None, on_export=None,
-                 on_settings=None, on_export_skipped=None):
+                 on_settings=None, on_export_skipped=None, on_import=None):
         self.root = root
         self.embedded = parent is not None
         self.on_busy = on_busy
         self.on_review = on_review
         self.on_export = on_export
         self.on_export_skipped = on_export_skipped
+        self.on_import = on_import
         self.on_settings = on_settings
         self.external_busy = False
         self.queue = queue.Queue()
@@ -50,7 +51,7 @@ class ClassifyApp:
         ttk.Label(header,text='论文分类工作台',style='Title.TLabel').pack(side='left')
         self.key_status=tk.StringVar(value='密钥已配置' if self.store.configured() else '请配置密钥')
         ttk.Label(header,textvariable=self.key_status,style='Muted.TLabel').pack(side='right')
-        ttk.Label(page,text='成果类型与导入渠道，一处查看。每批自动保存，随时继续。',style='Muted.TLabel').pack(anchor='w',pady=(4,14))
+        ttk.Label(page,text='AI 分类辅助选择数据库；WOS 下载可直接开始，无需先分类。分类进度自动保存。',style='Muted.TLabel').pack(anchor='w',pady=(4,14))
         self.summary = tk.StringVar()
         self.metrics={name:tk.StringVar(value='—') for name in ('名单记录','分类任务','已处理','渠道待判定','分类失败')}
         cards=ttk.Frame(page)
@@ -59,7 +60,9 @@ class ClassifyApp:
             cards.columnconfigure(column,weight=1,uniform='cards')
             card=ttk.Frame(cards,style='Card.TFrame',padding=(16,10))
             card.grid(row=0,column=column,sticky='ew',padx=(0,10 if column<len(self.metrics)-1 else 0))
-            ttk.Label(card,text=name,style='Card.TLabel').pack(anchor='w')
+            # Classification progress is not the backend's processed/completed flag.
+            label={'已处理':'已分类','渠道待判定':'数据库待确认'}.get(name,name)
+            ttk.Label(card,text=label,style='Card.TLabel').pack(anchor='w')
             ttk.Label(card,textvariable=value,style='Metric.TLabel').pack(anchor='w',pady=(3,0))
         settings = ttk.Frame(page)
         settings.pack(fill='x')
@@ -73,7 +76,7 @@ class ClassifyApp:
         self.combo.pack(side='left',padx=8)
         self.key_button = ttk.Button(settings,text='API 设置' if on_settings else '密钥设置',command=self.configure_key)
         self.key_button.pack(side='left')
-        ttk.Label(settings,text='每批').pack(side='left',padx=(14,0))
+        ttk.Label(settings,text='AI 每批').pack(side='left',padx=(14,0))
         self.batch = tk.StringVar(value=str(limits(self.model.get())['batch_size']))
         self.batch_combo = ttk.Combobox(settings,textvariable=self.batch,values=('1','2','3','5','8','10'),
                                         state='readonly',width=4)
@@ -83,7 +86,7 @@ class ClassifyApp:
         actions.pack(side='right')
         self.start_button = ttk.Button(actions,text='开始 / 继续分类',command=self.start,style='Primary.TButton')
         self.start_button.pack(side='left')
-        self.stop_button = ttk.Button(actions,text='本批完成后停止',command=self.request_stop,state='disabled')
+        self.stop_button = ttk.Button(actions,text='当前步骤后暂停',command=self.request_stop,state='disabled')
         self.stop_button.pack(side='left',padx=8)
         ttk.Label(page,textvariable=self.summary,style='Muted.TLabel').pack(anchor='w',pady=(10,4))
         self.status = tk.StringVar(value=f'准备就绪；{self.model.get()} 默认每批 {limits(self.model.get())["batch_size"]} 篇。')
@@ -107,29 +110,44 @@ class ClassifyApp:
         # out space in packing order, so a pane packed first would claim the whole
         # cavity and push the footer buttons off the edge -- where they are not merely
         # hidden but unmapped, which is how the WOS download button disappeared.
-        ttk.Label(page,text='AI 建议需核实收录及导出文件。开始会使用模型额度；原名单保持不变。',style='Muted.TLabel').pack(side='bottom',anchor='w',pady=(8,0))
+        ttk.Label(page,text='分类会使用模型额度；AI 建议不代表数据库已收录。下载 TXT 不等于已导入，也不包含论文 PDF。',style='Muted.TLabel').pack(side='bottom',anchor='w',pady=(8,0))
         footer=ttk.Frame(page)
         footer.pack(side='bottom',fill='x',pady=(12,0))
-        self.report_button=ttk.Button(footer,text='查看分类报告',command=lambda:self.open_report('分类建议.md'))
-        self.report_button.pack(side='left')
-        self.channel_button=ttk.Button(footer,text='查看渠道分组',command=lambda:self.open_report('导入渠道分类.md'))
-        self.channel_button.pack(side='left',padx=8)
+        self.batch_scope=tk.StringVar()
+        if self.on_export or self.on_export_skipped or self.on_import:
+            self.scope_label=ttk.Label(footer,textvariable=self.batch_scope,style='Muted.TLabel',wraplength=900)
+            self.scope_label.pack(fill='x',pady=(0,6))
+            batch_actions=ttk.Frame(footer)
+            batch_actions.pack(fill='x',pady=(0,8))
+            self._batch_buttons=[]
+            if self.on_export:
+                self.export_button=ttk.Button(batch_actions,text='下载待补论文 TXT（WOS）',command=self.export_wos,style='Primary.TButton')
+                self._batch_buttons.append(self.export_button)
+            if self.on_export_skipped:
+                self.skipped_export_button=ttk.Button(batch_actions,text='重试跳过论文（WOS）',command=self.export_skipped_wos)
+                self._batch_buttons.append(self.skipped_export_button)
+            if self.on_import:
+                self.import_button=ttk.Button(batch_actions,text='检查 TXT 并导入',command=self.open_import)
+                self._batch_buttons.append(self.import_button)
+            self._action_row(batch_actions,self._batch_buttons)
+        # Reports and single-paper review are separate from whole-owner batch actions.
+        reports=ttk.Frame(footer)
+        reports.pack(fill='x')
+        self.report_button=ttk.Button(reports,text='分类结果报告',command=lambda:self.open_report('分类建议.md'))
+        self.channel_button=ttk.Button(reports,text='按数据库分组',command=lambda:self.open_report('导入渠道分类.md'))
+        self.output_button=ttk.Button(reports,text='打开分类文件夹',command=self.open_output)
+        report_buttons=[self.report_button,self.channel_button,self.output_button]
         if self.on_review:
-            self.review_button=ttk.Button(footer,text='转到人工处理',command=self.review_selected)
-            self.review_button.pack(side='left')
-        if self.on_export:
-            self.export_button=ttk.Button(footer,text='下载 WOS 元数据',command=self.export_wos)
-            self.export_button.pack(side='left',padx=8)
-        if self.on_export_skipped:
-            self.skipped_export_button=ttk.Button(footer,text='搜索跳过项',command=self.export_skipped_wos)
-            self.skipped_export_button.pack(side='left')
-        ttk.Button(footer,text='结果文件夹',command=self.open_output).pack(side='right')
+            self.review_button=ttk.Button(reports,text='人工核对所选论文',command=self.review_selected)
+            report_buttons.append(self.review_button)
+        self._action_row(reports,report_buttons)
+        footer.bind('<Configure>',lambda event:self._wrap_scope(event.width))
         panes=ttk.Panedwindow(page,orient='vertical')
         panes.pack(fill='both',expand=True)
         table=ttk.Frame(panes)
         panes.add(table,weight=3)
         self.tree=ttk.Treeview(table,columns=('rows','title','type','channel','state'),show='headings',selectmode='browse',height=8)
-        for key,title,width in [('rows','原表行号',85),('title','论文题名',430),('type','成果类型',100),('channel','推荐渠道',100),('state','处理状态',120)]:
+        for key,title,width in [('rows','原表行号',85),('title','论文题名',430),('type','成果类型',100),('channel','推荐数据库',100),('state','分类进度',120)]:
             self.tree.heading(key,text=title)
             self.tree.column(key,width=width,minwidth=60,stretch=key=='title')
         scroll=ttk.Scrollbar(table,orient='vertical',command=self.tree.yview)
@@ -154,6 +172,26 @@ class ClassifyApp:
         self.load_results()
         self.poll_id=root.after(150,self.poll)
         root.bind('<Destroy>',lambda event:self.dispose() if event.widget is root else None,add='+')
+
+    @staticmethod
+    def _action_row(frame,buttons):
+        """Keep both workflow and report controls visible in the compact window."""
+        for column,button in enumerate(buttons):
+            frame.columnconfigure(column,weight=1,uniform='actions')
+            button.grid(row=0,column=column,sticky='ew',padx=(0,8 if column<len(buttons)-1 else 0))
+
+    def _wrap_scope(self,width):
+        if hasattr(self,'scope_label'):
+            self.scope_label.configure(wraplength=max(200,width))
+
+    def _sync_scope(self):
+        owner=self.owner.get().strip()
+        if not owner:
+            self.batch_scope.set('请先选择负责人。下载和导入不会跨负责人处理。')
+            return
+        self.batch_scope.set(
+            f'批量范围：{owner}的未完成、零匹配记录；不受表格筛选或选中行影响。\n'
+            '待补下载：未跳过的论文（不限 AI 推荐数据库）；重试下载：备注为 2 的论文。')
 
     def reload(self):
         try:
@@ -216,17 +254,32 @@ class ClassifyApp:
         self.load_results()
 
     def _sync_start_button(self):
+        self._sync_scope()
         if hasattr(self,'start_button'):
             ready=bool(self.owner.get() and self.scope_count and not self.busy and not self.external_busy)
             self.start_button.configure(state='normal' if ready else 'disabled')
 
     def _sync_export_button(self):
-        ready=(bool(self.owner.get() and self.records) and not self.busy and not self.external_busy
+        ready=(bool(self.owner.get() and self.scope_count) and not self.busy and not self.external_busy
                and not self.exporting)
         if hasattr(self,'export_button'):
             self.export_button.configure(state='normal' if ready else 'disabled')
         if hasattr(self,'skipped_export_button'):
             self.skipped_export_button.configure(state='normal' if ready else 'disabled')
+        if hasattr(self,'import_button'):
+            # Previously downloaded files can be imported without a classification
+            # result for the currently selected model.
+            available=bool(self.owner.get().strip() and not self.busy and
+                           not self.external_busy and not self.exporting)
+            self.import_button.configure(state='normal' if available else 'disabled')
+
+    def open_import(self):
+        if not self.on_import or self.busy or self.external_busy or self.exporting:
+            return
+        if not self.owner.get().strip():
+            self.status.set('请先选择负责人，再检查此负责人的 TXT 导入文件。')
+            return
+        self.on_import()
 
     def export_wos(self):
         if self.busy or self.external_busy or self.exporting or not self.on_export:
@@ -234,10 +287,10 @@ class ClassifyApp:
         if not self.owner.get().strip():
             messagebox.showinfo('请选择负责人','请选择负责人。',parent=self.root)
             return
-        # The batch reuses this same stop flag, so "本批完成后停止" also halts an export
+        # The batch reuses this same stop flag, so the pause also halts an export
         # run instead of leaving the window disabled with no way out.
         self.stop.clear()
-        self.status.set(f'正在检索 {self.owner.get()} 的 WOS 记录；可点“本批完成后停止”。')
+        self.status.set(f'正在检索 {self.owner.get()} 的 WOS 记录；可点“当前步骤后暂停”。')
         self.on_export()
 
     def export_skipped_wos(self):
@@ -247,7 +300,7 @@ class ClassifyApp:
             messagebox.showinfo('请选择负责人','请选择负责人。',parent=self.root)
             return
         self.stop.clear()
-        self.status.set(f'正在检索 {self.owner.get()} 的数字 2 跳过项；可点“本批完成后停止”。')
+        self.status.set(f'正在检索 {self.owner.get()} 的数字 2 跳过项；可点“当前步骤后暂停”。')
         self.on_export_skipped()
 
     def set_exporting(self,value):
@@ -445,7 +498,7 @@ class ClassifyApp:
             try:
                 os.startfile(self.result_folder/filename)
             except OSError:
-                messagebox.showerror('无法打开','请通过结果文件夹查看文件。',parent=self.root)
+                messagebox.showerror('无法打开','请点击“打开分类文件夹”查看文件。',parent=self.root)
 
     def request_stop(self):
         self.stop.set()

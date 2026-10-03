@@ -136,9 +136,54 @@ class UnifiedTests(unittest.TestCase):
         self.assertTrue(targets)
         self.assertTrue(all(record.owner==owner and record.skipped and not record.done
                             and record.matches==0 for record in targets))
-        self.assertIn('搜索跳过项',label)
+        self.assertIn('重试跳过论文',label)
         self.assertEqual(rows,sum(record.owner==owner and record.skipped and not record.done
                                   and record.matches==0 for record in self.app.roster.records))
+
+    def test_download_report_and_skipped_file_handoff_reach_import_preview(self):
+        from openpyxl import load_workbook
+        from core import HEADERS
+        from automation import ImportStore, parse_wos
+        from tests.test_automation import sample
+        folder = Path(self.tmp.name)
+        book = load_workbook(self.path)
+        for key, value in {'owner': '谭勋策', 'title': 'Synthetic paper', 'doi': '10.1234/test',
+                           'wos': '', 'matches': 0, 'item_ids': ''}.items():
+            book.active.cell(2, 2 + list(HEADERS).index(key)).value = value
+        book.active.cell(2, 1).value = 2
+        book.save(self.path)
+        book.close()
+        self.app.loaded(read_roster(self.path))
+        record = self.app.roster.records[0]
+        self.app.automation_panel.runtime = folder / 'imports'
+        inbox = folder / 'inbox'
+        inbox.mkdir()
+        exported = inbox / 'paper.txt'
+        exported.write_bytes(sample())
+        result = {'total': 1, 'exported': [{'sa_id': record.sa_id, 'row': record.row, 'title': record.title,
+                  'file': str(exported), 'sha256': parse_wos(sample())['sha256']}], 'failed': {},
+                  'unconfirmed': [], 'inbox': str(inbox), 'attempted': 1, 'remaining': 0}
+        def sync(job, callback, status, **kwargs):
+            self.app.set_busy(True)
+            try:
+                value = job()
+            finally:
+                self.app.set_busy(False)
+            callback(value)
+        with patch.object(self.app, 'run', side_effect=sync), patch('app.BASE', folder), \
+             patch('app.messagebox.showinfo'), patch('wos_batch.export', return_value=result), \
+             patch('wos_batch.default_inbox', return_value=inbox), \
+             patch('wos_batch.default_store', return_value=ImportStore(folder / 'downloads')):
+            self.app._start_wos_export([record], 'synthetic download', rows=1)
+        panel = self.app.wos_import_panel
+        self.assertEqual(panel.plan.scope, 'skipped')
+        self.assertEqual(panel.plan.items[0].record.sa_id, record.sa_id)
+        self.assertEqual(panel.plan.items[0].status, 'ready')
+        self.assertTrue(Path(panel.download_report).is_file())
+        self.assertEqual(self.app.tabs.select(), str(self.app.wos_import_page))
+        self.assertTrue(self.app.roster.records[0].skipped)
+        self.assertFalse(self.app.roster.records[0].done)
+        self.assertIsNone(panel.store().get(record), 'preview must not create an import intent')
 
     def test_integrated_layout_controls_within_window(self):
         self.root.deiconify()

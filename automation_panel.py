@@ -57,13 +57,13 @@ class AutomationPanel:
         self.output.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self.output.pack(fill="both", expand=True)
-        app.button(footer, "继续 / 核验导入结果", self.resume, style="Complete.TButton").pack(fill="x", pady=(8, 4))
+        app.button(footer, "确认入库 / 继续核验批次", self.resume, style="Complete.TButton").pack(fill="x", pady=(8, 4))
         local = ttk.Frame(footer)
         local.pack(fill="x", pady=3)
-        app.button(local, "读取本地 TXT", self.load_file).pack(side="left")
-        app.button(local, "检索并导入当前条目", self.start).pack(side="left", padx=5)
-        app.button(footer, "导出当前 WOS 文献", lambda: self.start(current_wos=True)).pack(fill="x", pady=3)
-        ttk.Label(footer, text="扩展可打开导入页：数据管理 → 数据导入与批次管理。\n绑定 WOS 和该页；不上传 PDF，完成仍需人工批准。", wraplength=425,
+        app.button(local, "选择已有 TXT", self.load_file).pack(side="left")
+        app.button(local, "检索并下载此篇 TXT", self.start).pack(side="left", padx=5)
+        app.button(footer, "只下载 WOS 当前打开的论文", lambda: self.start(current_wos=True)).pack(fill="x", pady=3)
+        ttk.Label(footer, text="下载和选文件均不会入库。核实文献和本库缺失后，再点“确认入库”。\n入库会上传、导入并推送；不会自动完成 SA 任务。", wraplength=425,
                   style="Muted.TLabel").pack(anchor="w", pady=(3, 0))
 
     def show(self, value):
@@ -318,8 +318,9 @@ class AutomationPanel:
                 def job():
                     state = flow.prepare(record, current_wos=current_wos)
                     self.progress.put("已取得 WOS 文献证据。")
-                    return flow.proceed(record) if state["identity_confirmed"] else state
-                app.run(job, self.render_state, "开始单条 WOS 流程…", log_action="WOS 单条导入流程")
+                    # A download action must never silently upload to the library.
+                    return state
+                app.run(job, self.render_state, "下载并核验 WOS TXT；不会上传或导入…", log_action="WOS 单篇下载")
             elif current_wos:
                 raise SafetyStop("当前条目不是零匹配，不允许使用 WOS 补录。")
             elif plan.route == "claim":
@@ -344,32 +345,38 @@ class AutomationPanel:
             if not state:
                 raise SafetyStop("请先自动判断，或在 WOS 选定文献后导出。")
             self.render_state(state)
-            confirm = not state["identity_confirmed"]
-            if confirm:
-                c = state["candidate"]
-                if not messagebox.askyesno("确认单篇文献身份",
-                        f"名单：{record.title}\nWOS：{c['title']}\n作者：{c['authors']}\n{c['wos']}\n\n"
-                        "缺少精确编号匹配或题名有变化。请核实这是该老师提交的同一篇交大成果。\n"
-                        "确认后将上传此 WOS TXT，并按 PPT 规则导入、查重合并和推送一次；不上传 PDF。", parent=app.root):
-                    return
             app.reviewed.set(False)
         except SafetyStop as exc:
             app.note_operation("继续核验 WOS 导入", "已暂停")
             messagebox.showwarning("暂未继续", str(exc), parent=app.root)
             return
         roster = app.roster
-        def job():
+        def inspect():
             status = app.bridge.call("status", {"sa_id": record.sa_id})
             completion = reconcile_processed(roster, record, status.get("row"))
             if completion:
-                return completion, None
+                return completion
             result = app.bridge.call("search", {"sa_id": record.sa_id})
-            completion = reconcile_processed(roster, record, result.get("row"))
-            return completion, None if completion else flow.proceed(record, confirm_identity=confirm)
-        def finished(outcome):
-            completion, state = outcome
+            return reconcile_processed(roster, record, result.get("row"))
+        def checked(completion):
             if completion:
                 self.synced(record, completion)
-            else:
-                self.render_state(state)
-        app.run(job, finished, "先核验后台状态，再继续单条导入…", log_action="继续核验 WOS 导入")
+                return
+            # Check remote completion before showing any import approval. A task
+            # already completed elsewhere needs only the Excel reconciliation.
+            if self.guard() != record:
+                raise SafetyStop("所选论文已变化，请重新核验。")
+            roster.assert_unchanged()
+            confirm = not state["identity_confirmed"]
+            if state["phase"] == "exported":
+                c = state["candidate"]
+                identity_notice = ("缺少精确编号匹配或题名有变化。请核实这是该老师提交的同一篇交大成果。\n"
+                                   if confirm else "题名与编号匹配，完整记录含交大署名。\n")
+                if not messagebox.askyesno("确认这篇论文入库",
+                        f"名单：{record.title}\nWOS：{c['title']}\n作者：{c['authors']}\n{c['wos']}\n\n"
+                        + identity_notice + "请确认已查过本库、确实缺少此篇。\n"
+                        "确认后将上传此 WOS TXT，并按 PPT 规则导入、查重合并和推送一次；不上传 PDF。", parent=app.root):
+                    return
+            app.run(lambda: flow.proceed(record, confirm_identity=confirm), self.render_state,
+                    "继续单条入库；不会重复提交已有批次…", log_action="继续核验 WOS 导入")
+        app.run(inspect, checked, "先核验后台是否已处理…", log_action="入库前核验 SA 状态")

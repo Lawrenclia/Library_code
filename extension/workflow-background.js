@@ -152,7 +152,7 @@ async function dispatchWorkflow(command,pair) {
       lastDiagnostic=probe.data?.diagnostic;
       const state=probe.data?.state;
       if(state==="zero")return {ok:false,error:"[WOS 已暂停] WOS 未找到记录；这不等于未发表，也不自动标记完成"};
-      if(state==="multiple")return {ok:false,error:"[WOS 已暂停] WOS 结果不是可确认的唯一记录，请人工选择并核对后使用“导出当前 WOS 文献”"};
+      if(state==="multiple")return {ok:false,error:"[WOS 已暂停] WOS 结果不是可确认的唯一记录，请人工选择并核对后使用“只下载 WOS 当前打开的论文”"};
       if(state==="record"){
         if(!isWOSRecordPage(probe.data.record_url,workOrigin))throw new Error("WOS 单篇记录网址未通过安全校验");
         if(!navigated || decodedWOSPath(probe.data.record_url).replace(/\/$/,'')===decodedWOSPath(navigationTarget).replace(/\/$/,''))return probe;

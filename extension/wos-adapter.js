@@ -314,7 +314,7 @@ async function runWOSCommand(command) {
       if(fullRecord())return {ok:true,data:{record_url:fingerprint()}};
       // Legacy direct-adapter callers share the production result evidence.
       // Full total must be one, not simply one rendered/visible match.
-      if(resultState().state!=="single")fail("WOS 结果不是可确认的唯一记录，请人工选择并核对后使用“导出当前 WOS 文献”");
+      if(resultState().state!=="single")fail("WOS 结果不是可确认的唯一记录，请人工选择并核对后使用“只下载 WOS 当前打开的论文”");
       click([...recordLinks().values()][0].element);await wait(fullRecord,"打开单篇记录");
       return {ok:true,data:{record_url:fingerprint()}};
     }

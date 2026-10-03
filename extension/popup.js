@@ -4,7 +4,7 @@ document.getElementById("pair").addEventListener("click", async () => {
     const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
     const result = await chrome.runtime.sendMessage({type: "pair", tabId: tab?.id,
       token: document.getElementById("token").value.trim()});
-    status.textContent = result.ok ? "已连接当前页面。WOS 下载请回桌面点击“下载 WOS 元数据”。" : result.error;
+    status.textContent = result.ok ? "已连接此页。下载请回桌面点“下载待补论文 TXT（WOS）”；后台入库请先连接 SA 比对结果页，再绑定另开的数据导入与批次管理页。" : result.error;
     if (result.ok) document.getElementById("token").value = "";
   } catch (error) { status.textContent = error.message; }
 });
@@ -18,7 +18,9 @@ for (const [id, role] of [["wos", "wosTabId"], ["import", "importTabId"]]) {
     try {
       const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
       const result = await chrome.runtime.sendMessage({type: "bind_workflow", role, tabId: tab?.id});
-      status.textContent = result.ok ? "工作页已绑定。请保持标签页打开，回桌面操作。" : result.error;
+      status.textContent = result.ok ? (role === "wosTabId"
+        ? "此页已用于 WOS 检索。保持标签页打开，回桌面下载论文信息 TXT。"
+        : "此页已用于 TXT 入库。保持 SA 比对页和此页打开，回桌面点“检查 TXT 并导入”。") : result.error;
     } catch (error) { status.textContent = error.message; }
   });
 }
