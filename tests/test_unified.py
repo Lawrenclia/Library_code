@@ -111,6 +111,8 @@ class UnifiedTests(unittest.TestCase):
             job()
 
         with patch.object(self.app,'run',side_effect=run), \
+             patch('app.BASE',Path(self.tmp.name)), \
+             patch('wos_batch.preflight',return_value={'extension_version':'0.3.27'}), \
              patch('wos_batch.export',side_effect=download), \
              patch('wos_batch.default_store',side_effect=lambda: __import__('automation').ImportStore(Path(self.tmp.name)/'downloads')), \
              patch('wos_batch.default_inbox',return_value=Path(self.tmp.name)/'inbox'):
@@ -141,6 +143,54 @@ class UnifiedTests(unittest.TestCase):
         self.assertEqual(rows,sum(record.owner==owner and record.skipped and not record.done
                                   and record.matches==0 for record in self.app.roster.records))
 
+    def test_selected_download_keeps_exact_paper_owner_and_completion_guards(self):
+        base=replace(self.app.roster.records[0],matches=0,doi='10.1234/synthetic',done=False)
+        self.app.classifier.owner.set(base.owner)
+        before=file_hash(self.path)
+        for skipped in (False,True):
+            with self.subTest(skipped=skipped):
+                first=replace(base,skipped=skipped)
+                duplicate=replace(first,row=7,sa_id='same-paper-copy')
+                self.app.roster.records=[
+                    replace(first,row=3,sa_id='another-owner',owner='Other'),
+                    replace(first,row=4,sa_id='already-done',done=True),
+                    replace(first,row=5,sa_id='matched',matches=1),
+                    first,duplicate,
+                    replace(first,row=8,sa_id='different-paper',title='Different paper')]
+                item={'rows':[record.row for record in self.app.roster.records],
+                      'title':first.title,'doi':first.doi}
+                with patch.object(self.app,'_wos_export_ready',return_value={}) as ready, \
+                     patch.object(self.app,'_start_wos_export') as start:
+                    self.app.export_selected_wos_metadata(item)
+                ready.assert_called_once_with(base.owner)
+                self.assertEqual(start.call_count,1)
+                self.assertEqual(start.call_args.args[0],[first])
+                self.assertIn('试下载所选论文 TXT',start.call_args.args[1])
+                self.assertEqual(start.call_args.kwargs['rows'],2)
+                self.assertEqual(self.app.last_wos_scope,'skipped' if skipped else 'pending')
+                with patch.object(self.app,'_wos_export_ready',return_value={}), \
+                     patch.object(self.app,'_start_wos_export') as start, \
+                     patch('app.messagebox.showinfo'):
+                    self.app.export_selected_wos_metadata({**item,'title':'Stale title'})
+                start.assert_not_called()
+        self.assertEqual(file_hash(self.path),before)
+
+    def test_incompatible_extension_prevents_batch_search_and_file_operations(self):
+        from core import SafetyStop
+        record=self.app.roster.records[0]
+        jobs=[]
+        before=file_hash(self.path)
+        with patch.object(self.app,'run',side_effect=lambda job,*args,**kwargs:jobs.append(job)), \
+             patch('wos_batch.preflight',side_effect=SafetyStop('插件下载接口不兼容')), \
+             patch('wos_batch.export') as download, patch('wos_batch.default_store') as store:
+            self.app._start_wos_export([record],'fixture download')
+            with self.assertRaisesRegex(SafetyStop,'插件下载接口不兼容'):
+                jobs[0]()
+        download.assert_not_called()
+        store.assert_not_called()
+        self.assertEqual(file_hash(self.path),before)
+        self.app.classifier.set_exporting(False)
+
     def test_worker_download_progress_reaches_its_page_and_finishes_cleanly(self):
         from automation import ImportStore
         record=self.app.roster.records[0]
@@ -154,6 +204,7 @@ class UnifiedTests(unittest.TestCase):
             return {'exported':[],'unconfirmed':[],'remaining':0,'not_exported':1,'session_failures':0}
         values=[]
         with patch.object(self.app,'run',side_effect=hold), \
+             patch('wos_batch.preflight',return_value={'extension_version':'0.3.27'}), \
              patch('wos_batch.export',side_effect=download), \
              patch('wos_batch.default_store',return_value=ImportStore(Path(self.tmp.name)/'downloads')), \
              patch('wos_batch.default_inbox',return_value=Path(self.tmp.name)/'inbox'), \
@@ -230,6 +281,7 @@ class UnifiedTests(unittest.TestCase):
                 self.app.set_busy(False)
             callback(value)
         with patch.object(self.app, 'run', side_effect=sync), patch('app.BASE', folder), \
+             patch('wos_batch.preflight',return_value={'extension_version':'0.3.27'}), \
              patch('app.messagebox.showinfo'), patch('wos_batch.export', return_value=result), \
              patch('wos_batch.default_inbox', return_value=inbox), \
              patch('wos_batch.default_store', return_value=ImportStore(folder / 'downloads')):

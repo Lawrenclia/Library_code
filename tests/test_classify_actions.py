@@ -20,13 +20,14 @@ class ClassifyActionsTests(unittest.TestCase):
         self.skipped=Mock()
         self.review=Mock()
         self.import_files=Mock()
+        self.selected_export=Mock()
         source={'sha256':'fixture','owner':'测试员','pending_only':False,
                 'papers':[{'rows':[2,3]}]}
         with patch('classify_app.BASE',Path(self.tmp.name)), \
              patch('classify_app.list_owners',return_value=['测试员']), \
              patch('classify_app.read_papers',return_value=source):
             self.app=ClassifyApp(self.root,on_export=self.export,on_export_skipped=self.skipped,
-                                 on_review=self.review,on_import=self.import_files)
+                                 on_review=self.review,on_import=self.import_files,on_export_selected=self.selected_export)
             self.app.owner.set('测试员')
             self.app.change_owner()
         self.addCleanup(self.app.dispose)
@@ -51,6 +52,22 @@ class ClassifyActionsTests(unittest.TestCase):
         self.export.assert_not_called()
         self.skipped.assert_not_called()
         self.review.assert_not_called()
+
+    def test_one_paper_download_is_separate_from_batch_and_obeys_busy_state(self):
+        self.app.export_selected_wos()
+        self.selected_export.assert_not_called()
+        item={'rows':[2,3],'title':'Synthetic paper','doi':'10.1234/test','classification':{}}
+        self.app.records=[item]
+        self.app.filter_results()
+        self.app.tree.selection_set('0')
+        self.app.set_external_busy(True)
+        self.app.export_selected_wos()
+        self.selected_export.assert_not_called()
+        self.app.set_external_busy(False)
+        self.app.export_selected_wos()
+        self.selected_export.assert_called_once_with(item)
+        self.export.assert_not_called()
+        self.skipped.assert_not_called()
 
     def test_download_does_not_require_ai_classification(self):
         self.assertEqual(self.app.records, [])
@@ -120,7 +137,7 @@ class ClassifyActionsTests(unittest.TestCase):
                              self.root.winfo_rootx()+self.root.winfo_width())
         for button in (self.app.export_button,self.app.skipped_export_button,self.app.import_button,
                        self.app.report_button,self.app.channel_button,self.app.output_button,
-                       self.app.review_button):
+                       self.app.review_button,self.app.selected_export_button):
             with self.subTest(button=button['text']):
                 self.assertTrue(button.winfo_viewable())
                 self.assertLessEqual(button.winfo_rootx()+button.winfo_width(),

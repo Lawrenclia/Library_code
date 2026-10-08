@@ -62,6 +62,13 @@ const cases=[
         const diagnostic=await page.evaluate(inspectWorkPage);
         assert.equal(diagnostic.result_total,test.total,test.name);
         assert.equal(diagnostic.canonical_record_link_count,result.data.diagnostic.canonical_record_link_count,test.name);
+        const shared=await page.evaluate(inspectWorkPage,{action:'wos_read_results',title:'PRIVATE_QUERY',expires:Date.now()+30000});
+        assert.equal(shared.ok,true,test.name);
+        assert.equal(shared.data.state,test.state,test.name);
+        assert.equal(shared.data.diagnostic.result_total,diagnostic.result_total,test.name);
+        assert.equal(shared.data.diagnostic.canonical_record_link_count,diagnostic.canonical_record_link_count,test.name);
+        if(test.state==='single')assert.equal(new URL(shared.data.navigate_url).pathname,record);
+        assert.ok(!JSON.stringify(shared.data.diagnostic).includes('PRIVATE_'));
         if(test.contents)assert.equal(diagnostic.contents_record_link_count,test.contents,test.name);
         if(test.router)assert.equal(diagnostic.router_record_link_count,test.router,test.name);
         assert.ok(!JSON.stringify(result.data.diagnostic).includes('PRIVATE_'));
@@ -72,8 +79,10 @@ const cases=[
       await page.evaluate(()=>document.getElementById('main').innerHTML='<p>Loading</p>');
       const cmd={action:'wos_read_results',sa_id:'offline',title:'Synthetic',expires:Date.now()+30000};
       assert.equal((await page.evaluate(runWOSCommand,cmd)).data.state,'loading','a record URL alone is not a mounted record');
+      assert.equal((await page.evaluate(inspectWorkPage,cmd)).data.state,'loading');
       await page.evaluate(()=>document.getElementById('main').innerHTML='<h1>PRIVATE_TITLE</h1><button><mat-icon>download</mat-icon>Export<mat-icon>expand_more</mat-icon></button>');
       assert.equal((await page.evaluate(runWOSCommand,cmd)).data.state,'record','decorative export icons do not hide record readiness');
+      assert.equal((await page.evaluate(inspectWorkPage,cmd)).data.state,'record');
       console.log(`PASS ${new URL(origin).hostname} record DOM readiness and decorated export`);
     }
     console.log(`WOS result DOM: ${cases.length*2+4} offline cases passed.`);

@@ -51,6 +51,25 @@ def disconnected_outcome(message):
     return any(marker in text for marker in DISCONNECTED_OUTCOMES)
 
 
+def preflight(bridge):
+    """Read extension capabilities before sending any Search or export click."""
+    try:
+        result=bridge.call('wos_diagnose',{},timeout=15)
+    except SafetyStop as exc:
+        if '未知 WOS 调度命令' in str(exc):
+            raise SafetyStop('当前运行的插件仍是旧版本。请在 Edge 扩展管理页重载到 0.3.27 或更新版本，'
+                             '刷新 WOS 页并重新连接；本轮未提交检索或下载。') from exc
+        raise
+    if (not isinstance(result,dict) or type(result.get('wos_download_protocol')) is not int
+            or result.get('wos_download_protocol')!=1
+            or result.get('result_reader')!='shared-diagnostic'
+            or result.get('read_results_world')!='ISOLATED'
+            or not re.fullmatch(r'\d+\.\d+\.\d+',str(result.get('extension_version','')))):
+        raise SafetyStop('插件下载接口不兼容。请重载 0.3.27 或更新版本、刷新 WOS 页并重新连接；'
+                         '本轮未提交检索或下载。')
+    return {'extension_version':result['extension_version']}
+
+
 def wos_targets(roster, classification, papers, owner=None):
     """Zero-match, unfinished records whose saved classification recommends WOS."""
     channel = {}

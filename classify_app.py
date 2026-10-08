@@ -16,7 +16,7 @@ from ui_theme import P, install_theme, style_text
 
 class ClassifyApp:
     def __init__(self, root, parent=None, on_busy=None, on_review=None, on_export=None,
-                 on_settings=None, on_export_skipped=None, on_import=None):
+                 on_settings=None, on_export_skipped=None, on_import=None,on_export_selected=None):
         self.root = root
         self.embedded = parent is not None
         self.on_busy = on_busy
@@ -24,6 +24,7 @@ class ClassifyApp:
         self.on_export = on_export
         self.on_export_skipped = on_export_skipped
         self.on_import = on_import
+        self.on_export_selected = on_export_selected
         self.on_settings = on_settings
         self.external_busy = False
         self.queue = queue.Queue()
@@ -145,6 +146,9 @@ class ClassifyApp:
         if self.on_review:
             self.review_button=ttk.Button(reports,text='人工核对所选论文',command=self.review_selected)
             report_buttons.append(self.review_button)
+        if self.on_export_selected:
+            self.selected_export_button=ttk.Button(reports,text='试下载所选论文 TXT',command=self.export_selected_wos)
+            report_buttons.append(self.selected_export_button)
         self._action_row(reports,report_buttons)
         footer.bind('<Configure>',lambda event:self._wrap_scope(event.width))
         panes=ttk.Panedwindow(page,orient='vertical')
@@ -272,6 +276,8 @@ class ClassifyApp:
             self.export_button.configure(state='normal' if ready else 'disabled')
         if hasattr(self,'skipped_export_button'):
             self.skipped_export_button.configure(state='normal' if ready else 'disabled')
+        if hasattr(self,'selected_export_button'):
+            self.selected_export_button.configure(state='normal' if ready else 'disabled')
         if hasattr(self,'import_button'):
             # Previously downloaded files can be imported without a classification
             # result for the currently selected model.
@@ -312,6 +318,19 @@ class ClassifyApp:
         self.on_export_skipped()
         if not self.exporting:
             self.status.set('下载未开始；请按弹窗提示检查负责人、跳过项和浏览器连接。')
+
+    def export_selected_wos(self):
+        if self.busy or self.external_busy or self.exporting or not self.on_export_selected:
+            return
+        selected=self.tree.selection()
+        if not selected or not self.owner.get().strip():
+            self.status.set('请先选择负责人，并在分类结果表格中选择一篇论文。')
+            return
+        self.stop.clear()
+        self.status.set('正在检查所选论文及浏览器连接…')
+        self.on_export_selected(self.records[int(selected[0])])
+        if not self.exporting:
+            self.status.set('下载未开始；请按提示检查所选论文及浏览器连接。')
 
     def set_exporting(self,value):
         """A batch export runs through the app's shared busy state, not set_busy()."""

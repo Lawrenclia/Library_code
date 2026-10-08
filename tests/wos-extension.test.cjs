@@ -66,6 +66,11 @@ const fixture=fs.readFileSync(path.join(__dirname,'fixtures/wos-navigation.html'
         return chrome.runtime.sendMessage({type:'pair',tabId:tabs[0].id,token});
       },{origin,token:pair.token});
       assert.equal(paired.ok,true,JSON.stringify(paired));
+      const ready=await invoke('wos_diagnose',{});
+      assert.equal(ready.ok,true,JSON.stringify(ready));
+      assert.equal(ready.data.extension_version,'0.3.27');
+      assert.equal(ready.data.result_reader,'shared-diagnostic');
+      console.log(`PASS ${origin} actual extension capability handshake before any search`);
       const missing=await invoke('wos_search',{sa_id:'offline-missing',title:'Missing synthetic paper',doi:'',wos:''});
       assert.equal(missing.ok,false);assert.match(missing.error,/WOS 未找到记录/);
       console.log(`PASS ${origin} zero results return through real extension without losing pairing`);
@@ -89,7 +94,7 @@ const fixture=fs.readFileSync(path.join(__dirname,'fixtures/wos-navigation.html'
       assert.equal(await site.evaluate(()=>exportsMade),1,'a submitted export is not clicked twice');
       console.log(`PASS ${origin} one Full Record TXT download correlated and verified on disk; repeat submission refused`);
     }
-    console.log('WOS extension: 8 end-to-end checks passed across both origins. Synthetic pages/files only.');
+    console.log('WOS extension: 10 end-to-end checks passed across both origins. Synthetic pages/files only.');
   }finally{
     if(context)await context.close();
     backend.stdin.end(JSON.stringify({exit:true})+'\n');

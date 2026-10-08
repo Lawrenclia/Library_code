@@ -22,7 +22,18 @@ const isWOSRecordPage = (url,origin) => {
   try {const u=new URL(url);return isWOSPage(url) && u.origin===origin && /^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodedWOSPath(url));}
   catch {return false;}
 };
-const transientInjectionError = error => /(?:execution context (?:was )?destroyed|frame (?:with ID \d+ )?(?:was removed|is not ready)|no frame with id|cannot find context with specified id|WOS 只读探针在页面切换期间未返回结果)/i.test(String(error?.message||error));
+const transientInjectionError = error => /(?:execution context (?:was )?destroyed|frame (?:with ID \d+ )?(?:was removed|is not ready)|no frame with id|cannot find context with specified id|WOS 只读探针在页面切换期间未返回结果|WOS 只读探针响应超时)/i.test(String(error?.message||error));
+async function boundedWOSProbe(promise,expires) {
+  // Only reads may time out and be observed again. Never put Search/export or
+  // import submissions in this race: their late outcomes must not be retried.
+  let timer;
+  const budget=Math.max(1,Math.min(8000,expires-Date.now()-12000));
+  try {
+    return await Promise.race([promise,new Promise((_,reject)=>{
+      timer=setTimeout(()=>reject(new Error('WOS 只读探针响应超时')),budget);
+    })]);
+  } finally {if(typeof clearTimeout==='function')clearTimeout(timer);}
+}
 function wosSearchTimeout(diagnostic) {
   // Never echo arbitrary page text, query strings, titles or target URLs in an
   // error. These few typed fields also help distinguish a parser gap from WOS
@@ -73,6 +84,9 @@ async function dispatchWorkflow(command,pair) {
   let tab=await chrome.tabs.get(id);
   if(!validRolePage(tab.url,role))throw new Error("绑定的工作标签页已切换或未登录，请人工返回");
   const workOrigin=new URL(tab.url).origin;
+  if(command.action==='wos_diagnose')return {ok:true,data:{
+    extension_version:chrome.runtime.getManifest().version,
+    wos_download_protocol:1,result_reader:'shared-diagnostic',read_results_world:'ISOLATED'}};
   const execute=async(fn,cmd)=>{
     const current=await chrome.tabs.get(id);
     if(!validRolePage(current.url,role))throw new Error("工作标签页目标发生变化");
@@ -86,8 +100,9 @@ async function dispatchWorkflow(command,pair) {
     // make a visible record readable in diagnostics but absent during a run.
     // Search/export/import interactions retain their existing MAIN environment.
     const world=cmd.action==="wos_read_results"?"ISOLATED":"MAIN";
-    const results=await chrome.scripting.executeScript({target:{tabId:id},world,func:fn,args:[cmd],
+    const pending=chrome.scripting.executeScript({target:{tabId:id},world,func:fn,args:[cmd],
       ...(role==="wosTabId"?{injectImmediately:true}:{})});
+    const results=cmd.action==='wos_read_results'?await boundedWOSProbe(pending,cmd.expires):await pending;
     const result=results[0]?.result;
     if(!result)throw new Error(cmd.action==="wos_read_results"?"WOS 只读探针在页面切换期间未返回结果":"工作页面没有返回结果");
     return result;
@@ -148,7 +163,7 @@ async function dispatchWorkflow(command,pair) {
       if(url.origin!==workOrigin)throw new Error("WOS 域名在检索中发生变化，请核验登录/机构访问后重新绑定");
       if(!isWOSPage(tab.url))throw new Error("WOS 检索跳转离开了已绑定工作区，请人工核验");
       let probe;
-      try {probe=await execute(runWOSCommand,{...command,action:"wos_read_results"});}
+      try {probe=await execute(inspectWorkPage,{...command,action:"wos_read_results"});}
       catch(error){
         if(transientInjectionError(error)){await new Promise(r=>setTimeout(r,500));continue;}
         throw error;
@@ -215,4 +230,4 @@ async function dispatchWorkflow(command,pair) {
   } finally {chrome.downloads.onCreated.removeListener(listener);}
 }
 if(typeof module!=="undefined")module.exports={validRolePage,workflowBindingError,isExpectedWOSDownload,
-  shouldReloadWOSSearch,isWOSRecordPage,transientInjectionError,wosSearchTimeout};
+  shouldReloadWOSSearch,isWOSRecordPage,transientInjectionError,wosSearchTimeout,boundedWOSProbe};

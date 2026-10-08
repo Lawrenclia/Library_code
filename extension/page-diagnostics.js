@@ -1,10 +1,15 @@
-/* User-clicked read-only diagnosis. Never reads query input values, cookies, storage,
- * full HTML, or arbitrary URLs, and never transmits diagnostics to a server. */
-function inspectWorkPage() {
+/* Shared read-only diagnosis/result probe. Never reads input values, cookies or
+ * storage. Manual diagnosis exposes counts only. The authenticated dispatcher
+ * may receive one strictly validated DOM record URL for navigation, never HTML. */
+function inspectWorkPage(command) {
+  const probing=command?.action==='wos_read_results';
+  const fail=message=>probing?{ok:false,error:'[WOS 已暂停] '+message}:{error:message};
   const u=new URL(location.href);
   const wos=["https://www.webofscience.com","https://webofscience.clarivate.cn"].includes(u.origin) && u.pathname.startsWith("/wos/");
   const admin=["http:","https:"].includes(u.protocol) && u.hostname==="admin.ir.lib.sjtu.edu.cn";
-  if((!wos && !admin) || u.username || u.password)return {error:"非工作网站"};
+  if((!wos && !admin) || u.username || u.password)return fail('非工作网站');
+  if(probing&&(!wos||!u.pathname.startsWith('/wos/woscc/')))return fail('请在 WOS 核心合集的文献页面操作');
+  if(probing&&(!Number.isFinite(command.expires)||Date.now()>=command.expires-12000))return fail('WOS 只读检查已超时，未重复检索');
   const visible=el=>el.getClientRects().length>0&&getComputedStyle(el).visibility!=="hidden";
   const text=String(document.body?.innerText||"");
   const normal=s=>String(s||"").replace(/\s+/g," ").trim().slice(0,120);
@@ -36,9 +41,8 @@ function inspectWorkPage() {
     in_navigation:!!el.closest('nav,header,footer,aside,[role="navigation"],[role="banner"]'),
     in_form:!!el.closest('form'),form_associated:!!el.form,
     disabled:!!el.disabled||el.getAttribute('aria-disabled')==='true'}));
-  // Keep the read-only result rules aligned with wos-adapter.js. Both functions
-  // are serialized independently by chrome.scripting; DOM regression tests
-  // compare their counts. Only counts/booleans leave this reader, never targets.
+  // Production navigation and user diagnosis now use this exact same reader,
+  // not two copies that can disagree after page or extension changes.
   const renderedLink=el=>{
     if(el.closest('[hidden],[inert],[aria-hidden="true"]'))return false;
     const style=getComputedStyle(el);
@@ -95,7 +99,7 @@ function inspectWorkPage() {
     .some(el=>visible(el)&&!el.closest('[hidden],[inert],[aria-hidden="true"]'));
   let recordRoute=false;
   try{recordRoute=!/%(?:2f|5c)/i.test(u.pathname)&&/^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodeURIComponent(u.pathname));}catch{}
-  return {site:u.hostname,path:u.pathname,route:u.hash.split("?")[0],
+  const data={site:u.hostname,path:u.pathname,route:u.hash.split("?")[0],
     wos_error:/Oops,?\s*something went wrong!?/i.test(text),
     summary_route:summary,record_route:recordRoute,
     zero_result:noResult||(summary&&totals.size===1&&totals.has(0)&&!recordLinks.size&&!busy),busy,
@@ -106,5 +110,30 @@ function inspectWorkPage() {
     fielded_search:/Fielded Search|字段检索|字段搜索/i.test(text),
     wos_import_button:/WOS\s*数据导入\s*[（(]\s*Txt\s*[）)]/i.test(text),
     controls,buttons,visible_button_count:buttonElements.length};
+  if(!probing)return data;
+  if(data.wos_error)return fail('WOS 网站报错：Oops, something went wrong! 请先恢复机构访问或检索页面');
+  if([...document.querySelectorAll('iframe[src*="captcha"],input[type="password"],#challenge-form')].some(visible))
+    return fail('登录或验证码需要人工处理');
+  if([...document.querySelectorAll('[role="dialog"],mat-dialog-container')].some(visible))
+    return fail('WOS 有弹窗，请人工处理');
+  const diagnostic={summary_route:summary,record_route:recordRoute,busy,
+    result_total:data.result_total,result_total_conflict:data.result_total_conflict,
+    canonical_record_link_count:recordLinks.size};
+  const result=(state,more={})=>({ok:true,data:{state,diagnostic,...more}});
+  if(recordRoute){
+    const ut=decodeURIComponent(u.pathname).match(/WOS:\d{15}/)[0];
+    if(command.wos&&command.wos!==ut)return fail('WOS 页面入藏号与名单不一致');
+    const exports=[...document.querySelectorAll('button,[role="button"],a')].filter(el=>
+      visible(el)&&['Export','导出'].includes(cleanText(el)||normal(el.getAttribute('aria-label'))));
+    diagnostic.export_action_count=exports.length;
+    return busy||exports.length!==1?result('loading'):result('record',{record_url:u.origin+u.pathname});
+  }
+  if(noResult)return result('zero');
+  if(!summary||busy)return result('loading');
+  if([...totals].some(count=>count>1)||recordLinks.size>1)return result('multiple');
+  if(data.zero_result)return result('zero');
+  if(!data.result_total_conflict&&data.result_total===1&&recordLinks.size===1)
+    return result('single',{navigate_url:u.origin+[...recordLinks][0]});
+  return result('loading');
 }
 if(typeof module!=="undefined")module.exports={inspectWorkPage};

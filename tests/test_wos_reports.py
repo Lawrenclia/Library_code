@@ -31,13 +31,15 @@ class DownloadReportTests(unittest.TestCase):
         self.assertIn('论文总数：0', first.read_text(encoding='utf-8'))
 
     def test_paths_and_all_successful_and_unconfirmed_items_are_saved(self):
-        result = {'exported': [{'row': 2, 'sa_id': 'one', 'title': '论文一', 'file': 'D:/test/one.txt'}],
+        result = {'extension_version':'0.3.27',
+                  'exported': [{'row': 2, 'sa_id': 'one', 'title': '论文一', 'file': 'D:/test/one.txt'}],
                   'unconfirmed': [{'row': 3, 'sa_id': 'two', 'title': '论文二', 'archive': 'D:/test/hash.txt'}]}
         report = save_download_report(result, 'Test', 'pending', self.root)
         text = report.read_text(encoding='utf-8')
         self.assertIn('D:/test/one.txt', text)
         self.assertIn('D:/test/hash.txt', text)
         self.assertIn('论文总数：2', text)
+        self.assertIn('浏览器插件：0.3.27', text)
 
     def test_unknown_objects_secrets_and_markdown_are_not_exposed(self):
         result = {'api_key': 'never-serialize-this', '_source_update': object(),

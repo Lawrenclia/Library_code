@@ -35,6 +35,7 @@ def save_download_report(result, owner, scope, root):
     lines = ["# WOS 下载结果", "", "```text",
              f"时间：{now:%Y-%m-%d %H:%M:%S}（北京时间）",
              f"负责人：{_text(owner)}",
+             f"浏览器插件：{_text(result.get('extension_version', '未记录'))}",
              f"范围：{'已跳过论文（备注为 2）' if scope == 'skipped' else '待补论文（不含跳过项）'}",
              f"论文总数：{total}；已尝试：{attempted}；尚未执行：{remaining}",
              f"文件已采纳：{len(exported)}；身份待核验：{len(unconfirmed)}",

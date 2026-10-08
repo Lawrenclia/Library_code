@@ -8,7 +8,7 @@ from automation import ImportStore
 from core import Record, SafetyStop
 from submission_prepare import matches_paper
 from tests.test_automation import sample
-from wos_batch import (all_targets, disconnected_outcome, export, plan, roster_rows,
+from wos_batch import (all_targets, disconnected_outcome, export, plan, preflight, roster_rows,
                        safe_name, skipped_roster_rows, skipped_targets, wos_targets)
 
 
@@ -136,6 +136,34 @@ class PlanTests(unittest.TestCase):
 
         with self.assertRaises(TypeError):
             plan(FakeRoster())
+
+
+class PreflightTests(unittest.TestCase):
+    def test_running_capabilities_are_checked_before_search(self):
+        bridge=Mock(call=Mock(return_value={'extension_version':'0.3.27','wos_download_protocol':1,
+                    'result_reader':'shared-diagnostic','read_results_world':'ISOLATED'}))
+        self.assertEqual(preflight(bridge),{'extension_version':'0.3.27'})
+        bridge.call.assert_called_once_with('wos_diagnose',{},timeout=15)
+
+    def test_old_or_incompatible_extension_fails_without_a_search(self):
+        results=({}, {'extension_version':'0.3.26','wos_download_protocol':1,
+                      'result_reader':'other','read_results_world':'ISOLATED'},
+                 {'extension_version':'0.3.27','wos_download_protocol':True,
+                  'result_reader':'shared-diagnostic','read_results_world':'ISOLATED'})
+        for result in results:
+            bridge=Mock(call=Mock(return_value=result))
+            with self.assertRaisesRegex(SafetyStop,'重载'):
+                preflight(bridge)
+            self.assertEqual(bridge.call.call_count,1)
+        bridge=Mock(call=Mock(side_effect=SafetyStop('[扩展 0.3.25] 未知 WOS 调度命令')))
+        with self.assertRaisesRegex(SafetyStop,'仍是旧版本'):
+            preflight(bridge)
+        self.assertEqual(bridge.call.call_count,1)
+
+    def test_genuine_connection_failure_is_not_hidden_as_a_version_problem(self):
+        bridge=Mock(call=Mock(side_effect=SafetyStop('浏览器未连接')))
+        with self.assertRaisesRegex(SafetyStop,'浏览器未连接'):
+            preflight(bridge)
 
 
 class ExportTests(unittest.TestCase):

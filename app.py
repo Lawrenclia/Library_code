@@ -105,6 +105,7 @@ class App:
                                    on_busy=self.set_busy,on_review=self.review_classified,
                                    on_export=self.export_wos_metadata,on_settings=self.open_settings,
                                    on_export_skipped=self.export_skipped_wos_metadata,
+                                   on_export_selected=self.export_selected_wos_metadata,
                                    on_import=self.open_wos_import)
         from submission_panel import SubmissionPanel
         self.submission_page=ttk.Frame(self.tabs,padding=20)
@@ -232,6 +233,23 @@ class App:
         rows=len(skipped_roster_rows(self.roster,owner))
         self._start_wos_export(skipped_targets(self.roster,owner),f'重试跳过论文（WOS）·{owner}',rows=rows)
 
+    def export_selected_wos_metadata(self,item):
+        """Download one exact roster paper, independent of the batch scope."""
+        owner=self.classifier.owner.get().strip()
+        if self._wos_export_ready(owner) is None:
+            return
+        title=str(item.get('title') or '').strip()
+        doi=str(item.get('doi') or '').strip()
+        rows=[record for record in self.roster.records if record.owner==owner and not record.done
+              and record.matches==0 and record.row in item.get('rows',[])
+              and record.title.strip()==title and record.doi.strip()==doi]
+        if not rows:
+            messagebox.showinfo('此篇不能下载','所选论文没有对应的未完成、零匹配名单记录；请核对负责人并重读名单。',parent=self.root)
+            return
+        record=rows[0]
+        self.last_wos_owner,self.last_wos_scope=owner,'skipped' if record.skipped else 'pending'
+        self._start_wos_export([record],f'试下载所选论文 TXT·{owner}',rows=len(rows))
+
     def _start_wos_export(self, targets, label, rows=None):
         if not targets:
             messagebox.showinfo('没有待导出的记录',
@@ -258,11 +276,15 @@ class App:
             except Exception:
                 report('log.txt 保存失败；本轮完整结果仍将单独保存，请检查文件权限。')
         def job():
-            from wos_batch import default_store
+            from wos_batch import default_store, preflight
+            report('正在确认浏览器插件版本和下载接口（最多 15 秒）')
+            connection=preflight(bridge)
+            report(f'已连接插件 {connection["extension_version"]}；准备下载 {total} 篇')
             store=default_store()
             result=export_batch(targets,bridge,store,default_inbox(),
                                 stop=self.classifier.stop,unchanged=roster.assert_unchanged,
                                 progress=report, audit=audit)
+            result.update(connection)
             # Provenance is recorded only for files that passed the existing strong
             # identity check and were actually copied into the intake directory.
             # Zero results, ambiguous results and archived weak matches stay blank.
