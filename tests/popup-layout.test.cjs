@@ -15,6 +15,12 @@ const root=path.resolve(__dirname,'..');
         window.calls.push(message);return {ok:true};}}};
     });
     await page.goto(pathToFileURL(path.join(root,'extension/popup.html')).href);
+    const folder=path.join(root,'runtime/ui-preview');fs.mkdirSync(folder,{recursive:true});
+    await page.screenshot({path:path.join(folder,'popup-0.3.25.png')});
+    assert.equal(await page.locator('.workflow').evaluate(el=>el.open),false);
+    const status=await page.locator('#status').boundingBox();
+    assert.ok(status.y+status.height<=600,'connection status must be visible on opening');
+    await page.locator('summary').click();
     const labels={pair:'连接此页与桌面助手',wos:'将此页用于 WOS 检索',import:'将此页用于 TXT 入库',
       'open-import':'打开数据导入与批次管理',inspect:'查看连接诊断',mute:'WOS 静音 / 恢复',disconnect:'断开连接'};
     for (const [id,text] of Object.entries(labels)) {
@@ -36,9 +42,15 @@ const root=path.resolve(__dirname,'..');
     assert.deepEqual(calls.map(value=>value.type),['pair','bind_workflow','bind_workflow']);
     assert.deepEqual(calls.slice(1).map(value=>value.role),['wosTabId','importTabId']);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
-    const folder=path.join(root,'runtime/ui-preview');fs.mkdirSync(folder,{recursive:true});
+    await page.locator('#status').evaluate(el=>{el.textContent='长连接诊断示例 '.repeat(100);});
+    const card=await page.locator('.status-card').boundingBox();
+    assert.ok(card.height<180,'long status must not squeeze the other controls');
+    await page.locator('#diagnostics').evaluate(el=>{el.hidden=false;el.value='synthetic-diagnostic-'.repeat(100);});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await page.locator('#status').evaluate(el=>{el.textContent='布局检查完成';});
+    await page.locator('#diagnostics').evaluate(el=>{el.hidden=true;});
     await page.evaluate(()=>window.scrollTo(0,0));
-    await page.screenshot({path:path.join(folder,'popup-0.3.24.png'),fullPage:true});
-    console.log('PASS popup: 7 clear actions fit 400px, WOS/import roles unchanged; isolated preview saved');
+    await page.screenshot({path:path.join(folder,'popup-0.3.25-expanded.png'),fullPage:true});
+    console.log('PASS popup: collapsed/expanded layout and long diagnostics fit; 7 actions and WOS/import roles unchanged');
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

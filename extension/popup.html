@@ -30,14 +30,18 @@
       </div>
       <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴配对码" aria-describedby="pairing-title">
       <div class="pair-actions">
-        <button id="pair" class="primary">连接此页与桌面助手 <span aria-hidden="true">↗</span></button>
+        <button id="pair" class="primary"><span class="button-label">连接此页与桌面助手</span><span class="button-arrow" aria-hidden="true">↗</span></button>
         <button id="disconnect" class="secondary">断开连接</button>
       </div>
     </section>
-    <details class="card workflow" open>
+    <section class="status-card" aria-labelledby="status-title">
+      <h2 id="status-title"><span class="status-dot" aria-hidden="true"></span>连接状态</h2>
+      <p id="status" role="status">请先粘贴桌面助手中的配对码，连接当前工作页。</p>
+    </section>
+    <details class="card workflow">
       <summary>
         <span>2. 设置检索 / 入库页面</span>
-        <span class="summary-trailing"><span class="chevron" aria-hidden="true">›</span></span>
+        <span class="summary-trailing"><span class="optional">展开</span><span class="chevron" aria-hidden="true">›</span></span>
       </summary>
       <div class="workflow-content">
         <h3>WOS 检索与下载</h3>
@@ -46,7 +50,7 @@
         <div class="workflow-divider" aria-hidden="true"></div>
         <h3>TXT 上传与入库</h3>
         <p class="hint">先连接 SA 比对结果页并保持打开。另开「数据导入与批次管理」，在该标签页点击“将此页用于 TXT 入库”。</p>
-        <button id="open-import" class="secondary full-width">打开数据导入与批次管理 <span aria-hidden="true">↗</span></button>
+        <button id="open-import" class="secondary full-width"><span class="button-label">打开数据导入与批次管理</span><span class="button-arrow" aria-hidden="true">↗</span></button>
         <button id="import" class="secondary full-width import-binding">将此页用于 TXT 入库</button>
         <p class="caption">这是「数据管理 → 数据导入与批次管理」，不是普通数据列表。绑定后回桌面检查 TXT，再确认导入。</p>
       </div>
@@ -62,10 +66,6 @@
       </button>
     </div>
     <textarea id="diagnostics" rows="6" readonly hidden aria-label="只读控件诊断"></textarea>
-    <section class="status-card" aria-labelledby="status-title">
-      <h2 id="status-title"><span class="status-dot" aria-hidden="true"></span>连接状态</h2>
-      <p id="status" role="status">请先粘贴桌面助手中的配对码，连接当前工作页。</p>
-    </section>
   </main>
   <footer>支持 WOS .com / clarivate.cn。下载权限仅用于本次 TXT，不读取历史下载、账号或登录令牌；不下载 PDF。</footer>
   <script src="popup.js"></script>
