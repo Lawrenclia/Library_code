@@ -195,6 +195,29 @@ class ExportTests(unittest.TestCase):
         export(targets, bridge, store, self.inbox)
         self.assertEqual(bridge.call.call_count, calls)
 
+    def test_progress_reports_each_stage_before_waiting_for_the_browser(self):
+        updates=[]
+        bridge=self.bridge_for(sample())
+        original=bridge.call.side_effect
+        def call(action,payload,timeout=75):
+            self.assertIn('第 1/1 篇',updates[-1])
+            self.assertIn('原表第 2 行',updates[-1])
+            self.assertIn('检索并核验' if action=='wos_search' else '导出完整记录',updates[-1])
+            self.assertIn(f'{timeout} 秒',updates[-1])
+            return original(action,payload,timeout)
+        bridge.call.side_effect=call
+        store=ImportStore(self.root/'downloads')
+        result=export(self.selected(),bridge,store,self.inbox,progress=updates.append)
+        self.assertEqual(len(result['exported']),1)
+        self.assertTrue(any('核验下载文件' in update for update in updates))
+        self.assertIn('TXT 已保存',updates[-1])
+        calls=bridge.call.call_count
+        updates.clear()
+        export(self.selected(),bridge,store,self.inbox,progress=updates.append)
+        self.assertEqual(bridge.call.call_count,calls)
+        self.assertTrue(any('复用已保存' in update for update in updates))
+        self.assertFalse(any('本步最多' in update for update in updates))
+
     def test_download_does_not_require_sjtu_affiliation_or_call_import(self):
         bridge=self.bridge_for(sample(C1='Another University'))
         result=export(self.selected(),bridge,ImportStore(self.root/'downloads'),self.inbox)

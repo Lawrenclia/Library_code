@@ -5,6 +5,7 @@ import os
 from copy import deepcopy
 import queue
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
@@ -240,7 +241,14 @@ class App:
         from wos_batch import default_inbox, export as export_batch
         roster=self.roster
         bridge=self.bridge
-        report=self.automation_panel.progress.put
+        self.classifier.set_exporting(True)
+        generation=self.classifier.export_generation
+        def report(message):
+            # Workers only enqueue; Tk variables are updated by the UI's polls.
+            # Keep the manual page informed, and also update the page that owns
+            # the download button instead of leaving it on a static AI percentage.
+            self.automation_panel.progress.put(message)
+            self.classifier.queue.put(('download_progress',(generation,message,time.monotonic())))
         total=len(targets)
         scope=(f'名单 {rows} 条记录，同一篇论文合并为 {total} 份文件' if rows and rows!=total
                else f'名单范围 {total} 条')
@@ -316,6 +324,13 @@ class App:
             if result.get('disconnected'):
                 detail+=(f'\n\n浏览器会话已不可继续（断连、回传超时或旧命令仍占用），整批已经停止；剩余 '
                          f'{result.get("remaining",0)} 条尚未执行。检查当前网页，重新连接并绑定 WOS 页后再继续。')
+            outcome='已暂停' if result.get('stopped') else '已结束'
+            self.classifier.status.set(
+                f'WOS 下载{outcome} · 已核验 TXT {len(result["exported"])} 篇 · '
+                f'待核验 {len(result.get("unconfirmed",[]))} 篇 · '
+                f'无可用记录 {result.get("not_exported",0)} 篇 · '
+                f'页面/会话问题 {result.get("session_failures",0)} 篇 · '
+                f'未执行 {result.get("remaining",0)} 篇')
             messagebox.showinfo(f'{label}结束',
                 f'{scope}\n\n可核验入库 {len(result["exported"])} 篇 · 身份待核验 {len(result.get("unconfirmed",[]))} 篇\n'
                 f'WOS 无可用记录 {result.get("not_exported",0)} 篇 · 页面/会话问题 {result.get("session_failures",0)} 篇\n'
@@ -328,7 +343,6 @@ class App:
                 self.wos_import_panel.receive_downloads(targets[0].owner, 'skipped' if targets[0].skipped else 'pending')
                 self.tabs.select(self.wos_import_page)
                 self.wos_import_panel.preview()
-        self.classifier.set_exporting(True)
         self.run(job,done,f'正在{label}…共 {total} 条',log_action=label)
 
     def button(self, parent, text, command, **kwargs):
@@ -541,6 +555,7 @@ class App:
         try:
             while True:
                 success, callback, value, action, sa_id = self.events.get_nowait()
+                downloading=bool(self.classifier and self.classifier.exporting)
                 self.set_busy(False)
                 try:
                     if not success:
@@ -550,6 +565,8 @@ class App:
                     self.clear_browser_state()
                     self.reviewed.set(False)
                     self.status.set("已暂停，请按提示处理；不自动重试。")
+                    if downloading:
+                        self.classifier.status.set('WOS 下载已暂停：'+str(exc)+'；未自动重试。')
                     messagebox.showwarning("等待人工处理", str(exc), parent=self.root)
                     self.note_operation(action, "已暂停", sa_id)
                 else:

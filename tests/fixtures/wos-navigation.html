@@ -10,6 +10,15 @@ if(location.pathname.includes('/summary/')){
   main.innerHTML=`<div role="tab"><b>1</b><span>${cn?'篇文献':'Documents'}</span></div>
     <article><a href="/wos/woscc/full-record/WOS%3A000123456789012" style="display:contents"><span>Synthetic paper</span></a></article>
     <aside hidden><a href="/wos/woscc/full-record/WOS:000123456789013">Hidden recommendation</a></aside>`;
+  // Model the diagnostic/automation realm mismatch: the DOM still contains a
+  // valid record, but page-owned JS changes what MAIN-world readers see. This
+  // hook is limited to this synthetic results document. Isolated extension
+  // probes must still read the actual href, not borrow page globals/prototypes.
+  const nativeAttribute=Element.prototype.getAttribute;
+  Element.prototype.getAttribute=function(name){
+    const value=nativeAttribute.call(this,name);
+    return name==='href'&&this.tagName==='A'&&value?.includes('/full-record/')?null:value;
+  };
 }else if(location.pathname.includes('/full-record/')){
   main.innerHTML='<h1>Synthetic paper</h1><button id="export"><mat-icon>download</mat-icon>'+(cn?'导出':'Export')+'<mat-icon>expand_more</mat-icon></button>';
   document.getElementById('export').onclick=()=>{

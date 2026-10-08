@@ -3,6 +3,7 @@ import os
 import json
 import queue
 import threading
+import time
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
@@ -29,6 +30,10 @@ class ClassifyApp:
         self.stop = threading.Event()
         self.busy = False
         self.exporting = False
+        self.export_generation = 0
+        self._export_message = ''
+        self._export_started = 0.0
+        self._export_bar_value = 0.0
         self.close_pending = False
         self.store = KeyStore(BASE/'runtime')
         self.output = BASE/'runtime'/'classification'
@@ -183,6 +188,7 @@ class ClassifyApp:
     def _wrap_scope(self,width):
         if hasattr(self,'scope_label'):
             self.scope_label.configure(wraplength=max(200,width))
+        self.status_label.configure(wraplength=max(200,width))
 
     def _sync_scope(self):
         owner=self.owner.get().strip()
@@ -290,8 +296,10 @@ class ClassifyApp:
         # The batch reuses this same stop flag, so the pause also halts an export
         # run instead of leaving the window disabled with no way out.
         self.stop.clear()
-        self.status.set(f'正在检索 {self.owner.get()} 的 WOS 记录；可点“当前步骤后暂停”。')
+        self.status.set('正在检查名单和浏览器连接…')
         self.on_export()
+        if not self.exporting:
+            self.status.set('下载未开始；请按弹窗提示检查负责人、名单范围和浏览器连接。')
 
     def export_skipped_wos(self):
         if self.busy or self.external_busy or self.exporting or not self.on_export_skipped:
@@ -300,19 +308,39 @@ class ClassifyApp:
             messagebox.showinfo('请选择负责人','请选择负责人。',parent=self.root)
             return
         self.stop.clear()
-        self.status.set(f'正在检索 {self.owner.get()} 的数字 2 跳过项；可点“当前步骤后暂停”。')
+        self.status.set('正在检查跳过项和浏览器连接…')
         self.on_export_skipped()
+        if not self.exporting:
+            self.status.set('下载未开始；请按弹窗提示检查负责人、跳过项和浏览器连接。')
 
     def set_exporting(self,value):
         """A batch export runs through the app's shared busy state, not set_busy()."""
+        if value and not self.exporting:
+            self.export_generation+=1
+            self._export_bar_value=float(self.bar['value'])
+            self._export_message='正在准备 WOS 下载队列'
+            self._export_started=time.monotonic()
+            self.bar.configure(mode='indeterminate',value=0)
+            self.bar.start(80)
+        elif not value and self.exporting:
+            self.bar.stop()
+            self.bar.configure(mode='determinate',value=self._export_bar_value)
+            self._export_message=''
         self.exporting=bool(value)
+        self._render_export_status()
         self.stop_button.configure(state='normal' if (self.exporting or self.busy) else 'disabled')
         self._sync_export_button()
+
+    def _render_export_status(self):
+        if self.exporting:
+            elapsed=max(0,int(time.monotonic()-self._export_started))
+            pause=' · 已请求暂停，当前步骤返回后停止' if self.stop.is_set() else ''
+            self.status.set(f'{self._export_message} · 已等待 {elapsed} 秒'+pause)
 
     def set_busy(self,value):
         self.busy = value
         if not value:
-            self.exporting=False
+            self.set_exporting(False)
         self.key_button.configure(state='disabled' if value else 'normal')
         self.owner_box.configure(state='disabled' if value else 'readonly')
         self.combo.configure(state='disabled' if value else 'readonly')
@@ -327,7 +355,7 @@ class ClassifyApp:
     def set_external_busy(self,value):
         self.external_busy=value and not self.busy
         if not value:
-            self.exporting=False
+            self.set_exporting(False)
         if not self.busy:
             self.key_button.configure(state='disabled' if value else 'normal')
             self.owner_box.configure(state='disabled' if value else 'readonly')
@@ -385,6 +413,13 @@ class ClassifyApp:
                 if kind=='progress':
                     self.status.set(value.split('；结果')[0])
                     self.load_results(update_status=False)
+                elif kind=='download_progress':
+                    generation,message,started=value
+                    # A completed run can leave queued updates behind. They must
+                    # not overwrite its summary, a later download, or AI progress.
+                    if self.exporting and generation==self.export_generation:
+                        self._export_message=message
+                        self._export_started=started
                 else:
                     self.set_busy(False)
                     if kind=='done':
@@ -397,6 +432,7 @@ class ClassifyApp:
                         return
         except queue.Empty:
             pass
+        self._render_export_status()
         self.poll_id=self.root.after(150,self.poll)
 
     def load_results(self,update_status=True,folder=None):
@@ -430,7 +466,11 @@ class ClassifyApp:
         self.metrics['已处理'].set(str(done))
         self.metrics['渠道待判定'].set(str(pending))
         self.metrics['分类失败'].set(str(failed))
-        self.bar['value']=100*done/len(self.records) if self.records else 0
+        value=100*done/len(self.records) if self.records else 0
+        if self.exporting:
+            self._export_bar_value=value
+        else:
+            self.bar['value']=value
         if update_status:
             if self.records:
                 self.status.set(f'已加载保存结果 · {done}/{len(self.records)} 个任务'
@@ -503,7 +543,10 @@ class ClassifyApp:
     def request_stop(self):
         self.stop.set()
         self.stop_button.configure(state='disabled')
-        self.status.set('已请求停止；当前批次返回后保存结果，不再提交下一批。')
+        if self.exporting:
+            self._render_export_status()
+        else:
+            self.status.set('已请求停止；当前批次返回后保存结果，不再提交下一批。')
 
     def review_selected(self):
         if self.busy or self.external_busy:

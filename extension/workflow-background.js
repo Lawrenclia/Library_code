@@ -81,7 +81,12 @@ async function dispatchWorkflow(command,pair) {
     // have not finished. Do not defer its semantic DOM checks to document_idle.
     // The adapter itself waits for the required controls. Backend import timing
     // remains unchanged. See Chrome's ScriptInjection.injectImmediately API.
-    const results=await chrome.scripting.executeScript({target:{tabId:id},world:"MAIN",func:fn,args:[cmd],
+    // Result probes are read-only. Use the same isolated JS environment as
+    // inspectWorkPage so the site's overridden globals/DOM prototypes cannot
+    // make a visible record readable in diagnostics but absent during a run.
+    // Search/export/import interactions retain their existing MAIN environment.
+    const world=cmd.action==="wos_read_results"?"ISOLATED":"MAIN";
+    const results=await chrome.scripting.executeScript({target:{tabId:id},world,func:fn,args:[cmd],
       ...(role==="wosTabId"?{injectImmediately:true}:{})});
     const result=results[0]?.result;
     if(!result)throw new Error(cmd.action==="wos_read_results"?"WOS 只读探针在页面切换期间未返回结果":"工作页面没有返回结果");

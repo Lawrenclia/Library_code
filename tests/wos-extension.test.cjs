@@ -74,7 +74,7 @@ const fixture=fs.readFileSync(path.join(__dirname,'fixtures/wos-navigation.html'
       assert.equal(searched.ok,true,JSON.stringify(searched));
       assert.equal(site.url(),origin+'/wos/woscc/full-record/WOS:000123456789012');
       assert.equal(searches.filter(value=>value===origin).length,1,'Search is not repeated across real navigations');
-      console.log(`PASS ${origin} actual document navigation -> compact count -> rendered-child link -> full record`);
+      console.log(`PASS ${origin} real navigation -> isolated record probe despite page DOM hook -> full record`);
       const exported=await invoke('wos_export',query);
       if(!exported.ok)console.log('Offline download diagnosis',await worker.evaluate(async()=>
         (await chrome.downloads.search({})).map(item=>({state:item.state,error:item.error,size:item.fileSize,txt:/\.txt$/i.test(item.filename)}))));

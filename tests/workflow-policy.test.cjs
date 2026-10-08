@@ -58,6 +58,8 @@ for (const origin of origins) {
     assert.equal(executions[0].target.tabId, 2);
     assert.equal(executions[0].args[0].action, 'wos_start_search');
     assert.equal(executions[1].args[0].action, 'wos_read_results');
+    assert.equal(executions[0].world, 'MAIN');
+    assert.equal(executions[1].world, 'ISOLATED');
   });
 }
 

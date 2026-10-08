@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import tkinter as tk
 import unittest
 from dataclasses import replace
@@ -139,6 +140,64 @@ class UnifiedTests(unittest.TestCase):
         self.assertIn('重试跳过论文',label)
         self.assertEqual(rows,sum(record.owner==owner and record.skipped and not record.done
                                   and record.matches==0 for record in self.app.roster.records))
+
+    def test_worker_download_progress_reaches_its_page_and_finishes_cleanly(self):
+        from automation import ImportStore
+        record=self.app.roster.records[0]
+        jobs=[]
+        self.app.classifier.bar['value']=40
+        def hold(job,callback,status,**kwargs):
+            self.app.set_busy(True)
+            jobs.append((job,callback))
+        def download(*args,**kwargs):
+            kwargs['progress']('WOS TXT · 第 1/1 篇 · 检索并核验唯一文献')
+            return {'exported':[],'unconfirmed':[],'remaining':0,'not_exported':1,'session_failures':0}
+        values=[]
+        with patch.object(self.app,'run',side_effect=hold), \
+             patch('wos_batch.export',side_effect=download), \
+             patch('wos_batch.default_store',return_value=ImportStore(Path(self.tmp.name)/'downloads')), \
+             patch('wos_batch.default_inbox',return_value=Path(self.tmp.name)/'inbox'), \
+             patch('wos_reports.save_download_report',return_value=Path(self.tmp.name)/'report.md'), \
+             patch('app.messagebox.showinfo'):
+            self.app._start_wos_export([record],'fixture download')
+            job,callback=jobs[0]
+            worker=threading.Thread(target=lambda:values.append(job()))
+            worker.start()
+            worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+            self.app.classifier.poll()
+            self.assertIn('第 1/1 篇',self.app.classifier.status.get())
+            self.assertIn('检索并核验',self.app.classifier.status.get())
+            self.assertTrue(self.app.busy)
+            self.app.events.put((True,callback,values[0],'fixture download',record.sa_id))
+            self.root.after_cancel(self.app.pump_id)
+            self.app.pump()
+        self.app.classifier.poll()
+        self.assertIn('下载已结束',self.app.classifier.status.get())
+        self.assertIn('无可用记录 1 篇',self.app.classifier.status.get())
+        self.assertFalse(self.app.busy)
+        self.assertFalse(self.app.classifier.exporting)
+        self.assertEqual(float(self.app.classifier.bar['value']),40)
+
+    def test_download_worker_failure_stops_animation_and_keeps_error_on_download_page(self):
+        from core import SafetyStop
+        self.app.classifier.bar['value']=25
+        self.app.classifier.set_exporting(True)
+        self.app.set_busy(True)
+        generation=self.app.classifier.export_generation
+        self.app.classifier.queue.put(('download_progress',(generation,'旧进度',0)))
+        self.app.events.put((False,lambda value:None,SafetyStop('浏览器未连接'),
+                            'fixture download',''))
+        with patch('app.messagebox.showwarning'):
+            self.root.after_cancel(self.app.pump_id)
+            self.app.pump()
+        self.app.classifier.poll()
+        self.assertIn('下载已暂停',self.app.classifier.status.get())
+        self.assertIn('浏览器未连接',self.app.classifier.status.get())
+        self.assertFalse(self.app.busy)
+        self.assertFalse(self.app.classifier.exporting)
+        self.assertEqual(str(self.app.classifier.bar['mode']),'determinate')
+        self.assertEqual(float(self.app.classifier.bar['value']),25)
 
     def test_download_report_and_skipped_file_handoff_reach_import_preview(self):
         from openpyxl import load_workbook

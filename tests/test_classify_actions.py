@@ -1,5 +1,6 @@
 """The classification footer separates whole-owner workflows from one-paper review."""
 import tempfile
+import time
 import tkinter as tk
 import unittest
 from pathlib import Path
@@ -28,6 +29,8 @@ class ClassifyActionsTests(unittest.TestCase):
                                  on_review=self.review,on_import=self.import_files)
             self.app.owner.set('测试员')
             self.app.change_owner()
+        self.addCleanup(self.app.dispose)
+        self.root.update_idletasks()
 
     def test_batch_buttons_explain_scope_without_changing_callbacks(self):
         self.assertIn('不受表格筛选或选中行影响',self.app.batch_scope.get())
@@ -72,11 +75,49 @@ class ClassifyActionsTests(unittest.TestCase):
         self.app.open_import()
         self.import_files.assert_not_called()
 
+    def test_download_updates_do_not_reload_ai_results_or_release_busy_state(self):
+        self.app.bar['value']=60
+        self.app.set_exporting(True)
+        self.app.set_external_busy(True)
+        generation=self.app.export_generation
+        self.app.queue.put(('download_progress',(generation,'WOS TXT · 第 1/20 篇 · 检索',time.monotonic()-7)))
+        with patch.object(self.app,'load_results') as load:
+            self.app.poll()
+        load.assert_not_called()
+        self.assertTrue(self.app.exporting)
+        self.assertTrue(self.app.external_busy)
+        self.assertEqual(str(self.app.bar['mode']),'indeterminate')
+        self.assertIn('第 1/20 篇',self.app.status.get())
+        self.assertRegex(self.app.status.get(),r'已等待 [7-9] 秒')
+        self.assertEqual(str(self.app.export_button['state']),'disabled')
+        self.app.request_stop()
+        self.assertIn('当前步骤返回后停止',self.app.status.get())
+        self.assertEqual(str(self.app.stop_button['state']),'disabled')
+        self.app.set_external_busy(False)
+        self.app.status.set('下载已暂停')
+        self.app.queue.put(('download_progress',(generation,'旧消息',time.monotonic())))
+        self.app.poll()
+        self.assertEqual(self.app.status.get(),'下载已暂停')
+        self.assertEqual(str(self.app.bar['mode']),'determinate')
+        self.assertEqual(float(self.app.bar['value']),60)
+        self.app.stop.clear()
+        self.app.set_exporting(True)
+        self.app.queue.put(('download_progress',(generation,'上一轮迟到消息',time.monotonic())))
+        self.app.poll()
+        self.assertNotIn('上一轮',self.app.status.get())
+        self.app.set_exporting(False)
+
     def test_actions_remain_visible_in_compact_window(self):
         self.root.deiconify()
         self.root.geometry('960x740')
+        self.app.set_exporting(True)
+        self.app._export_message='WOS TXT · 第 135/135 篇 · 原表第 3472 行 · 检索并核验唯一文献（本步最多 120 秒，不重复检索）'
+        self.app.request_stop()
         for _ in range(3):
             self.root.update()
+        self.assertTrue(self.app.status_label.winfo_viewable())
+        self.assertLessEqual(self.app.status_label.winfo_rootx()+self.app.status_label.winfo_width(),
+                             self.root.winfo_rootx()+self.root.winfo_width())
         for button in (self.app.export_button,self.app.skipped_export_button,self.app.import_button,
                        self.app.report_button,self.app.channel_button,self.app.output_button,
                        self.app.review_button):
@@ -86,6 +127,7 @@ class ClassifyActionsTests(unittest.TestCase):
                                      self.root.winfo_rootx()+self.root.winfo_width())
                 self.assertLessEqual(button.winfo_rooty()+button.winfo_height(),
                                      self.root.winfo_rooty()+self.root.winfo_height())
+        self.app.set_exporting(False)
 
 
 if __name__=='__main__':

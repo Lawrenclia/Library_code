@@ -137,10 +137,11 @@ class WOSDownload:
     def __init__(self,bridge,store,unchanged,stop,audit):
         self.bridge,self.store,self.unchanged,self.stop,self.audit=bridge,store,unchanged,stop,audit
 
-    def prepare(self,record):
+    def prepare(self,record,progress=lambda text: None):
         self.unchanged()
         cached=self.store.get(record)
         if cached:
+            progress('复用已保存的 TXT；不重复检索或下载')
             return cached
         query={'sa_id':record.sa_id,'title':record.title,'doi':doi(record.doi),'wos':wos(record.wos)}
         result=None
@@ -148,8 +149,12 @@ class WOSDownload:
             if self.stop is not None and self.stop.is_set():
                 raise SafetyStop('已暂停下载。')
             self.unchanged()
-            result=self.bridge.call(action,query,timeout=120 if action == 'wos_search' else 75)
+            timeout=120 if action == 'wos_search' else 75
+            progress('检索并核验唯一文献（本步最多 120 秒，不重复检索）' if action == 'wos_search'
+                     else '导出完整记录并等待 TXT（本步最多 75 秒）')
+            result=self.bridge.call(action,query,timeout=timeout)
             self.audit(action,'已执行',record.sa_id)
+        progress('核验下载文件的题名、DOI 和 WOS 号')
         path=Path(result.get('path',''))
         if result.get('sa_id')!=record.sa_id or not path.is_absolute() or path.suffix.lower()!='.txt' or path.is_symlink():
             raise SafetyStop('无法确定本次导出的 TXT 文件。')
@@ -186,11 +191,12 @@ def export(targets, bridge, store, inbox,
         if stop is not None and stop.is_set():
             progress(f'WOS 导出已暂停：已成功 {len(exported)} 条。')
             break
-        progress(f'WOS 导出：已处理 {index}/{len(targets)}；原表第 {record.row} 行')
+        prefix=f'WOS TXT · 第 {index+1}/{len(targets)} 篇 · 原表第 {record.row} 行'
+        progress(prefix+' · 准备检索')
         attempted += 1
         try:
             # prepare() is idempotent: an already archived export is reused, not re-downloaded.
-            state = flow.prepare(record)
+            state = flow.prepare(record,progress=lambda text: progress(prefix+' · '+text))
             raw = store.bytes(state)
         except SafetyStop as exc:
             message = str(exc)
@@ -216,6 +222,7 @@ def export(targets, bridge, store, inbox,
         target.write_bytes(raw)
         exported.append({'sa_id': record.sa_id, 'row': record.row, 'title': record.title,
                          'doi': record.doi, 'file': str(target), 'sha256': sha})
+        progress(prefix+f' · TXT 已保存；本轮已核验 {len(exported)} 篇')
     per_record = sum(1 for value in failed.values() if value['per_record'])
     return {'total': len(targets), 'exported': exported, 'failed': failed,
             'unconfirmed': unconfirmed, 'inbox': str(inbox),
