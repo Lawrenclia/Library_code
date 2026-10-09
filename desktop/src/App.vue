@@ -1309,6 +1309,16 @@ function clearFilters() {
                   @click="step('verify_sa')"
                   >核验上次 SA 操作结果</Button
                 >
+                <p
+                  v-if="
+                    current.stage === 'unknown' &&
+                    current.pending_action === 'link'
+                  "
+                  class="helper"
+                >
+                  核验关联前，请打开并登录 SA
+                  后台与机构库前端。程序会重新查询原条目，确认来源和完整元数据未变化；关联成功后仍需逐项核对待处理原因。
+                </p>
                 <Button
                   v-if="
                     current.stage === 'unknown' &&

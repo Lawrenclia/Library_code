@@ -64,45 +64,171 @@ pub fn link_payload(task: &Task, snapshot: &Value) -> Result<Value> {
             "SA 已关联其他或多个条目，不能覆盖；先核对最新匹配。",
         ));
     }
+    let review_evidence = task
+        .evidence
+        .iter()
+        .find(|e| e.id == review.evidence_id)
+        .unwrap();
+    let library_evidence = if matches!(task.route, Route::Missing | Route::CorrectedExisting) {
+        Some(
+            task.evidence
+                .iter()
+                .rev()
+                .find(|e| e.kind == "library_search")
+                .unwrap(),
+        )
+    } else {
+        None
+    };
+    let selected = if library_evidence.is_some() {
+        library::latest(task)?["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == task.platform_id)
+            .cloned()
+            .ok_or_else(|| Failure::new("IDENTITY_CONFLICT", "原前端查询缺少明确选择的条目。"))?
+    } else {
+        Value::Null
+    };
     Ok(
-        json!({"sa_id":task.id,"expected":snapshot["row"],"item_id":task.platform_id,
+        json!({"schema":"sa_link_v2","sa_id":task.id,"expected":snapshot["row"],"original_sa":snapshot,"item_id":task.platform_id,
         "reviewed":true,"note":"关联已核验的平台唯一号",
-        "previous_stage":task.stage,"input_hash":task.input_hash,"review_evidence_id":review.evidence_id,
-        "library_evidence_id":task.evidence.iter().rev().find(|e|e.kind=="library_search").map(|e|&e.id),
+        "previous_stage":task.stage,"route":task.route,"input_hash":task.input_hash,"record_fingerprint":task.record.fingerprint(),
+        "original_review":review,"review_evidence":review_evidence,"review_evidence_id":review.evidence_id,
+        "library_evidence":library_evidence,"library_evidence_id":library_evidence.map(|e|&e.id),"selected_item":selected,
         "already_linked":!ids.is_empty()}),
     )
 }
-pub fn verify_link(task: &Task, payload: &Value, snapshot: &Value) -> Result<()> {
-    let ids = identity(task, snapshot)?;
+pub fn verify_link_plan(task: &Task, payload: &Value, snapshot: &Value) -> Result<()> {
+    identity(task, snapshot)?;
     let review = task
         .review
         .as_ref()
         .ok_or_else(|| Failure::new("REVIEW_REQUIRED", "缺少关联前的条目核验。"))?;
-    if payload["sa_id"] != task.id
+    let previous: Stage = serde_json::from_value(payload["previous_stage"].clone())
+        .map_err(|_| Failure::new("REMOTE_RESULT_UNKNOWN", "缺少原关联阶段。"))?;
+    let old_ids = identity(task, &payload["original_sa"])?;
+    if payload["schema"] != "sa_link_v2"
+        || payload["sa_id"] != task.id
         || payload["input_hash"] != task.input_hash
+        || payload["record_fingerprint"] != task.record.fingerprint()
         || payload["item_id"] != task.platform_id
         || payload["review_evidence_id"] != review.evidence_id
+        || payload["original_review"] != serde_json::to_value(review)?
+        || payload["route"] != serde_json::to_value(&task.route)?
+        || payload["expected"] != payload["original_sa"]["row"]
+        || payload["reviewed"] != true
+        || payload["note"] != "关联已核验的平台唯一号"
+        || payload["already_linked"] != !old_ids.is_empty()
+        || (!old_ids.is_empty() && old_ids != vec![task.platform_id.clone()])
+        || matches!(previous, Stage::Unknown | Stage::Completed)
+        || (task.route == Route::Missing && !matches!(previous, Stage::Pushed | Stage::Claimed))
+        || !matches!(
+            task.route,
+            Route::Missing | Route::CorrectedExisting | Route::Existing | Route::Duplicate
+        )
         || !review.identity_confirmed
-        || ids != vec![task.platform_id.clone()]
-        || ["saLzkId", "gh", "titleValue"]
-            .iter()
-            .any(|key| payload["expected"][key] != snapshot["row"][key])
+        || !task.evidence.iter().any(|e| {
+            e.id == review.evidence_id
+                && e.kind == "human_review"
+                && serde_json::to_value(e).ok().as_ref() == Some(&payload["review_evidence"])
+        })
     {
         return Err(Failure::new(
             "REMOTE_RESULT_UNKNOWN",
-            "未回读到本次关联的同一任务、工号、题名与唯一条目。",
+            "原关联意图、名单、完整核验依据或阶段变化，不能替换原目标恢复。",
         ));
     }
-    if matches!(task.route, Route::Missing | Route::CorrectedExisting)
-        && !task
+    let allowed = [
+        "itemId",
+        "matchCount",
+        "claimStatus",
+        "reason",
+        "updateTime",
+        "updateUsername",
+    ];
+    let expected = payload["expected"]
+        .as_object()
+        .ok_or_else(|| Failure::new("REMOTE_RESULT_UNKNOWN", "缺少完整原 SA 行。"))?;
+    if expected
+        .iter()
+        .any(|(key, value)| !allowed.contains(&key.as_str()) && snapshot["row"][key] != *value)
+    {
+        return Err(Failure::new(
+            "TASK_CHANGED",
+            "SA 的其他字段变化，先核对原关联任务。",
+        ));
+    }
+    let sa_values = |s: &Value| {
+        s["comparison"].as_array().map(|rows| {
+            rows.iter()
+                .map(|r| json!({"label":r["label"],"sa":r["sa"]}))
+                .collect::<Vec<_>>()
+        })
+    };
+    if sa_values(&payload["original_sa"]).is_none()
+        || sa_values(&payload["original_sa"]) != sa_values(snapshot)
+    {
+        return Err(Failure::new(
+            "TASK_CHANGED",
+            "SA 原始比对值变化，不能沿用原关联依据。",
+        ));
+    }
+    if matches!(task.route, Route::Missing | Route::CorrectedExisting) {
+        let evidence = task
             .evidence
             .iter()
-            .any(|e| e.kind == "library_search" && e.id == payload["library_evidence_id"])
+            .find(|e| e.kind == "library_search" && e.id == payload["library_evidence_id"])
+            .ok_or_else(|| Failure::new("EVIDENCE_REQUIRED", "缺少原关联前端查询。"))?;
+        let receipt: Value = serde_json::from_str(&evidence.text)?;
+        if serde_json::to_value(evidence)? != payload["library_evidence"]
+            || receipt["input_hash"] != task.input_hash
+            || receipt["result"]["sa_id"] != task.id
+            || receipt["result"]["verified"] != true
+            || !receipt["result"]["items"].as_array().is_some_and(|rows| {
+                rows.iter()
+                    .any(|r| r["id"] == task.platform_id && *r == payload["selected_item"])
+            })
+        {
+            return Err(Failure::new(
+                "EVIDENCE_REQUIRED",
+                "原前端来源或完整选择条目被替换。",
+            ));
+        }
+    } else if payload["library_evidence"] != Value::Null || payload["selected_item"] != Value::Null
     {
         return Err(Failure::new(
             "EVIDENCE_REQUIRED",
-            "缺少本次关联使用的实际前端检索依据。",
+            "该关联分支含非原始的条目检索依据。",
         ));
+    }
+    Ok(())
+}
+pub fn verify_link(task: &Task, payload: &Value, snapshot: &Value) -> Result<()> {
+    verify_link_plan(task, payload, snapshot)?;
+    if matched_ids(&snapshot["row"])? != vec![task.platform_id.clone()] {
+        return Err(Failure::new(
+            "REMOTE_RESULT_UNKNOWN",
+            "尚未回读到原关联的唯一条目。",
+        ));
+    }
+    if matches!(task.route, Route::Missing | Route::CorrectedExisting) {
+        let fresh = library::latest(task)?;
+        let old: Value = serde_json::from_value::<Evidence>(payload["library_evidence"].clone())
+            .and_then(|e| serde_json::from_str(&e.text))?;
+        if fresh["target"] != old["result"]["target"]
+            || !fresh["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| *r == payload["selected_item"])
+        {
+            return Err(Failure::new(
+                "REMOTE_RESULT_UNKNOWN",
+                "原选择条目缺失或完整元数据变化，不能确认关联。",
+            ));
+        }
     }
     Ok(())
 }

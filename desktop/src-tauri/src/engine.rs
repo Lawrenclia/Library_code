@@ -977,7 +977,17 @@ impl Engine {
                         .trim_start_matches(',')
                         == payload["item_id"].as_str().unwrap_or("__missing__") =>
                 {
-                    Self::record_link_snapshot(&mut t, payload, &d)?;
+                    sa::verify_link_plan(&t, payload, &d)?;
+                    if matches!(t.route, Route::Missing | Route::CorrectedExisting) {
+                        let original: Evidence =
+                            serde_json::from_value(payload["library_evidence"].clone())?;
+                        let receipt: Value = serde_json::from_str(&original.text)?;
+                        self.search_library(app, &mut t, receipt["result"]["target"].clone())
+                            .await?;
+                    }
+                    let after = self.read_sa(app, &mut t).await?;
+                    Self::record_link_snapshot(&mut t, payload, &after)?;
+                    verification = json!({"payload":payload,"sa_after":after,"library_after":if matches!(t.route,Route::Missing|Route::CorrectedExisting){library::latest(&t)?}else{Value::Null}});
                     serde_json::from_value(payload["previous_stage"].clone())?
                 }
                 "submit_claim" => {

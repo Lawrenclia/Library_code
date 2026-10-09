@@ -114,3 +114,108 @@ fn live_issue_context_cannot_use_an_unselected_platform_item() {
     );
     assert!(t.issue_plan.is_none());
 }
+fn new_query(task: &mut Task, mutate: impl FnOnce(&mut Value)) {
+    let mut result = library::latest(task).unwrap();
+    mutate(&mut result);
+    let target = result["target"].clone();
+    library::record(task, &target, &result).unwrap();
+}
+#[test]
+fn link_recovery_requires_unchanged_complete_selected_front_item() {
+    let mut t = task();
+    let p = sa::link_payload(&t, &snapshot(false)).unwrap();
+    new_query(&mut t, |r| {
+        r["items"][0]["metadata"]["abstract"] = json!(["Changed publication"]);
+        r["queries"][0]["pages"][0]["records"][0] = r["items"][0].clone();
+    });
+    t.stage = Stage::Unknown;
+    assert_eq!(
+        sa::verify_link(&t, &p, &snapshot(true)).unwrap_err().code,
+        "REMOTE_RESULT_UNKNOWN"
+    );
+}
+#[test]
+fn link_recovery_refuses_missing_original_candidate() {
+    let mut t = task();
+    let p = sa::link_payload(&t, &snapshot(false)).unwrap();
+    new_query(&mut t, |r| {
+        r["items"] = json!([]);
+        r["queries"][0]["total"] = json!(0);
+        r["queries"][0]["pages"][0]["total"] = json!(0);
+        r["queries"][0]["pages"][0]["records"] = json!([]);
+    });
+    assert!(sa::verify_link(&t, &p, &snapshot(true)).is_err());
+}
+#[test]
+fn link_recovery_protects_sa_other_fields_and_source_values() {
+    let t = task();
+    let mut before = snapshot(false);
+    before["row"]["remark"] = json!("original");
+    before["row"]["doiValue"] = json!("10.example/original");
+    before["comparison"] = json!([{"label":"DOI","sa":"10.example/original","library":""}]);
+    let p = sa::link_payload(&t, &before).unwrap();
+    let mut live = before.clone();
+    live["row"]["itemId"] = json!(ITEM);
+    live["row"]["matchCount"] = json!(1);
+    live["row"]["reason"] = json!("newly calculated issue");
+    live["row"]["updateTime"] = json!("new timestamp");
+    sa::verify_link(&t, &p, &live).unwrap();
+    for key in ["remark", "doiValue"] {
+        let mut changed = live.clone();
+        changed["row"][key] = json!("changed");
+        assert!(sa::verify_link(&t, &p, &changed).is_err());
+    }
+    live["comparison"][0]["sa"] = json!("10.example/changed");
+    assert!(sa::verify_link(&t, &p, &live).is_err());
+}
+#[test]
+fn link_recovery_refuses_replaced_review_input_or_old_partial_intent() {
+    let t = task();
+    let p = sa::link_payload(&t, &snapshot(false)).unwrap();
+    let mut changed = t.clone();
+    changed.review.as_mut().unwrap().note = "new review".into();
+    assert!(sa::verify_link(&changed, &p, &snapshot(true)).is_err());
+    changed = t.clone();
+    changed
+        .evidence
+        .iter_mut()
+        .find(|e| e.id == "human")
+        .unwrap()
+        .text = "new source".into();
+    assert!(sa::verify_link(&changed, &p, &snapshot(true)).is_err());
+    changed = t.clone();
+    changed.record.owner = "new owner".into();
+    assert!(sa::verify_link(&changed, &p, &snapshot(true)).is_err());
+    let mut old = p.clone();
+    old.as_object_mut().unwrap().remove("schema");
+    assert!(sa::verify_link(&t, &old, &snapshot(true)).is_err());
+    old = p.clone();
+    old["previous_stage"] = json!("unknown");
+    assert!(sa::verify_link(&t, &old, &snapshot(true)).is_err());
+}
+#[test]
+fn link_recovery_does_not_replace_original_query_evidence() {
+    let mut t = task();
+    let p = sa::link_payload(&t, &snapshot(false)).unwrap();
+    let id = p["library_evidence_id"].as_str().unwrap();
+    t.evidence.iter_mut().find(|e| e.id == id).unwrap().text = "replaced".into();
+    assert!(sa::verify_link(&t, &p, &snapshot(true)).is_err());
+    let t = task();
+    let mut p = sa::link_payload(&t, &snapshot(false)).unwrap();
+    p["selected_item"]["metadata"]["title"] = json!(["Other paper"]);
+    assert!(sa::verify_link(&t, &p, &snapshot(true)).is_err());
+}
+#[test]
+fn unknown_missing_link_restores_only_original_pushed_checkpoint() {
+    let mut t = task();
+    t.route = Route::Missing;
+    t.review.as_mut().unwrap().route = Route::Missing;
+    t.stage = Stage::Pushed;
+    let p = sa::link_payload(&t, &snapshot(false)).unwrap();
+    t.stage = Stage::Unknown;
+    new_query(&mut t, |_| {});
+    sa::verify_link(&t, &p, &snapshot(true)).unwrap();
+    assert_eq!(p["previous_stage"], json!("pushed"));
+    assert_eq!(t.record.matches, 0);
+    assert!(!t.record.done);
+}
