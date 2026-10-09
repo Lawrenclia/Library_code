@@ -28,6 +28,7 @@ import {
   Minimize2,
 } from "@lucide/vue";
 import WorkbenchShell from "@/components/WorkbenchShell.vue";
+import WorkflowOverview from "@/components/WorkflowOverview.vue";
 import TaskTable from "@/components/TaskTable.vue";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -150,6 +151,7 @@ const {
   settleConfirmation,
 } = useWorkbench();
 const pageTitles: Record<string, string> = {
+  workflow: "每一步，都有清晰的去向。",
   tasks: "把每一篇成果，整理清楚。",
   materials: "模板与提交材料",
   settings: "模型与工作空间",
@@ -202,6 +204,30 @@ function clearFilters() {
   filter.value = "all";
   owner.value = "";
 }
+function frameworkAction(action: string) {
+  if (action === "import")
+    return run("import_roster", {}, "名单已读取，原表与历史记录保留。");
+  if (action === "report")
+    return run("export_report", {}, "任务与来源报告已导出。");
+  if (action === "folder") return run("open_folder");
+  if (action === "review") {
+    owner.value = "";
+    search.value = "";
+    filter.value = "review";
+    page.value = "tasks";
+    return;
+  }
+  page.value = action;
+}
+function frameworkBrowser(role: string, entry?: string) {
+  return run(
+    "open_browser",
+    { role, entry: entry || null },
+    entry
+      ? "数据库入口已打开。请通过图书馆访问 WOS，完成机构登录后回到工作台。"
+      : "工作页已打开，请在窗口内确认机构访问。",
+  );
+}
 </script>
 
 <template>
@@ -219,11 +245,13 @@ function clearFilters() {
         >
           <span class="size-1 rounded-full bg-primary"></span
           >{{
-            page === "tasks"
-              ? "Research workspace"
-              : page === "materials"
-                ? "Submission materials"
-                : "Workspace settings"
+            page === "workflow"
+              ? "Workflow overview"
+              : page === "tasks"
+                ? "Research workspace"
+                : page === "materials"
+                  ? "Submission materials"
+                  : "Workspace settings"
           }}
         </div>
         <h1 class="text-xl font-semibold tracking-tight lg:text-2xl">
@@ -231,11 +259,13 @@ function clearFilters() {
         </h1>
         <p class="mt-2 text-xs text-muted-foreground">
           {{
-            page === "tasks"
-              ? "按照机构知识库比对流程，核验来源、整理材料、完成处理。"
-              : page === "materials"
-                ? "优先保留数据库原始导出，缺失内容按实际模板准备。"
-                : "配置模型 API，管理本地工作文件与访问状态。"
+            page === "workflow"
+              ? "名单、来源、核验和平台执行在同一框架中衔接。"
+              : page === "tasks"
+                ? "按照机构知识库比对流程，核验来源、整理材料、完成处理。"
+                : page === "materials"
+                  ? "优先保留数据库原始导出，缺失内容按实际模板准备。"
+                  : "配置模型 API，管理本地工作文件与访问状态。"
           }}
         </p>
       </div>
@@ -273,7 +303,16 @@ function clearFilters() {
         ><RefreshCw class="size-3.5"
       /></Button>
     </div>
-    <template v-if="page === 'tasks'">
+    <WorkflowOverview
+      v-if="page === 'workflow'"
+      :workspace="workspace"
+      :configured="api.configured"
+      :templates="schemas.length"
+      :locked="locked"
+      @action="frameworkAction"
+      @browser="frameworkBrowser"
+    />
+    <template v-else-if="page === 'tasks'">
       <div class="mb-5 grid grid-cols-4 gap-3">
         <Card
           v-for="metric in metrics"

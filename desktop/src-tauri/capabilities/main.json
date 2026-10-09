@@ -1,1 +1,31 @@
-{"identifier":"workspace","windows":["main"],"permissions":["core:default","allow-workspace","allow-import-roster","allow-prepare-input-version","allow-accept-input-version","allow-preview-legacy","allow-migrate-legacy","allow-open-browser","allow-run-queue","allow-pause-queue","allow-review-task","allow-run-step","allow-adopt-file","allow-export-report","allow-open-folder","allow-ai-settings","allow-save-ai-settings","allow-classify-task","allow-templates","allow-register-template","allow-fill-template"]}
+{
+  "identifier": "workspace",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-workspace",
+    "allow-import-roster",
+    "allow-prepare-input-version",
+    "allow-accept-input-version",
+    "allow-preview-legacy",
+    "allow-migrate-legacy",
+    "allow-open-browser",
+    "allow-run-queue",
+    "allow-pause-queue",
+    "allow-review-task",
+    "allow-run-step",
+    "allow-adopt-file",
+    "allow-export-report",
+    "allow-open-folder",
+    "allow-ai-settings",
+    "allow-save-ai-settings",
+    "allow-classify-task",
+    "allow-templates",
+    "allow-register-template",
+    "allow-fill-template",
+    "allow-resume-queue",
+    "allow-cancel-queue"
+  ]
+}

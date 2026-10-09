@@ -10,6 +10,7 @@ import {
   Moon,
   Sun,
   LoaderCircle,
+  Workflow,
 } from "@lucide/vue";
 import {
   Sidebar,
@@ -37,6 +38,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ "update:page": [value: string]; folder: [] }>();
 const entries = [
+  { id: "workflow", label: "流程与连接", icon: Workflow },
   { id: "tasks", label: "任务工作台", icon: LayoutDashboard },
   { id: "materials", label: "模板与材料", icon: Files },
   { id: "settings", label: "模型与设置", icon: Settings2 },

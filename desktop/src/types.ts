@@ -187,6 +187,33 @@ export interface Workspace {
   download_queue?: DownloadQueue | null;
   browsers: Record<string, { open: boolean; usable: boolean }>;
   policy: string;
+  framework?: FrameworkManifest;
+}
+export interface FrameworkManifest {
+  schema_version: number;
+  services: {
+    id: string;
+    label: string;
+    description: string;
+    state: "implemented" | "partial";
+    limitation: string;
+  }[];
+  browsers: { id: string; label: string; url: string; profile: string }[];
+  channels: {
+    id: string;
+    label: string;
+    formats: string[];
+    automated: boolean;
+    live_verified: boolean;
+    capabilities: Record<
+      string,
+      "implemented" | "unimplemented" | "registered_only"
+    >;
+  }[];
+  operations: { id: string; service: string; kind: string }[];
+  flows: { id: string; label: string; steps: string[]; outcomes: string[] }[];
+  rules: string[];
+  live_verified: boolean;
 }
 export interface DownloadQueue {
   id: string;

@@ -94,7 +94,7 @@ async function runDuplicateCommand(command) {
     };
     const groups=await scan();
     if(command.action==='duplicate_scan')return {ok:true,data:{groups,title:command.title,title_similarity:threshold,query}};
-    const readMaster=async master=>{
+    const readMaster=async (master,source)=>{
       if(panels().some(el=>!owns(el)))fail('REVIEW_REQUIRED','主条目回读前出现其他窗口。');
       modal.__libraryTask=command.sa_id;
       // CitationModal uses destroy-on-close, so keep its parent mounted while
@@ -122,6 +122,16 @@ async function runDuplicateCommand(command) {
       const fields=Object.create(null);
       for(const f of inner.resultList){if(typeof f.fieldName!=='string'||!Object.hasOwn(f,f.fieldName)||Object.hasOwn(fields,f.fieldName))fail('PAGE_UNSUPPORTED','主条目字段结构未知。');fields[f.fieldName]=JSON.parse(JSON.stringify(f[f.fieldName]));}
       if(!Array.isArray(fields.title)||!fields.title.some(t=>master.metadata.title.some(old=>norm(old)===norm(t))))fail('IDENTITY_CONFLICT','主条目回读题名与核验目标不符。');
+      if(inner.modelName!==master.model_name)fail('REMOTE_RESULT_UNKNOWN','原主条目的成果模型变化。');
+      for(const [key,value] of Object.entries(master.metadata)){
+        if(key==='title'){
+          const known=[...value,...(source?.metadata?.title||[])];
+          if(!value.every(old=>fields.title.some(t=>norm(t)===norm(old)))||fields.title.some(t=>typeof t!=='string'||!t.trim()||!known.some(old=>norm(t)===norm(old))))
+            fail('REMOTE_RESULT_UNKNOWN','主条目题名缺失或含非原来源题名。');
+        }else if(!Object.hasOwn(fields,key)||!equal(value,fields[key]))fail('REMOTE_RESULT_UNKNOWN',`主条目原字段 ${key} 丢失或改变，不能确认保留内容。`);
+      }
+      for(const [key,value] of Object.entries(fields))if(!Object.hasOwn(master.metadata,key)&&!equal(source?.metadata?.[key],value))
+        fail('REMOTE_RESULT_UNKNOWN','主条目新增字段没有原候选来源。');
       if(panels().some(el=>!owns(el))||!detail.drawer)fail('REVIEW_REQUIRED','回读期间出现其他窗口。');
       return {id:master.id,model_name:inner.modelName,fields,status:inner.status};
     };
@@ -132,7 +142,7 @@ async function runDuplicateCommand(command) {
       const current=command.sa_ids.map(i=>textId(i,'实时 SA 条目')).sort(),expected=command.expected_sa_ids.map(i=>textId(i,'原 SA 条目'));
       if(new Set(current).size!==current.length||new Set(expected).size!==expected.length||!expected.includes(command.source_id)||!expected.includes(command.target_id)||!equal(current,expected.filter(i=>i!==command.source_id).sort()))fail('REMOTE_RESULT_UNKNOWN','SA 条目集合与本次合并不一致。');
       if(groups.some(g=>g.items.some(i=>i.id===command.source_id)))fail('REMOTE_RESULT_UNKNOWN','被合并条目仍在候选池，不能重复合并。');
-      const master=await readMaster(command.expected_master);
+      const master=await readMaster(command.expected_master,command.expected_source);
       return {ok:true,data:{verified:true,verification:'fresh_sa_and_pool_and_master',source_id:command.source_id,target_id:command.target_id,master_after:master,pool_after:groups}};
     }
     const selected=one(groups.filter(g=>g.id===command.group_id),'选定候选组');
@@ -186,8 +196,7 @@ async function runDuplicateCommand(command) {
     const after=await scan(true);
     if(after.some(g=>g.items.some(i=>i.id===command.source_id)))fail('REMOTE_RESULT_UNKNOWN','合并回执已返回，但候选池仍含被合并条目。');
     const expectedMaster=item(target.item);
-    expectedMaster.metadata.title=[...new Set([...expectedMaster.metadata.title,...source.item.metadata.title])];
-    const master=await readMaster(expectedMaster);
+    const master=await readMaster(expectedMaster,item(source.item));
     return {ok:true,data:{verified:true,server_success:true,group_before:selected,source_id:command.source_id,target_id:command.target_id,master_after:master,pool_after:after}};
   }catch(error){return {ok:false,code:error.code||'PAGE_UNSUPPORTED',submitted,error:error.message};}
   finally{offSuccess?.();}

@@ -10,6 +10,8 @@ fn main() {
             "open_browser",
             "run_queue",
             "pause_queue",
+            "resume_queue",
+            "cancel_queue",
             "review_task",
             "run_step",
             "adopt_file",

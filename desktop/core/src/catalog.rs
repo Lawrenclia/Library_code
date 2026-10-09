@@ -1,7 +1,7 @@
 use crate::*;
 use serde_json::{json, Value};
 pub fn channels() -> Value {
-    json!([
+    let mut channels = json!([
         {"id":"general","label":"数据导入","formats":["xlsx"],"automated":false},
         {"id":"wos_excel","label":"WOS 数据导入 (Excel)","formats":["xlsx"],"automated":false},
         {"id":"wos_txt","label":"WOS 数据导入 (Txt)","formats":["txt"],"automated":true},
@@ -13,7 +13,20 @@ pub fn channels() -> Value {
         {"id":"vip","label":"VIP 数据导入 (Excel)","formats":["xlsx"],"automated":false},
         {"id":"incopat","label":"IncoPat 数据导入 (Excel)","formats":["xlsx"],"automated":false},
         {"id":"other","label":"其他来源 / 平台模板","formats":["xlsx","txt","csv"],"automated":false}
-    ])
+    ]);
+    for channel in channels.as_array_mut().unwrap() {
+        let native = channel["id"] == "wos_txt";
+        let template = channel["id"] == "general" || channel["id"] == "other";
+        channel["capabilities"] = json!({
+            "search":if native {"implemented"} else {"unimplemented"},
+            "export":if native {"implemented"} else {"unimplemented"},
+            "parse":if native {"implemented"} else {"unimplemented"},
+            "submit":if native {"implemented"} else {"unimplemented"},
+            "template":if template {"implemented"} else {"registered_only"}
+        });
+        channel["live_verified"] = false.into();
+    }
+    channels
 }
 pub fn validate_ai(value: &Value, evidence: &[Evidence], template: Option<&Value>) -> Result<()> {
     let valid_ids = |ids: &Value| {

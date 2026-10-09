@@ -3,9 +3,11 @@ pub mod catalog;
 pub mod claim;
 pub mod download;
 pub mod files;
+pub mod framework;
 pub mod issues;
 pub mod legacy;
 pub mod library;
+pub mod merge;
 pub mod metadata;
 pub mod metadata_order;
 pub mod model;
@@ -14,6 +16,7 @@ pub mod sa;
 pub mod store;
 pub mod templates;
 pub mod versions;
+pub mod workflow;
 pub use model::*;
 pub use store::Store;
 #[cfg(test)]
@@ -26,6 +29,8 @@ mod download_tests;
 mod issue_tests;
 #[cfg(test)]
 mod library_tests;
+#[cfg(test)]
+mod merge_tests;
 #[cfg(test)]
 mod metadata_order_tests;
 #[cfg(test)]

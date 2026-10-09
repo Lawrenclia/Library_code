@@ -1,0 +1,127 @@
+use super::local;
+use crate::engine::Engine;
+use library_core::{templates::Template, *};
+use serde_json::{json, Value};
+use tauri::{AppHandle, State, WebviewWindow};
+
+#[tauri::command]
+pub(crate) async fn adopt_file(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, Engine>,
+    id: String,
+) -> Result<Value> {
+    local(&window)?;
+    let _lease = state.acquire()?;
+    let file = rfd::AsyncFileDialog::new()
+        .add_filter("WOS 完整记录", &["txt"])
+        .pick_file()
+        .await;
+    let Some(f) = file else {
+        return Ok(json!({"cancelled":true}));
+    };
+    let t = state.attach(
+        &id,
+        f.path(),
+        "WOS 本地原始导出".into(),
+        "手动导入，来源链接待补充".into(),
+    )?;
+    state.changed(&app);
+    Ok(json!(t))
+}
+#[tauri::command]
+pub(crate) fn templates(window: WebviewWindow, state: State<Engine>) -> Result<Value> {
+    local(&window)?;
+    Ok(state.store.setting("templates")?.unwrap_or(json!([])))
+}
+#[tauri::command]
+pub(crate) async fn register_template(
+    window: WebviewWindow,
+    state: State<'_, Engine>,
+    sheet: String,
+    header_row: u32,
+    required: Vec<String>,
+    notes: String,
+) -> Result<Value> {
+    local(&window)?;
+    let _lease = state.acquire()?;
+    let file = rfd::AsyncFileDialog::new()
+        .add_filter("导入模板", &["xlsx"])
+        .pick_file()
+        .await;
+    let Some(file) = file else {
+        return Ok(json!({"cancelled":true}));
+    };
+    let mut template =
+        library_core::templates::inspect(file.path(), &sheet, header_row, required, notes)?;
+    let folder = state.store.root.join("templates");
+    std::fs::create_dir_all(&folder)?;
+    let owned = folder.join(format!("{}.xlsx", template.fingerprint));
+    if !owned.exists() {
+        std::fs::copy(file.path(), &owned)?;
+    }
+    template.path = owned.to_string_lossy().into();
+    let mut saved: Vec<Template> =
+        serde_json::from_value(state.store.setting("templates")?.unwrap_or(json!([])))?;
+    saved.retain(|t| t.id != template.id);
+    saved.push(template.clone());
+    state.store.set_setting("templates", json!(saved))?;
+    Ok(json!(template))
+}
+#[tauri::command]
+pub(crate) async fn fill_template(
+    window: WebviewWindow,
+    state: State<'_, Engine>,
+    id: String,
+    template_id: String,
+) -> Result<Value> {
+    local(&window)?;
+    let _lease = state.acquire()?;
+    let task = state.store.task(&id)?;
+    let schemas: Vec<Template> =
+        serde_json::from_value(state.store.setting("templates")?.unwrap_or(json!([])))?;
+    let template = schemas
+        .iter()
+        .find(|t| t.id == template_id)
+        .ok_or_else(|| Failure::new("TEMPLATE_INVALID", "模板不存在。"))?;
+    let classification = task
+        .classification
+        .ok_or_else(|| Failure::new("EVIDENCE_REQUIRED", "先调用 AI 并核对有来源的模板字段。"))?;
+    if classification["template_id"].as_str() != Some(&template.id) {
+        return Err(Failure::new(
+            "TEMPLATE_CHANGED",
+            "AI 填写建议属于其他模板，请针对当前模板重新生成。",
+        ));
+    }
+    let fields: std::collections::BTreeMap<String, String> = classification["fields"]
+        .as_object()
+        .ok_or_else(|| Failure::new("AI_RESULT_INVALID", "缺少已核验字段。"))?
+        .iter()
+        .map(|(k, v)| {
+            Ok((
+                k.clone(),
+                v["value"]
+                    .as_str()
+                    .ok_or_else(|| Failure::new("AI_RESULT_INVALID", "字段格式无效。"))?
+                    .into(),
+            ))
+        })
+        .collect::<Result<_>>()?;
+    let file = rfd::AsyncFileDialog::new()
+        .add_filter("Excel 材料", &["xlsx"])
+        .set_file_name(format!("{}-{}.xlsx", template.name, id))
+        .save_file()
+        .await;
+    let Some(file) = file else {
+        return Ok(json!({"cancelled":true}));
+    };
+    let missing = library_core::templates::write(template, &fields, file.path())?;
+    let audit = state.store.root.join("materials");
+    std::fs::create_dir_all(&audit)?;
+    let provenance = json!({"sa_id":id,"template_id":template.id,"template_hash":template.fingerprint,"output":file.path().to_string_lossy(),"output_hash":hash(&std::fs::read(file.path())?),"fields":classification["fields"],"evidence":task.evidence,"missing":missing});
+    std::fs::write(
+        audit.join(format!("{}.json", uuid::Uuid::new_v4())),
+        serde_json::to_vec_pretty(&provenance)?,
+    )?;
+    Ok(json!({"path":file.path().to_string_lossy(),"missing":missing,"ready":missing.is_empty()}))
+}

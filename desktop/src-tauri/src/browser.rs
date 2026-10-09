@@ -13,13 +13,6 @@ use tauri::{
 use tokio::sync::oneshot;
 use url::Url;
 
-const WOS: &str = include_str!("../../../extension/wos-adapter.js");
-const SA: &str = include_str!("../../../extension/adapter.js");
-const IMPORT: &str = include_str!("../../../extension/import-adapter.js");
-const SCHOLAR: &str = include_str!("../browser/scholar-adapter.cjs");
-const DUPLICATE: &str = include_str!("../browser/duplicate-adapter.cjs");
-const METADATA: &str = include_str!("../browser/metadata-adapter.cjs");
-const LIBRARY: &str = include_str!("../browser/library-adapter.cjs");
 #[cfg(feature = "smoke-test")]
 pub fn fixture_origin() -> Option<Url> {
     std::env::var("DESKTOP_SMOKE_ORIGIN")
@@ -117,9 +110,22 @@ fn valid(label: &str, url: &Url) -> bool {
     }
 }
 impl Browser {
+    pub fn database_directory(&self, app: &AppHandle) -> Result<()> {
+        let window = app
+            .get_webview_window("wos")
+            .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "先打开数据库访问窗口。"))?;
+        window
+            .navigate(
+                library_core::framework::DATABASE_DIRECTORY
+                    .parse()
+                    .map_err(Failure::storage)?,
+            )
+            .map_err(Failure::storage)
+    }
     pub fn states(&self, app: &AppHandle) -> Value {
         let mut data = json!({});
-        for role in ["wos", "sa", "import", "scholar", "duplicate", "library"] {
+        for spec in library_core::framework::BROWSERS {
+            let role = spec.id;
             data[role]=app.get_webview_window(role).map(|w|{let url=w.url().ok();json!({"open":true,"usable":url.as_ref().map(|u|valid(role,u)).unwrap_or(false)})}).unwrap_or(json!({"open":false,"usable":false}));
         }
         data
@@ -138,33 +144,8 @@ impl Browser {
             };
             Some(format!("{}{path}", origin.origin().ascii_serialization()))
         });
-        let (url, title) = match role {
-            "library" => (
-                "http://www.ir.lib.sjtu.edu.cn/advancedSearch",
-                "机构库前端 · 成果检索",
-            ),
-            "wos" => (
-                "https://webofscience.clarivate.cn/wos/",
-                "WOS · 机构访问与元数据",
-            ),
-            "sa" => (
-                "http://admin.ir.lib.sjtu.edu.cn/#/dataCompare/list",
-                "机构库 · SA 比对",
-            ),
-            "import" => (
-                "http://admin.ir.lib.sjtu.edu.cn/#/collectItem/batchManage",
-                "机构库 · 导入与批次管理",
-            ),
-            "scholar" => (
-                "http://admin.ir.lib.sjtu.edu.cn/#/scholar/list",
-                "机构库 · 学者管理与别名",
-            ),
-            "duplicate" => (
-                "http://admin.ir.lib.sjtu.edu.cn/#/collectItem/duplicateData",
-                "机构库 · 重复数据管理",
-            ),
-            _ => return Err(Failure::new("INVALID_CHANNEL", "未知浏览器通道。")),
-        };
+        let spec = library_core::framework::browser(role)?;
+        let (url, title) = (spec.url, spec.label);
         #[cfg(feature = "smoke-test")]
         let url = fixture_url.as_deref().unwrap_or(url);
         if let Some(w) = app.get_webview_window(role) {
@@ -172,11 +153,7 @@ impl Browser {
             w.set_focus().map_err(Failure::storage)?;
             return Ok(());
         }
-        let profile = root.join("browser").join(if role == "wos" {
-            "wos-profile"
-        } else {
-            "library-profile"
-        });
+        let profile = root.join("browser").join(spec.profile);
         std::fs::create_dir_all(&profile)?;
         let downloads = root.join("downloads");
         std::fs::create_dir_all(&downloads)?;
@@ -278,16 +255,8 @@ impl Browser {
                 "当前页面仍在登录或已经离开工作区。",
             ));
         }
-        let (source, func) = match label {
-            "wos" => (WOS, "runWOSCommand"),
-            "sa" if action.starts_with("metadata_") => (METADATA, "runMetadataCommand"),
-            "sa" => (SA, "runSACommand"),
-            "import" => (IMPORT, "runImportCommand"),
-            "scholar" => (SCHOLAR, "runScholarCommand"),
-            "duplicate" => (DUPLICATE, "runDuplicateCommand"),
-            "library" => (LIBRARY, "runLibraryCommand"),
-            _ => return Err(Failure::new("INVALID_CHANNEL", "通道错误。")),
-        };
+        let adapter = crate::adapters::resolve(label, action)?;
+        let (source, func) = (adapter.script, adapter.handler);
         #[cfg(feature = "smoke-test")]
         let fixture_source = fixture_origin()
             .filter(|origin| origin.origin() == url.origin())

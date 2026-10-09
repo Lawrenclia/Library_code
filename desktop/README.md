@@ -4,9 +4,13 @@ Tauri 2 + Rust + SQLite 桌面工作台。界面使用 shadcn-vue 官方开源�
 
 实际验证结果与剩余目标见 [验收记录](../docs/TAURI_VERIFICATION.md)。
 
+新增“流程与连接”页，统一查看业务分支、来源渠道、数据库与机构库工作页，以及当前待确认任务；入口连接实际名单、任务、模板、API 设置和来源报告。后端已按输入、下载、本库、SA、作者、元数据、重复条目及导入写入拆分服务，结构与扩展规则见 [完整框架说明](../docs/FRAMEWORK.md)。
+
 ## 使用
 
 Windows 安装包生成在 `src-tauri/target/release/bundle/nsis/机构知识库工作台_0.1.0_x64-setup.exe`。
+
+本轮框架的正式安装包单独生成在 `src-tauri/target/framework/release/bundle/nsis/机构知识库工作台_0.1.0_x64-setup.exe`，避免覆盖正在运行的旧程序。该包包含最终前端，不启用 `smoke-test`；构建和文件校验信息见验收记录。
 
 1. 导入实际名单 Excel，选择负责人。已处理与跳过标记会读取，历史进度保留。
 2. 打开 WOS / SA / 查本库 / 导入管理工作页，在应用自己的浏览器窗口内完成登录。

@@ -7,7 +7,7 @@ import {
   ref,
   watch,
 } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { callDesktop, type DesktopCommand } from "@/services/desktop";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   Task,
@@ -587,7 +587,7 @@ export function useWorkbench() {
       review.library_checked = value;
   });
   async function refresh() {
-    workspace.value = await invoke<Workspace>("workspace");
+    workspace.value = await callDesktop<Workspace>("workspace");
   }
   function describe(e: unknown) {
     if (e && typeof e === "object" && "message" in e)
@@ -595,7 +595,7 @@ export function useWorkbench() {
     return String(e);
   }
   async function run<T>(
-    command: string,
+    command: DesktopCommand,
     args: Record<string, unknown> = {},
     success = "操作已完成。",
   ): Promise<T | undefined> {
@@ -605,7 +605,7 @@ export function useWorkbench() {
     error.value = false;
     message.value = pausing ? "正在请求暂停…" : "正在执行，请保持工作页打开…";
     try {
-      const result = await invoke<T>(command, args);
+      const result = await callDesktop<T>(command, args);
       message.value =
         result &&
         typeof result === "object" &&
@@ -933,7 +933,7 @@ export function useWorkbench() {
       "API 设置已保存，密钥存入系统凭据。",
     );
     api.key = "";
-    Object.assign(api, await invoke("ai_settings"));
+    Object.assign(api, await callDesktop("ai_settings"));
   }
   async function register() {
     await run(
@@ -949,7 +949,7 @@ export function useWorkbench() {
       },
       "模板已注册，原始格式与工作表已保留。",
     );
-    schemas.value = await invoke("templates");
+    schemas.value = await callDesktop("templates");
   }
   async function classify() {
     if (!current.value) return;
@@ -979,8 +979,8 @@ export function useWorkbench() {
   onMounted(async () => {
     try {
       await refresh();
-      Object.assign(api, await invoke("ai_settings"));
-      schemas.value = await invoke("templates");
+      Object.assign(api, await callDesktop("ai_settings"));
+      schemas.value = await callDesktop("templates");
       unlisteners.push(
         await listen("workspace-changed", () => refresh().catch(() => {})),
       );
