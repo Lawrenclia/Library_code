@@ -259,6 +259,7 @@ function browserState(role: string) {
                   <span
                     v-for="[key, label] in [
                       ['export', '原生导出'],
+                      ['local_source', '本地来源读取'],
                       ['parse', '文件解析'],
                       ['submit', '自动提交'],
                       ['template', '模板准备'],

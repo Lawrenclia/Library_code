@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-source-file"
+description = "Enables the preview_source_file command without any pre-configured scope."
+commands.allow = ["preview_source_file"]
+
+[[permission]]
+identifier = "deny-preview-source-file"
+description = "Denies the preview_source_file command without any pre-configured scope."
+commands.deny = ["preview_source_file"]

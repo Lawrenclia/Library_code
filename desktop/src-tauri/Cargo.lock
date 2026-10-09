@@ -2207,6 +2207,7 @@ version = "0.1.0"
 dependencies = [
  "calamine",
  "csv",
+ "encoding_rs",
  "quick-xml 0.38.4",
  "regex",
  "rusqlite",

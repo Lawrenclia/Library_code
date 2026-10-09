@@ -267,3 +267,25 @@ export interface MaterialValidation {
   ready?: boolean;
   cancelled?: boolean;
 }
+export interface SourceDraft {
+  id: string;
+  task_id: string;
+  task_revision: number;
+  channel: string;
+  original_name: string;
+  path: string;
+  sha256: string;
+  format: string;
+}
+export interface SourcePage {
+  draft: SourceDraft;
+  sheet: string;
+  header_row: number;
+  page: number;
+  total: number;
+  actual_encoding: string;
+  sheets: { name: string; first_row: number; rows: number }[];
+  columns: { column: number; name: string; label: string }[];
+  rows: { row: number; values: string[] }[];
+  cancelled?: boolean;
+}

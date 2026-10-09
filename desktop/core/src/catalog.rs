@@ -19,6 +19,7 @@ pub fn channels() -> Value {
         let template = channel["id"] == "general" || channel["id"] == "other";
         channel["capabilities"] = json!({
             "search":if native {"implemented"} else {"unimplemented"},
+            "local_source":"implemented",
             "export":if native {"implemented"} else {"unimplemented"},
             "parse":if native {"implemented"} else {"unimplemented"},
             "submit":if native {"implemented"} else {"unimplemented"},

@@ -29,6 +29,7 @@ import {
 } from "@lucide/vue";
 import WorkbenchShell from "@/components/WorkbenchShell.vue";
 import WorkflowOverview from "@/components/WorkflowOverview.vue";
+import SourceImporter from "@/components/SourceImporter.vue";
 import TaskTable from "@/components/TaskTable.vue";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1305,6 +1306,12 @@ function frameworkBrowser(role: string, entry?: string) {
                   "
                   ><Upload />读取本地 WOS TXT</Button
                 >
+                <SourceImporter
+                  :task="current"
+                  :locked="locked"
+                  :channels="workspace.framework?.channels || []"
+                  :run="run"
+                />
                 <div
                   v-for="e in current.evidence"
                   :key="e.id"
@@ -1317,7 +1324,14 @@ function frameworkBrowser(role: string, entry?: string) {
                     {{ new Date(e.created).toLocaleString() }}
                   </p>
                   <p class="path mb-2">{{ e.source }}</p>
-                  <p class="whitespace-pre-wrap text-xs leading-6">
+                  <details
+                    v-if="e.kind === 'external_metadata'"
+                    class="text-xs leading-6"
+                  >
+                    <summary>查看完整来源字段与绑定记录</summary>
+                    <p class="break-all whitespace-pre-wrap">{{ e.text }}</p>
+                  </details>
+                  <p v-else class="whitespace-pre-wrap text-xs leading-6">
                     {{ e.text }}
                   </p>
                 </div>

@@ -3,6 +3,7 @@ use tauri::WebviewWindow;
 pub mod browsers;
 pub mod materials;
 pub mod models;
+pub mod sources;
 pub mod tasks;
 pub mod workspace;
 

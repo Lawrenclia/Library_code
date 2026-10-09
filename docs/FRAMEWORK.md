@@ -47,7 +47,7 @@ flowchart TD
 | 页面驱动 | `src-tauri/src/adapters.rs`：绑定角色、脚本与处理函数；WOS/SA/导入复用 `extension` 驱动，其他驱动位于 `src-tauri/browser` |
 | 核心业务 | `core/src/model.rs`、`issues.rs`、`sa.rs`、`claim.rs`、`alias.rs`、`metadata.rs`、`merge.rs`、`library.rs`：规则和来源校验，不依赖窗口或 Tauri |
 | 存储与恢复 | `core/src/store.rs`、`queue.rs`、`download.rs`、`versions.rs`、`legacy.rs`：事务、原始意图、输入、回执和恢复条件 |
-| 文件、模板、AI | `core/src/files.rs`、`templates.rs`、`template_rules.rs`、`catalog.rs` 与 `src-tauri/src/ai.rs`：解析、Excel、实际模板规则、渠道和 API 引用验证 |
+| 文件、模板、AI | `core/src/files.rs`、`source_files.rs`、`templates.rs`、`template_rules.rs`、`catalog.rs` 与 `src-tauri/src/ai.rs`：原文件接入、Excel、实际模板规则、渠道和 API 引用验证 |
 | 前端服务 | `src/services/desktop.ts`：闭合的本地命令类型；`composables/useWorkbench.ts`：任务、表单、确认和事件 |
 | 前端页面 | `WorkflowOverview.vue`：流程、来源能力、连接与实时数量；`App.vue`：任务详情、材料与设置；`TaskTable.vue`、`WorkbenchShell.vue`：列表和导航 |
 
@@ -57,7 +57,7 @@ flowchart TD
 
 `core/src/workflow.rs` 定义 27 个公开任务操作和服务分类：读取、准备、本地核验、恢复、平台写入。Engine 用枚举穷尽分发；新增操作没有接入处理分支会导致编译失败。未知操作在加载或改变任务前拒绝。页面的 `metadata_save`、`duplicate_merge`、`alias_add` 不能当成公开工作流命令调用。
 
-`core/src/framework.rs` 提供框架版本、功能边界、6 个浏览器工作区和 3 类业务流程。`catalog.rs` 是 11 个导入渠道的统一注册来源，AI 与前端都从它读取。检索、原始导出、解析、提交和模板准备分别披露，不把已登记渠道当成已实现驱动。
+`core/src/framework.rs` 提供框架版本、功能边界、6 个浏览器工作区和 3 类业务流程。`catalog.rs` 是 11 个导入渠道的统一注册来源，AI 与前端都从它读取。检索、原始导出、数据库解析、提交、模板准备和本地来源读取分别披露，不把已登记渠道当成已实现驱动。
 
 `workspace` 返回实际注册表、任务、队列和窗口状态。流程总览不创建写入意图，也不把打开窗口当成有访问权限。图书馆入口使用[上海交通大学图书馆数据库列表](https://www.lib.sjtu.edu.cn/f/database/database.shtml)，在 WOS 自己的资料目录内导航；认证由用户完成。
 
@@ -66,6 +66,16 @@ flowchart TD
 新增操作依次接入：公开枚举 → 核心规则 → 服务 → 原始意图与回读 → 页面驱动 → UI 确认 → 权限注册与业务验收。恢复必须读取原载荷，不能用后来改变的表单替代旧意图。
 
 模板以实际文件为准，重复表头使用列位置作为唯一填写键，导出不改原表头。注册及导出均读取说明行和输出行的数据有效性；可解释规则在本地验证，未知规则列为待核对。生成草稿保留有效字段，无效字段留空，模板与输出哈希、输入和 AI 建议绑定后写入任务证据及来源报告。材料导出不改业务阶段；再次分类不会让旧材料成为新建议的成功证明。
+
+### 原始文件接入
+
+本地接入不依赖 WOS 记录模型。`commands/sources.rs` 提供 `preview_source_file`、`source_file_page`、`attach_source_file` 三个本地 IPC；`SourceImporter.vue` 在任务“来源”页连接这些入口。渠道允许的 Excel、CSV、TXT 格式取自同一注册表，原始字节存入工作目录 `source-files/<SHA-256>.<扩展名>`。原文件最大 16 MB、展开 XLSX 最大 64 MB、最多 200000 个单元格；完整选中记录最大 1 MB，超限拒绝，不截断字段。
+
+Excel/CSV 明确选择工作表、实际表头行和一条论文记录，再映射原文题名及可选 DOI/WOS 列。重复或空表头按真实列位置保存，原记录全部字段进入来源，公式结果拒绝作为原始数据库记录。CSV 可选择逗号、分号、制表符，保留引号中的换行；文本支持 UTF-8、GB18030 和 UTF-16，BOM 记录实际解码方式，乱码拒绝采纳。TXT 明确选择连续起止行并填写范围内真实题名，仅该范围进入 AI。
+
+绑定须保存具体对应依据与人工确认，已映射的 DOI/WOS 与名单冲突时拒绝。预览记录保存在 SQLite，重开后按同条任务和版本恢复；已绑定或任务版本改变的预览不能重复绑定。来源保存为 `external_metadata`，包括原文件、哈希、渠道、实际编码、所有选中字段/文本、行列位置、输入版本和绑定依据。不会创建 WOS Artifact，也不会自动确认论文身份、交大归属或改变业务阶段。
+
+API 请求前、返回采纳前和模板导出前都重新读取归档并核对选中内容；旧输入来源不进入当前 AI 引用，材料校验结果不作为事实来源。来源 Excel 保留完整记录及原文件/哈希对应关系，长摘要与依据分段后仍可完整重建。该通用容器读取不是各数据库语义解析器，不替代非 WOS 网站自动导出或平台导入驱动。
 
 ## 状态与权限
 
@@ -91,8 +101,10 @@ cargo run --quiet --locked --manifest-path desktop/core/Cargo.toml --example fra
 
 在 `desktop` 启动 `pnpm dev` 后，从根目录运行 `node tests/desktop-framework.test.cjs`，核验实际 Rust 注册表、前端客户端、IPC 与权限一致性、实时数量、待确认入口、各模块/渠道展示和 1260/960 布局。该测试使用隔离 IPC，不证明真实登录或下载。
 
+`node tests/desktop-sources-ui.test.cjs` 验证原文件渠道/编码设置、明确记录/范围/列选择、分页和表头刷新、来源确认、版本清理、恢复入口及异步返回的任务隔离。`node tests/desktop-materials-ui.test.cjs` 验证模板材料和校验展示。这些测试均使用隔离 IPC，未操作真实数据库或平台。
+
 原生完整流程由 `smoke-test` 编译后的程序运行 `tests/desktop-native.test.cjs`，只访问独立本地合成页面。正式编译不包含回环来源覆盖。既有完整进程恢复测试仍保留；合并完整进程恢复验收尚未完成。
 
 ## 交付边界
 
-框架已装配，核心服务、浏览器驱动、AI、模板、存储、报告和前端均有实际入口。WOS TXT 是当前唯一接入自动原始导出与平台导入的渠道；其他渠道保留明确的扩展位置。真实 WOS 机构访问、下载和机构后台闭环仍需登录后的独立验收，整体业务目标保持未完成。
+框架已装配，核心服务、浏览器驱动、本地原始来源、AI、模板、存储、报告和前端均有实际入口。WOS TXT 是当前唯一接入自动原始导出与平台导入的渠道；其他渠道可接入符合登记格式的本地原文件，网站自动导出与平台导入保留扩展位置。真实 WOS 机构访问、下载和机构后台闭环仍需登录后的独立验收，整体业务目标保持未完成。

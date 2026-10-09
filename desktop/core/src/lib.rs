@@ -13,6 +13,7 @@ pub mod metadata_order;
 pub mod model;
 pub mod queue;
 pub mod sa;
+pub mod source_files;
 pub mod store;
 pub mod template_rules;
 pub mod templates;

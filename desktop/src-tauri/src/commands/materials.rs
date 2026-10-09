@@ -95,7 +95,8 @@ pub(crate) async fn fill_template(
             "AI 填写建议属于其他模板，请针对当前模板重新生成。",
         ));
     }
-    library_core::catalog::validate_ai(&classification, &task.evidence, Some(&json!(template)))?;
+    let sources = library_core::source_files::verified_evidence(&state.store.root, &task)?;
+    library_core::catalog::validate_ai(&classification, &sources, Some(&json!(template)))?;
     let fields: std::collections::BTreeMap<String, String> = classification["fields"]
         .as_object()
         .ok_or_else(|| Failure::new("AI_RESULT_INVALID", "缺少已核验字段。"))?
@@ -118,14 +119,11 @@ pub(crate) async fn fill_template(
     let Some(file) = file else {
         return Ok(json!({"cancelled":true}));
     };
+    library_core::source_files::verified_evidence(&state.store.root, &task)?;
     let validation = library_core::templates::write_checked(template, &fields, file.path())?;
     let audit = state.store.root.join("materials");
     std::fs::create_dir_all(&audit)?;
-    let source_evidence: Vec<_> = task
-        .evidence
-        .iter()
-        .filter(|e| e.kind != "material_validation")
-        .collect();
+    let source_evidence = sources;
     let provenance = json!({"schema":"template_material_v1","sa_id":id,"input_hash":task.input_hash,"record_fingerprint":task.record.fingerprint(),"classification_hash":hash(classification.to_string().as_bytes()),"template_id":template.id,"template_hash":template.fingerprint,"output":file.path().to_string_lossy(),"output_hash":hash(&std::fs::read(file.path())?),"fields":classification["fields"],"evidence":source_evidence,"validation":validation,"missing":validation.missing,"invalid_fields_omitted":true});
     let audit_path = audit.join(format!("{}.json", uuid::Uuid::new_v4()));
     std::fs::write(&audit_path, serde_json::to_vec_pretty(&provenance)?)?;

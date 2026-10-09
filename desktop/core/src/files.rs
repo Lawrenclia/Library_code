@@ -493,6 +493,24 @@ pub fn export_report_with_queues(
     }
     for (row, t) in tasks.iter().enumerate() {
         let a = t.artifact.as_ref();
+        let originals = crate::source_files::current_receipts(t);
+        let original_pairs = originals
+            .iter()
+            .map(|s| (s.archive_path.clone(), s.sha256.clone()))
+            .chain(a.map(|a| (a.path.clone(), a.candidate.sha256.clone())))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let original_paths = original_pairs
+            .iter()
+            .map(|p| p.0.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let original_hashes = original_pairs
+            .iter()
+            .map(|p| p.1.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         let ai = t.classification.as_ref();
         let fields = vec![
             t.record.row.to_string(),
@@ -510,8 +528,8 @@ pub fn export_report_with_queues(
                 .into_iter()
                 .collect::<Vec<_>>()
                 .join("\n"),
-            a.map(|a| a.path.clone()).unwrap_or_default(),
-            a.map(|a| a.candidate.sha256.clone()).unwrap_or_default(),
+            original_paths,
+            original_hashes,
             report_missing(t),
             serde_json::to_value(&t.route)?.as_str().unwrap().into(),
             serde_json::to_value(&t.stage)?.as_str().unwrap().into(),
