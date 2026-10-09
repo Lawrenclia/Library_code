@@ -52,7 +52,7 @@ async function runSACommand(command) {
   };
   try {
     check();
-    if (!["status", "search", "open_metadata", "open_claim", "prepare_claim", "submit_claim", "link", "complete"].includes(command.action)) stop("不支持的命令");
+    if (!["status", "search", "open_metadata", "open_claim", "prepare_claim", "submit_claim", "verify_claim", "link", "complete"].includes(command.action)) stop("不支持的命令");
     if (typeof command.sa_id !== "string" || !command.sa_id || command.sa_id.length > 160) stop("名单 ID 不合法");
     const roots = [...document.querySelectorAll("*")].map(el => el.__vue__).filter(Boolean);
     const found = new Set(), visited = new Set();
@@ -295,7 +295,7 @@ async function runSACommand(command) {
       const comparison = await showDetail();
       return {ok: true, data: {row: before, comparison}};
     }
-    if (["prepare_claim", "submit_claim"].includes(command.action)) {
+    if (["prepare_claim", "submit_claim", "verify_claim"].includes(command.action)) {
       const submitting = command.action === "submit_claim";
       if (submitting && command.confirmed !== true) stop("缺少本条作者认领的人工确认");
       if (row.markStatus !== "待处理") stop("该记录已处理，不自动认领");
@@ -343,6 +343,17 @@ async function runSACommand(command) {
       });
       const authors = authorsSnapshot();
       if (new Set(authors.map(author => String(author.order))).size !== authors.length) stop("作者序号重复，不能自动认领");
+      if (command.action === "verify_claim") {
+        const original = command.prepared;
+        const intended = original?.authors?.find(author => author.index === command.author_index);
+        if (!intended || original.item_id !== ids[0] || original.staff_id !== staffId || original.person?.wno !== staffId)
+          stop("缺少上次认领的精确目标，不能仅凭列表状态确认");
+        const confirmed = authors.filter(author => String(author.order) === String(intended.order) &&
+          author.fullname === intended.fullname && author.scholarId === original.person.id);
+        if (confirmed.length !== 1 || authors.filter(author => author.scholarId === original.person.id).length !== 1)
+          stop("尚未回读到上次提交的作者与学者关系，保留结果待确认");
+        return {ok:true,data:{verified:true,claimed:true,staff_id:staffId,scholar_id:original.person.id,author:intended.fullname}};
+      }
       if (claim.tableData.metadata.author.some(author => author.data)) stop("已有未提交的学者选择，请人工核对");
       const available = authors.filter(author => author.eligible && !author.scholarId);
       if (!available.length) stop("没有可认领的作者行，请人工核验现有认领");
@@ -455,11 +466,21 @@ async function runSACommand(command) {
       if (Number(row.matchCount) !== 1 || ids.length !== 1) stop("编辑或认领需要唯一匹配条目；多条匹配请人工选择");
       await showDetail();
       check();
-      if (command.action === "open_metadata") drawer.editItem(ids[0]);
+      if (command.action === "open_metadata") {
+        const editor = drawer.$refs?.itemEdit;
+        if (command.automated === true && (!editor || editor.drawer || editor.shows ||
+            typeof editor.handleCloses !== "function")) stop("存在其他编辑页或条目编辑结构未知，不能覆盖未保存内容");
+        drawer.editItem(ids[0]);
+        if (command.automated === true) {
+          editor.__libraryTask = command.sa_id;
+          delete editor.__libraryClean;
+          delete editor.__libraryExpected;
+        }
+      }
       else drawer.handleClaim();
       return {ok: true, data: {row: before, manual: true}};
     }
-    const presetNotes = ["已认领", "DOI和WOSID SA未提交", "通讯作者修正"];
+    const presetNotes = ["已认领", "DOI和WOSID SA未提交", "通讯作者修正", "非交大"];
     const note = typeof command.note === "string" ? command.note.trim() : "";
     const noteParts = note.split(/[；;]/).map(part => part.trim()).filter(Boolean);
     const knownShortNote = noteParts.length > 0 && noteParts.every(part => presetNotes.includes(part));
@@ -498,6 +519,12 @@ async function runSACommand(command) {
       await closeReadOnlyDetail();
     }
     if (command.action === "complete") {
+      if (command.expected_comparison != null) {
+        const comparison = await showDetail();
+        if (!Array.isArray(command.expected_comparison) || !equal(comparison, command.expected_comparison))
+          stop("逐项核对的实时详情已变化，请重新核验，未提交处理状态");
+        await closeReadOnlyDetail();
+      }
       const modal = vm.$refs.compareStatusDialog;
       if (!modal || typeof modal.show !== "function" || typeof modal.handleConfirm !== "function") stop("状态弹窗结构不兼容");
       vm.handleEdit(row);
@@ -538,7 +565,7 @@ async function runSACommand(command) {
     } else if (String(row.itemId || "").replace(/^,/, "") !== command.item_id) stop("平台唯一号回读不一致，需人工核验");
     return {ok: true, data: {row: after, verified: true}};
   } catch (error) {
-    return {ok: false, error: (submitted ? "【已发出写入，禁止自动重试】" : "【已暂停】") + error.message};
+    return {ok: false, submitted, error: (submitted ? "【已发出写入，禁止自动重试】" : "【已暂停】") + error.message};
   }
 }
 if (typeof module !== "undefined") module.exports = {runSACommand};

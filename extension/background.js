@@ -18,6 +18,19 @@ async function request(route, body, token) {
 }
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    if (message.type === "popup_status") {
+      if (!trustedPopup(sender)) throw new Error("只能由扩展弹窗查看连接状态");
+      const pair=await chrome.storage.session.get(["token","tabId","wosTabId","importTabId","mode"]);
+      const bound=async(id,valid)=>{
+        if(!Number.isInteger(id)) return false;
+        try{return valid((await chrome.tabs.get(id)).url);}catch{return false;}
+      };
+      return {ok:true,data:{paired:!!pair.token,busy,
+        primary:await bound(pair.tabId,pair.mode==="wos"?isWOSPage:validPage),
+        wos:await bound(pair.wosTabId,isWOSPage),
+        import:await bound(pair.importTabId,url=>validRolePage(url,"importTabId")),
+        version:chrome.runtime.getManifest().version}};
+    }
     if (["open_import", "inspect_workflow", "toggle_wos_mute"].includes(message.type)) {
       if (!trustedPopup(sender)) throw new Error("只能由扩展弹窗操作工作页");
       if (busy) throw new Error("请等待当前操作结束后再检查/调整工作页");
@@ -79,13 +92,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await chrome.storage.session.clear();
       return {ok: true};
     }
-    if (message.type !== "tick" || polling) return {ok: true};
+    if (message.type !== "tick" || polling || busy) return {ok: true};
     const pair = await chrome.storage.session.get(["token", "tabId", "wosTabId", "importTabId", "mode"]);
     const primaryValid=url=>pair.mode==="wos"?isWOSPage(url):validPage(url);
     if (!pair.token || sender.tab?.id !== pair.tabId || !primaryValid(sender.tab.url)) return {ok: true};
     polling = true;
     let data;
-    try { data = await request("/poll", {client: String(pair.tabId)}, pair.token); }
+    try { data = await request("/poll", {client: String(pair.tabId), deliveryAck: true}, pair.token); }
     finally { polling = false; }
     if (!data.command) return {ok: true};
     const command = data.command;
@@ -94,6 +107,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     else {
       busy = true;
       try {
+        let acknowledgement;
+        for (let retry=0;retry<3;retry++) {
+          try { acknowledgement=await request("/ack",{client:String(pair.tabId),id:command.id},pair.token);break; }
+          catch(error) {if(retry===2)throw new Error("命令领取确认失败，未执行网页操作；请先检查桌面连接");}
+        }
+        if(acknowledgement?.accepted!==true)throw new Error("命令已过期或目标已变化，未执行网页操作");
         const tab = await chrome.tabs.get(pair.tabId);
         if (!primaryValid(tab.url)) throw new Error("页面已切换，停止执行");
         if (pair.mode==="wos" && !command.action.startsWith("wos_"))

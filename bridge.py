@@ -78,9 +78,23 @@ class Bridge:
                         pending = bridge.pending
                         command = None
                         if pending and not payload.get("claimOnly") and not pending["delivered"] and time.monotonic() < pending["deadline"]:
-                            pending["delivered"] = True
+                            # Protocol 2: a lost poll response must not consume
+                            # the command. The client acknowledges its ID before
+                            # executing; lost acknowledgements are idempotent.
+                            if not payload.get("deliveryAck"):
+                                pending["delivered"] = True
                             command = pending["command"]
                     return self.reply(200, {"command": command})
+                if self.path == "/ack":
+                    with bridge.lock:
+                        pending = bridge.pending
+                        accepted = bool(pending and str(payload.get("client", "")) == bridge.connected
+                                        and payload.get("id") == pending["command"]["id"]
+                                        and time.monotonic() < pending["deadline"])
+                        if accepted:
+                            pending["delivered"] = True
+                            bridge.last_seen = time.monotonic()
+                    return self.reply(200, {"accepted": accepted})
                 if self.path == "/result":
                     with bridge.lock:
                         pending = bridge.pending
@@ -131,6 +145,10 @@ class Bridge:
             result = queue.Queue(maxsize=1)
             command = {"id": str(uuid.uuid4()), "action": action, **payload,
                        "expires": int((time.time() + timeout) * 1000)}
+            try:
+                json.dumps(command, ensure_ascii=False).encode("utf-8")
+            except (UnicodeError, TypeError, ValueError) as exc:
+                raise SafetyStop("命令包含无效文本或数据，请先核验输入；未提交网页操作。") from exc
             self.pending = {"command": command, "result": result, "delivered": False,
                             "deadline": time.monotonic() + timeout}
         try:

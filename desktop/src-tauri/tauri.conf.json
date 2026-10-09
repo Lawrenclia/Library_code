@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "机构知识库工作台",
+  "version": "0.1.0",
+  "identifier": "cn.library.sa.workspace",
+  "build": {"beforeDevCommand":"pnpm dev","devUrl":"http://127.0.0.1:1420","beforeBuildCommand":"pnpm build","frontendDist":"../dist"},
+  "app": {"windows":[{"label":"main","title":"机构知识库工作台","width":1260,"height":860,"minWidth":960,"minHeight":680}],"security":{"csp":"default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'"}},
+  "bundle": {"active":true,"targets":["nsis"],"resources":{"../licenses/shadcn-vue.LICENSE":"licenses/shadcn-vue.LICENSE","../THIRD_PARTY_NOTICES.md":"THIRD_PARTY_NOTICES.md"},"windows":{"webviewInstallMode":{"type":"downloadBootstrapper"}}}
+}

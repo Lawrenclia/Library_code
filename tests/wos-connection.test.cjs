@@ -8,14 +8,14 @@ const root=path.join(__dirname,'../extension');
 test('WOS pairs and executes without an SA or import tab; rejects backend operations',async()=>{
   const state={}, requests=[], injections=[];
   let listener,command;
-  const tab={id:7,url:'https://www.webofscience.com/wos/woscc/basic-search'};
+  const tab={id:7,status:'complete',url:'https://www.webofscience.com/wos/woscc/basic-search'};
   const chrome={
     runtime:{id:'test',getURL:p=>'chrome-extension://test/'+p,getManifest:()=>({version:'test'}),
       onMessage:{addListener:fn=>listener=fn}},
     storage:{session:{get:async()=>({...state}),clear:async()=>{for(const k of Object.keys(state))delete state[k];},
       set:async values=>Object.assign(state,values)}},
     tabs:{get:async id=>{assert.equal(id,7);return tab;}},
-    scripting:{executeScript:async options=>{injections.push(options);return [{result:{ok:true,data:{}}}];}}
+    scripting:{executeScript:async options=>{injections.push(options);return [{result:{ok:true,data:options.args?.[0]?.action==='wos_read_results'?{state:'record',record_url:'https://www.webofscience.com/wos/woscc/full-record/WOS:000123456789012'}:{submitted:true}}}];}}
   };
   const context=vm.createContext({chrome,URL,Date,AbortSignal,importScripts:()=>{},
     runSACommand:()=>{throw Error('must not call SA');},

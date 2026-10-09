@@ -1,0 +1,35 @@
+<!doctype html><html><head><meta charset="utf-8"><style>.el-drawer,.el-message-box{border:1px solid;padding:10px}button{margin:3px}.closed{display:none}</style></head><body>
+<main id="pool"><h1>重复数据管理 · 隔离模拟</h1></main>
+<div id="citation"><section class="el-drawer" id="group-drawer" style="display:none"><table><tbody id="group-rows"></tbody></table></section></div>
+<div id="detail"><section class="el-drawer" id="master-drawer" style="display:none"><div id="master-fields"></div></section></div>
+<script>
+const clone=v=>JSON.parse(JSON.stringify(v));
+window.testConfig={hangMerge:false,failMerge:false,retainSource:false,wrongMaster:false,staleQuery:false,dropPage:false,wrongConfirm:false};
+const primary={id:'item-primary',modelName:'期刊论文',metadata:{title:['A paper'],doi:['10.1234/test'],author:[{fullname:'Demo, A'}],year:['2026']}};
+const source={id:'item-source',modelName:'科技论文',metadata:{title:['A paper corrected'],doi:['10.1234/test'],author:[{fullname:'Demo, A'}],year:['2026']}};
+window.testGroups=[{id:'group-1',item:primary,items:[{item:source}]}];
+window.testMasters={'item-primary':clone(primary),'item-source':clone(source)};
+window.mergeWrites=[];window.readCalls=[];window.queryCalls=[];
+const emitter=new Map();
+const detailInner={id:'',loading:false,auth:true,status:null,modelName:'',resultList:[],
+ async getItemDetail(){this.loading=true;readCalls.push(this.id);await Promise.resolve();const found=testConfig.wrongMaster?{...testMasters[this.id],metadata:{title:['Other paper']}}:testMasters[this.id];this.auth=!!found;this.status=found?'active':null;this.modelName=found?.modelName||'';this.resultList=found?Object.entries(clone(found.metadata)).map(([fieldName,value])=>({fieldName,actualLabel:fieldName,[fieldName]:value})):[];this.loading=false;render();}
+};
+const detail={$el:document.getElementById('detail'),$refs:{detail:detailInner},drawer:false,shows:false,id:null,
+ show(id){this.id=id;this.drawer=true;this.shows=true;detailInner.id=id;detailInner.loading=true;Promise.resolve().then(()=>detailInner.getItemDetail());render();},
+ handleCloses(){this.drawer=false;this.shows=false;render();}
+};
+const modal={$el:document.getElementById('citation'),$refs:{detail,recordModal:{drawer:false}},drawer:false,title:'',id:'',list:{},merge:{itemId:'',targetItemId:''},
+ $on(event,fn){const fns=emitter.get(event)||new Set();fns.add(fn);emitter.set(event,fns);},$off(event,fn){emitter.get(event)?.delete(fn);},$emit(event){emitter.get(event)?.forEach(fn=>fn());},
+ show(row){this.title='详情';this.id=row.id;this.getList();this.drawer=true;render();},
+ getList(){this.merge={itemId:'',targetItemId:''};this.list=[];render();Promise.resolve().then(()=>{const group=testGroups.find(g=>g.id===this.id);this.list=group?{...clone(group),items:[{item:clone(group.item)},...clone(group.items)]}:null;render();});},
+ zhuTiaoMu(row){this.merge.targetItemId=row.id;render();},
+ mergeas(row){this.merge.itemId=row.id;const box=document.createElement('div');box.className='el-message-box';box.innerHTML=`<div class="el-message-box__message">${testConfig.wrongConfirm?'删除此条目？':'确认合并至主条目？'}</div><button>取消</button><button>确定</button>`;document.body.append(box);box.querySelectorAll('button')[0].onclick=()=>box.remove();box.querySelectorAll('button')[1].onclick=()=>{mergeWrites.push(clone(this.merge));box.remove();if(testConfig.hangMerge||testConfig.failMerge)return;const index=testGroups.findIndex(g=>g.id===this.id),group=testGroups[index];if(!testConfig.retainSource){group.items=group.items.filter(r=>r.item.id!==row.id);if(group.item.id===row.id){group.item=clone(testMasters[this.merge.targetItemId]);group.items=group.items.filter(r=>r.item.id!==group.item.id);}if(!group.items.length)testGroups.splice(index,1);delete testMasters[row.id];}this.$emit('upData');this.getList();};}
+};
+const vm={$el:document.getElementById('pool'),$refs:{citationModal:modal},$children:[],queryForm:{majorTitle:''},queryFormShow:false,page:{current:'1',size:'10',titleSimilarity:'93.50'},total:0,loading:false,tableData:[],
+ async getData(query){this.loading=true;queryCalls.push({query:clone(query),page:this.page.current,threshold:this.page.titleSimilarity});await Promise.resolve();this.total=testGroups.length;if(!testConfig.staleQuery)this.tableData=testConfig.dropPage?[]:clone(testGroups.slice((this.page.current-1)*this.page.size,this.page.current*this.page.size));this.loading=false;render();},
+ details(row){modal.show(row);},$nextTick(){render();return Promise.resolve();}
+};
+document.getElementById('pool').__vue__=vm;
+function render(){document.getElementById('group-drawer').style.display=modal.drawer?'block':'none';document.getElementById('master-drawer').style.display=detail.drawer?'block':'none';const rows=document.getElementById('group-rows');rows.replaceChildren();for(const row of modal.list?.items||[]){const tr=document.createElement('tr');tr.className='el-table__row';tr.innerHTML=`<td></td><td><button></button><button>合并至主条目</button></td>`;tr.querySelector('td').textContent=row.item.metadata.title[0];const buttons=tr.querySelectorAll('button');buttons[0].textContent=modal.merge.targetItemId===row.item.id?'是':'否';buttons[0].onclick=()=>modal.zhuTiaoMu(row.item);buttons[1].onclick=()=>modal.mergeas(row.item);buttons[1].style.display=modal.merge.targetItemId===row.item.id?'none':'inline';rows.append(tr);}document.getElementById('master-fields').textContent=JSON.stringify(detailInner.resultList);}
+render();
+</script></body></html>

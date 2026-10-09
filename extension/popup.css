@@ -70,6 +70,9 @@ textarea { min-height: 100px; max-height: 200px; resize: vertical; font: 11px/1.
 .status-card h2 { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); font-weight: 500; }
 .status-dot { width: 5px; height: 5px; border-radius: 50%; background: #a69b9b; }
 #status { margin-top: 5px; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+#connection { margin-top: 8px; white-space: pre-wrap; font-size: 12px; }
+#connection[data-state="ready"] { color: #24714f; }
+#connection[data-state="pending"] { color: #886119; }
 footer { font-size: 10px; line-height: 1.65; color: var(--muted); padding: 13px 4px 0; }
 ::selection { background: var(--accent-soft); color: var(--accent); }
 ::-webkit-scrollbar { width: 6px; }

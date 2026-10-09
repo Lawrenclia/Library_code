@@ -9,8 +9,8 @@ async function runWOSCommand(command) {
   const norm = s => String(s??"").normalize("NFKC").replace(/\s+/g," ").trim();
   const visible = el => el && el.getClientRects().length>0 && getComputedStyle(el).visibility!=="hidden";
   const all = (sel,root=document)=>[...root.querySelectorAll(sel)].filter(visible);
-  const caption = el => norm(el.getAttribute("aria-label") || el.innerText || el.textContent);
-  const selection = el => el.tagName==="SELECT" ? norm(el.selectedOptions[0]?.textContent) : norm(el.innerText || el.textContent || el.getAttribute("aria-label"));
+  const caption = el => searchText(el) || norm(el.getAttribute("aria-label"));
+  const selection = el => el.tagName==="SELECT" ? norm(el.selectedOptions[0]?.textContent) : caption(el);
   const fieldText = el => selection(el).replace(/(?:arrow_drop_down|expand_more|keyboard_arrow_down)/g, "").trim().replace(/\s*\((?:TS|TI|DO|UT|ALL)\)$/, "");
   const fieldNames = ["All Fields","所有字段","全部字段","所有欄位","Topic","主题","主題","Title","标题","题名","標題","題名",
     "DOI","Accession Number","入藏号","入藏號","Author","作者","Publication Titles","出版物名称","出版物名稱"];
@@ -28,7 +28,7 @@ async function runWOSCommand(command) {
     if(!Number.isFinite(command.expires) || Date.now()>=command.expires-resultMargin)fail("WOS 操作超时，请人工查看网页");
     if(/Oops,?\s*something went wrong!?/i.test(document.body?.innerText||""))
       fail("WOS 网站自身报错：Oops, something went wrong! 这不是导入管理页的问题。请先点击 WOS 网页顶部 Search 或导航菜单重新进入检索；若仍报错，请人工检查登录、校园网/机构访问。网页恢复前不继续检索或导入");
-    if(!location.pathname.startsWith("/wos/woscc/"))fail("请在 WOS 核心合集的文献检索页登录，不能使用作者检索");
+    if(!location.pathname.startsWith("/wos/woscc/") && !(["wos_search","wos_start_search"].includes(command.action) && /^\/wos\/?$/.test(location.pathname)))fail("请在 WOS 核心合集的文献检索页登录，不能使用作者检索");
     if(all('iframe[src*="captcha"],input[type="password"],#challenge-form').length)fail("登录或验证码需要人工处理");
   };
   const wait=async(fn,label,ms=30000)=>{
@@ -99,7 +99,6 @@ async function runWOSCommand(command) {
   };
   const decodedPath = value => {try{return /%(?:2f|5c)/i.test(value)?"":decodeURIComponent(value);}catch{return "";}};
   const fullRecordPath = value => /^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodedPath(value));
-  const fullRecord = () => fullRecordPath(location.pathname);
   const recordLinks=()=>{
     const links=new Map();
     for(const anchor of all('a[href]')){
@@ -118,7 +117,7 @@ async function runWOSCommand(command) {
   // therefore leaves spaces between words that look contiguous on screen.
   // Allow only whitespace between the known phrase fragments; do not use a
   // broad "0" match that could mistake search history or help text for a result.
-  const noResultPattern=/(?:no\s+(?:results?|records?|documents?)\s+(?:were\s+)?found|your\s+search\s+(?:did\s+not\s+(?:return|find)\s+any|returned\s+no)\s+results?|您的?\s*(?:检索|搜索|檢索|搜尋)\s*(?:未找到|没有找到|沒有找到|未檢索到)\s*(?:任何)?\s*(?:结果|結果)|未找到\s*(?:任何)?\s*(?:结果|結果)|没有\s*(?:检索|搜索)\s*结果|沒有\s*(?:檢索|搜尋)\s*結果)/i;
+  const noResultPattern=/(?:your\s+search\s+found\s+no\s+results|no\s+(?:results?|records?|documents?)\s+(?:were\s+)?found|your\s+search\s+(?:did\s+not\s+(?:return|find)\s+any|returned\s+no)\s+results?|您的?\s*(?:检索|搜索|檢索|搜尋)\s*(?:未找到|没有找到|沒有找到|未檢索到)\s*(?:任何)?\s*(?:结果|結果)|未找到\s*(?:任何)?\s*(?:结果|結果)|没有\s*(?:检索|搜索)\s*结果|沒有\s*(?:檢索|搜尋)\s*結果)/i;
   const noResults=()=>noResultPattern.test(norm(document.body?.innerText||""));
   const noResultTextNodes=()=>{
     const found=[];
@@ -128,11 +127,50 @@ async function runWOSCommand(command) {
       if(visible(node.parentElement)&&noResultPattern.test(norm(node.nodeValue)))found.push(node);
     return found;
   };
+  // Angular adds this route while the tab-delimited export dialog is open.
+  // Strip only that known overlay; other routes must still fail identity checks.
+  const recordPath = () => location.pathname.replace(/\(overlay:export\/ext\)$/, "");
+  const fullRecord = () => /^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodedPath(recordPath()));
+  const summaryPage = () => /^\/wos\/woscc\/summary\/[^/()]+(?:\/[^/()]+)*\/?$/.test(recordPath());
+  const resultLinks = () => {
+    const urls=new Map();
+    for(const link of recordLinks().values()){
+      const url=new URL(link.href);
+      if(!url.username && !url.password) {
+        const key=url.origin+url.pathname.replace(/\/$/, "");
+        urls.set(key,{url:key,link});
+      }
+    }
+    return [...urls.values()];
+  };
+  const titleKey = value => norm(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const targetResult = () => {
+    const matches=resultLinks().filter(result=>command.wos ?
+      decodeURI(new URL(result.url).pathname).endsWith('/'+command.wos) :
+      titleKey(caption(result.link))===titleKey(command.title));
+    if(matches.length!==1)fail("当前可见 WOS 结果中未找到唯一匹配的题名或入藏号，请人工核对检索结果");
+    return matches[0];
+  };
+  const singleResult = () => {
+    const text=norm(document.body.innerText);
+    const single=/(?:^|\s)1\s+(?:results?|documents?)(?:\s|$)/i.test(text) ||
+      /(?:^|\s)1\s*(?:条(?:结果|记录|来自)|文献)(?:\s|$)/.test(text);
+    const results=resultLinks();
+    if(!single || results.length!==1)fail("WOS 结果不是可确认的唯一记录，请人工核对检索结果");
+    const {url,link}=results[0];
+    const ut=decodeURI(new URL(url).pathname).match(/WOS:\d{15}/)?.[0];
+    if(!ut || (command.wos && command.wos!==ut))fail("WOS 结果入藏号与名单不一致");
+    return {url,link};
+  };
   const fingerprint = () => {
+    if(summaryPage()){
+      singleResult();
+      return location.origin+recordPath()+location.search;
+    }
     if(!fullRecord())fail("未处于 WOS 核心合集单篇完整记录页");
     const ut=decodedPath(location.pathname).match(/WOS:\d{15}/)[0];
     if(command.wos && command.wos!==ut)fail("WOS 页面入藏号与名单不一致");
-    return location.origin+location.pathname;
+    return location.origin+recordPath();
   };
   const resultState = () => {
     if(fullRecord())return {state:"record",record_url:fingerprint()};
@@ -142,7 +180,10 @@ async function runWOSCommand(command) {
     const countMatch=text.match(/(?:^|\s)(\d{1,6})\s+(?:results?|records?|documents?)(?:\s|$)/i) ||
       text.match(/(?:^|\s)(\d{1,6})\s*(?:条|個|个|篇)?\s*(?:结果|結果|记录|紀錄|文献|文獻)(?:\s|$)/);
     const count=countMatch?Number(countMatch[1]):null;
-    if((Number.isInteger(count)&&count>1)||urls.size>1)return {state:"multiple"};
+    if((Number.isInteger(count)&&count>1)||urls.size>1){
+      try {return {state:"single",navigate_url:targetResult().url};}
+      catch {return {state:"multiple"};}
+    }
     if(count===1&&urls.size===1){
       const anchor=[...urls.values()][0],url=new URL(anchor.href,location.href);
       return {state:"single",navigate_url:url.origin+url.pathname};
@@ -151,49 +192,59 @@ async function runWOSCommand(command) {
   };
   try {
     check();
-    if(!["wos_search","wos_start_search","wos_read_results","wos_verify_record","wos_prepare_export","wos_download"].includes(command.action))fail("未知 WOS 命令");
+    if(!["wos_search","wos_start_search","wos_submit_search","wos_read_results","wos_verify_record","wos_prepare_export","wos_download"].includes(command.action))fail("未知 WOS 命令");
     if(typeof command.title!=="string" || !command.title.trim() || command.title.length>1500)fail("题名缺失或过长");
+    if(command.action==="wos_submit_search"){
+      const pending=window.__wosNativeSearch;
+      if(!pending || pending.id!==command.id || !pending.button.isConnected)fail("内置浏览器检索预览失效");
+      delete window.__wosNativeSearch;
+      click(pending.button);
+      return {ok:true,data:{submitted:true}};
+    }
     if(command.action==="wos_read_results") {
       if(all('[role="dialog"],mat-dialog-container').length)fail("WOS 有弹窗，请人工处理");
       return {ok:true,data:resultState()};
     }
     if(command.action==="wos_verify_record")return {ok:true,data:{state:"record",record_url:fingerprint()}};
     if(command.action==="wos_search" || command.action==="wos_start_search") {
-      if(!/\/(?:basic-search|advanced-search|fielded-search)\/?$/.test(location.pathname))fail("请先进入 WOS 核心合集的字段检索页");
       if(all('[role="dialog"],mat-dialog-container').length)fail("WOS 有弹窗，请人工处理");
       // WOS can keep the exact same no-result node for the next query. The
       // dispatcher treats this pre-click marker as a request to reload a clean
       // search page, then invokes this command again. No Search click has occurred,
       // so the real query is still submitted at most once.
-      if(noResults())fail("WOS 检索页保留上一条零结果，需刷新检索页");
+      if(command.action==="wos_start_search" && noResults())fail("WOS 检索页保留上一条零结果，需刷新检索页");
       const choices=command.wos?["Accession Number","入藏号","入藏號"]:command.doi?["DOI"]:["Title","标题","题名","標題","題名"];
       const query=command.wos||command.doi||command.title;
       // New WOS defaults to Smart Search. Follow only visible, specifically
       // labelled links to Advanced -> Fielded Search; never invent route URLs
       // or change the account's Smart Search preference.
-      const fieldedLabels=["Fielded Search","字段检索","字段搜索","欄位檢索"];
-      const advancedLabels=["Advanced Search","高级检索","高级搜索","進階檢索"];
-      const navigation=[...fieldedLabels,...advancedLabels];
-      const navigationControls=()=>all('a,button,[role="tab"]').filter(el=>navigation.includes(caption(el)));
-      // Chrome may report the tab as complete before the WOS SPA mounts its search
-      // controls. Wait for semantic controls instead of treating an empty first
-      // render as a permanent selector mismatch.
-      await wait(()=>fields().length>0 || navigationControls().length>0,"加载字段检索页面",15000);
+      const fieldedNames=["Fielded Search","字段检索","字段搜索","欄位檢索"];
+      const advancedNames=["Advanced Search","高级检索","高级搜索","進階檢索"];
+      const visited=new Set();
+      const entrances=()=>{
+        const links=all('a,button,[role="tab"],[role="button"]');
+        const fielded=links.filter(el=>fieldedNames.includes(caption(el)));
+        const advanced=links.filter(el=>advancedNames.includes(caption(el)));
+        // Once the fielded tab is visible, never bounce back to Advanced while
+        // its query form is loading. Likewise, don't click the same route twice.
+        const candidates=fielded.length?fielded:advanced.length?advanced:
+          links.filter(el=>el.closest('nav,header,[role="navigation"]')&&["Search","检索","搜索"].includes(caption(el)));
+        const key=el=>el.tagName==='A'&&el.hasAttribute('href')?el.href:el;
+        const available=candidates.filter(el=>el.getAttribute('aria-selected')!=='true' && el.getAttribute('aria-current')!=='page' && !visited.has(key(el)));
+        const leaves=available.filter(el=>!available.some(other=>other!==el&&el.contains(other)));
+        const unique=new Map();
+        for(const el of leaves)unique.set(key(el),el);
+        return [...unique.values()];
+      };
       for(let step=0;fields().length===0 && step<3;step++) {
-        const controls=navigationControls();
-        const selectedFielded=controls.filter(el=>fieldedLabels.includes(caption(el)) && el.getAttribute("aria-selected")==="true");
-        if(selectedFielded.length===1) {
-          await wait(()=>fields().length>0,"加载字段检索条件",15000);
-          break;
-        }
-        const fielded=controls.filter(el=>fieldedLabels.includes(caption(el)) && el.getAttribute("aria-selected")!=="true");
-        const advanced=controls.filter(el=>advancedLabels.includes(caption(el)) && el.getAttribute("aria-selected")!=="true");
-        const next=fielded.length?fielded:advanced;
-        if(next.length!==1)break;
-        const clicked=next[0];click(clicked);
-        await wait(()=>fields().length>0 || !clicked.isConnected || clicked.getAttribute("aria-selected")==="true",
-                   "切换字段检索",15000);
+        await wait(()=>fields().length>0||entrances().length>0,"等待字段检索入口（当前仍在首页或加载中）",15000);
+        if(fields().length)break;
+        const next=entrances();
+        if(next.length!==1)fail(`字段检索入口不唯一（${next.length} 个），未点击。请点扩展“检查工作页”查看导航诊断`);
+        const clicked=next[0];visited.add(clicked.tagName==='A'&&clicked.hasAttribute('href')?clicked.href:clicked);click(clicked);
+        await wait(()=>fields().length>0 || entrances().length>0,"切换字段检索",15000);
       }
+      if(!location.pathname.startsWith('/wos/woscc/'))fail('仍在 Smart Search 首页，未确认核心合集字段检索。请打开高级检索 → 字段检索后继续。');
       const combos=fields();
       if(combos.length!==1)fail(`检索字段选择器未唯一识别（识别到 ${combos.length} 个）。请进入 Advanced Search / 高级检索 → Fielded Search / 字段检索，只保留一行条件。可点扩展“检查工作页”复制控件诊断`);
       let field=combos[0];
@@ -216,6 +267,10 @@ async function runWOSCommand(command) {
       const action=searchButton(field,input); // Input events may replace the button.
       if(action.disabled||action.getAttribute("aria-disabled")==="true")fail("控件尚不可用");
       if(command.action==="wos_start_search") {
+        if(command.defer_click){
+          window.__wosNativeSearch={id:command.id,button:action};
+          return {ok:true,data:{ready:true}};
+        }
         // Return before the click can navigate. A real WOS navigation may destroy
         // an injected execution context; keeping that navigation inside this long
         // command was the source of desktop timeouts and a permanently busy worker.
@@ -223,42 +278,71 @@ async function runWOSCommand(command) {
         setTimeout(()=>action.click(),0);
         return {ok:true,data:{submitted:true}};
       }
-      const previous=location.href;
-      // A previous zero-result banner may still be mounted when the next query is
-      // entered. Only accept a banner that is new or changed after this click.
-      const zeroBefore=noResults(), oldZeroNodes=new Set(noResultTextNodes());
-      let zeroChanged=false;
-      const observer=zeroBefore?new MutationObserver(records=>{
-        for(const change of records){
-          if(change.type==="characterData"&&oldZeroNodes.has(change.target)){zeroChanged=true;break;}
-          if(change.type==="attributes"&&[...oldZeroNodes].some(node=>node.parentElement===change.target)){zeroChanged=true;break;}
-          const changed=[...(change.addedNodes||[]),...(change.removedNodes||[])];
-          if(changed.some(node=>noResultPattern.test(norm(node.textContent||node.nodeValue||"")) ||
-              [...oldZeroNodes].some(old=>node===old||(node.nodeType===Node.ELEMENT_NODE&&node.contains(old))))) {
-            zeroChanged=true;break;
-          }
-        }
-      }):null;
-      if(observer)observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:["hidden","aria-hidden","class","style"]});
-      const freshZero=()=>noResults()&&(!zeroBefore||zeroChanged);
+      const before=new Map(resultLinks().map(r=>[r.link,r.url+'|'+caption(r.link)]));
+      const emptyElements=()=>all('h1,h2,h3,h4,p,div,span,strong,b,section,[role="status"],[role="alert"]').filter(el=>
+        noResultPattern.test(caption(el)))
+        .filter((el,_,items)=>!items.some(other=>other!==el&&el.contains(other)));
+      const previousEmpty=new Set(emptyElements());
+      let empty=false;
+      const replacedEmpty=new Set();
+      const observer=new MutationObserver(changes=>{
+        for(const change of changes)for(const removed of change.removedNodes)
+          for(const old of previousEmpty)if(removed===old||removed.contains(old))replacedEmpty.add(old);
+      });
+      observer.observe(document.body,{childList:true,subtree:true});
       try {
-        click(action);
-        await wait(()=>location.href!==previous||fullRecord()||recordLinks().size||freshZero(),"WOS 检索结果");
-        await wait(()=>fullRecord()||recordLinks().size||freshZero(),"加载结果",60000);
-      } finally {if(observer)observer.disconnect();}
-      if(freshZero())fail("WOS 未找到记录；这不等于未发表，也不自动标记完成");
-      if(fullRecord())return {ok:true,data:{record_url:fingerprint()}};
-      const urls=recordLinks();
-      // Full results total must be one, not simply one rendered/visible match.
-      const text=norm(document.body.innerText);
-      const single=/(?:^|\s)1 (?:result|results|document|documents)(?:\s|$)/i.test(text) || /(?:^|\s)1 条(?:结果|记录)(?:\s|$)/.test(text);
-      if(!single || urls.size!==1)fail("WOS 结果不是可确认的唯一记录，请人工选择并核对后使用“导出当前 WOS 文献”");
-      click([...urls.values()][0]);await wait(fullRecord,"打开单篇记录");
+        click(searchButton(field,input)); // Input events may have replaced the button.
+        await wait(()=>{
+          const current=resultLinks();
+          const fresh=current.some(r=>before.get(r.link)!==r.url+'|'+caption(r.link));
+          empty=emptyElements().some(el=>!previousEmpty.has(el)||replacedEmpty.has(el));
+          // A previous no-results banner must be replaced before it can count
+          // for the next query. URL changes alone never prove search completion.
+          return fresh || empty;
+        },"等待本次检索的新结果（网址变化本身不代表结果已加载）");
+      } finally {observer.disconnect();}
+      if(empty)fail("WOS 未找到记录；这不等于未发表，也不自动标记完成");
+      let result, unique=false;
+      try {result=singleResult();unique=true;} catch {result=targetResult();}
+      // PPT slide 7 exports directly from the results list. Use the detail page
+      // only when this list does not offer its own Export control.
+      const exports=all('button,[role="button"],a').filter(el=>["Export","导出"].includes(caption(el)));
+      if(!unique || !summaryPage() || exports.length===0){
+        click(result.link);await wait(fullRecord,"打开单篇记录");
+        if(location.origin+recordPath().replace(/\/$/, "")!==result.url)fail("打开的详情与选中的 WOS 记录不一致");
+      }
       return {ok:true,data:{record_url:fingerprint()}};
     }
     const recordURL=fingerprint();
+    if(command.expected_record_url){
+      const expected=new URL(command.expected_record_url);
+      const actual=new URL(recordURL);
+      if(expected.username || expected.password || expected.origin!==actual.origin ||
+          decodedPath(expected.pathname)!==decodedPath(actual.pathname) || expected.search!==actual.search)
+        fail("当前 WOS 记录与本次检索目标不一致，未开始下载");
+    }
     if(command.action==="wos_prepare_export") {
       if(all('[role="dialog"],mat-dialog-container').length)fail("已有 WOS 弹窗，请人工关闭后再导出");
+      if(summaryPage()){
+        // Select the unique result's checkbox, never an unrelated toolbar option.
+        let root=singleResult().link.parentElement;
+        while(root && root!==document.body){
+          const boxes=all('input[type="checkbox"],[role="checkbox"]',root);
+          const choices=boxes.filter(el=>!boxes.some(other=>other!==el&&el.contains(other)));
+          if(choices.length===1){
+            const box=choices[0];
+            const selected=()=>box.checked===true||box.getAttribute('aria-checked')==='true';
+            if(!selected())click(box);
+            await wait(selected,"选择导出记录",5000);
+            break;
+          }
+          if(choices.length>1)break;
+          root=root.parentElement;
+        }
+      }
+      await wait(()=>all('button,[role="button"],a').some(el=>["Export","导出"].includes(caption(el)) &&
+        !el.disabled && el.getAttribute('aria-disabled')!=='true'),"等待记录导出按钮",15000);
+      if(fingerprint()!==recordURL)fail("等待导出时记录页面已变化，未开始下载");
       click(button(["Export","导出"]));
       await wait(()=>all('[role="menuitem"],button,a,mat-option').some(el=>["Tab delimited file","Tab-delimited file","Tab delimited","制表符分隔文件","制表符分隔","制表符"].includes(caption(el))),"导出格式",5000);
       click(one(all('[role="menuitem"],button,a,mat-option').filter(el=>["Tab delimited file","Tab-delimited file","Tab delimited","制表符分隔文件","制表符分隔","制表符"].includes(caption(el))),"Tab delimited"));
@@ -281,14 +365,14 @@ async function runWOSCommand(command) {
         if(ranges.length!==2)fail("导出记录范围未知");
         for(const el of ranges)set(el,"1");
       }
-      const selected=selection(select);
+      const selected=selection(select).replace(/(?:arrow_drop_down|expand_more|keyboard_arrow_down)/g, "").trim();
       if(!full.includes(selected))fail("未确认 Full Record 选项");
       window.__saWOSExport={id:command.sa_id,url:recordURL,dialog,select,ranges,submitted:false};
       return {ok:true,data:{ready:true,record_url:recordURL}};
     }
     const state=window.__saWOSExport;
     if(!state || state.id!==command.sa_id || state.url!==recordURL || state.submitted || !visible(state.dialog))fail("导出预览失效或已提交");
-    const selected=selection(state.select);
+    const selected=selection(state.select).replace(/(?:arrow_drop_down|expand_more|keyboard_arrow_down)/g, "").trim();
     if(!["Full Record","全记录","完整记录"].includes(selected) || state.ranges.some(el=>el.value!=="1"))fail("导出选项被修改");
     state.submitted=true;
     click(button(["Export","导出"],state.dialog));

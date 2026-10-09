@@ -10,9 +10,11 @@ window.recordPage=function(){
   document.getElementById('export').onclick=()=>{
     const b=document.createElement('button');b.textContent='Tab delimited file';main.appendChild(b);
     b.onclick=()=>{b.remove();const d=document.createElement('section');d.setAttribute('role','dialog');
+      if(window.wosOverlay)history.pushState({},'',location.pathname+'(overlay:export/ext)');
       d.innerHTML='<select aria-label="Record Content"><option>Author, Title, Source</option><option>Full Record</option></select><button>Export</button>';
       main.appendChild(d);d.querySelector('button').onclick=()=>{
         exportsMade++;
+        if(window.wosOverlay)history.replaceState({},'',location.pathname.replace('(overlay:export/ext)',''));
         const txt='TI\tAU\tAF\tSO\tPY\tC1\tUT\tDI\r\nSynthetic paper\tTest, A\tAlice Test\tSynthetic Journal\t2026\tShanghai Jiao Tong Univ\t'+ut+'\t10.1234/test\r\n';
         const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([txt],{type:'text/plain'}));a.download='wos-synthetic.txt';a.click();d.remove();
       };
@@ -24,6 +26,7 @@ window.searchPage=function(){
   main.querySelector('button').onclick=()=>{searches++;history.pushState({},'', '/wos/woscc/summary/synthetic');
     main.innerHTML='<h1>'+(wosMany?'2 results':'1 result')+'</h1><a href="/wos/woscc/full-record/'+ut+'">Synthetic paper</a>';
     main.querySelector('a').onclick=e=>{e.preventDefault();recordPage();};
+    if(wosMany)main.insertAdjacentHTML('beforeend','<a href="/wos/woscc/full-record/WOS:000123456789013">Synthetic paper</a>');
   };
 };
 window.smartPage=function(){

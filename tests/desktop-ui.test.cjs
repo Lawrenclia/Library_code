@@ -1,0 +1,311 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+(async()=>{
+ const browser=await chromium.launch({executablePath:process.env.TEST_BROWSER||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true});
+ try{
+  const page=await browser.newPage({viewport:{width:1260,height:860}});
+  await page.addInitScript(()=>{
+   const record={row:2,owner:'测试负责人',sa_id:'10001',title:'测试论文 · 原始元数据与来源核验',doi:'10.1234/test',wos:'',staff_id:'001',matches:0,item_ids:'',mark:'待处理',reason:'缺失元数据',skipped:false,done:false,source:''};
+   window.testWorkspace={tasks:[{id:'10001',paper_id:'paper',revision:0,record,route:'zero_review',stage:'pending',running:false,evidence:[{id:'source',kind:'metadata',source:'本地测试材料',text:'Test Author · 测试来源内容',created:0}],last_error:null,review:null,classification:null,artifact:null,platform_id:'',batch:null,sa_snapshot:null}],root:'测试隔离目录',running:false,paused:false,browsers:{},policy:'PPT 推送策略'};
+   window.testCommands=[];
+   window.__TAURI_INTERNALS__={transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command,args)=>{
+    window.testCommands.push({command,args});
+    if(command==='workspace')return structuredClone(window.testWorkspace);
+    if(command==='ai_settings')return {base:'https://example.org/v1',model:'test',configured:true};
+    if(command==='templates')return [];
+    if(command==='preview_legacy')return {root:'D:/synthetic-legacy',fingerprint:window.legacyChanged?'new-input':'preview-input',roster_count:2,journal_count:2,import_count:1,orphan_count:1,entries:[{sa_id:'old-001',title:'旧版模拟论文',histories:2,phases:['push_intent'],input_changed:false,needs_readback:true}]};
+    if(command==='migrate_legacy') {if(window.legacyChanged&&args.fingerprint==='preview-input')throw {code:'INPUT_CHANGED',message:'预览后旧数据发生变化，请重新读取迁移预览。'};return {count:2,already_imported:false};}
+    if(command==='prepare_input_version') {
+      const t=window.testWorkspace.tasks.find(t=>t.id===args.id);const result={proposal_id:t.pending_input.id,snapshot:{row:{saLzkId:t.id,gh:t.pending_input.record.staff_id,titleValue:t.pending_input.record.title}}};
+      if(window.deferVersion)return new Promise(resolve=>window.releaseVersion=()=>resolve(result));return result;
+    }
+    if(command==='accept_input_version') {
+      const t=window.testWorkspace.tasks.find(t=>t.id===args.id);
+      if(window.versionChanged)throw {code:'TASK_CHANGED',message:'平台字段在核对后变化，请重新读取新版本。'};
+      t.record=structuredClone(t.pending_input.record);t.pending_input=null;t.last_error=null;t.review=null;t.classification=null;t.issue_plan=null;t.issue_reviews=[];return structuredClone(t);
+    }
+    if(command==='plugin:event|listen')return 1;
+    if(command==='run_step'&&args.action==='library_search') {
+      const task=window.testWorkspace.tasks.find(t=>t.id===args.id);
+      const items=window.libraryHasCandidate?[{id:'library-item-001',modelName:'期刊论文',metadata:{title:[args.extra.title],doi:['10.1234/test'],abstract:['完整前端摘要']}}]:[];
+      const result={verified:true,sa_id:args.id,source:'http://www.ir.lib.sjtu.edu.cn/advancedSearch',checked_at:Date.now(),target:{title:args.extra.title,doi:'10.1234/test',wos:''},items,queries:[{kind:'title',field:'title',value:args.extra.title,precise:false,total:items.length,pages:[{}]},{kind:'doi',field:'doi',value:'10.1234/test',precise:true,total:items.length,pages:[{}]}]};
+      task.evidence.push({id:'library-'+task.evidence.length,kind:'library_search',source:result.source,text:JSON.stringify({input_hash:'test',result}),created:Date.now()});
+      return result;
+    }
+    if(command==='run_step'&&args.action==='prepare_claim')return {row:{},prepared:{item_id:'1',staff_id:'001',sa_text:'测试学者(001)',person:{id:'2',name:'测试学者',wno:'001'},authors:[{index:0,fullname:'Test Author',order:'1',eligible:true,scholarId:''}]},suggested_index:0};
+    if(command==='run_step'&&args.action==='prepare_alias') {
+      const snapshot={staff_id:'001',scholar:{id:'2',wno:'001',nameCn:'测试学者',nameEn:'Test Author'},aliases:[{id:'alias-1',nameAlias:'已有署名'}]};
+      if(window.deferAlias)return new Promise(resolve=>{window.releaseAlias=()=>resolve(snapshot);});
+      return snapshot;
+    }
+    if(command==='run_step'&&['scan_duplicates','prepare_duplicate'].includes(args.action)) {
+      const group={id:'group-1',primary_id:'item-primary',items:[{id:'item-primary',model_name:'期刊论文',metadata:{title:['测试论文 24'],doi:['10.1234/test']}},{id:'item-source',model_name:'科技论文',metadata:{title:['测试论文 24 · 另一份记录'],doi:['10.1234/test']}}]};
+      return args.action==='scan_duplicates'?{groups:[group],title_similarity:93.5,title:'测试论文 24',matched_ids:['item-primary','item-source']}:{group,title_similarity:93.5,title:'测试论文 24',matched_ids:['item-primary','item-source']};
+    }
+    if(command==='run_step'&&args.action==='merge_duplicate') {
+      const task=window.testWorkspace.tasks.find(t=>t.id===args.id);
+      task.stage='unknown';task.pending_action='merge_duplicate';
+      throw {code:'REMOTE_RESULT_UNKNOWN',message:'模拟结果未知，请先回读。'};
+    }
+    if(command==='run_step'&&args.action==='verify_duplicate') {
+      const task=window.testWorkspace.tasks.find(t=>t.id===args.id);
+      task.stage='awaiting_review';task.pending_action=null;task.platform_id='item-primary';
+      task.merges=[{group_id:'group-1',source_id:'item-source',target_id:'item-primary',evidence_id:'merged',created:1}];
+      return {verified:true};
+    }
+    if(command==='run_step'&&args.action==='prepare_issues') {
+      const checklist={requirements:[{key:'corresponding_author',label:'通讯作者标记不一致',sa:'是',library_before:'否',library:'否'},{key:'first_author',label:'第一作者标记不一致',sa:'是',library_before:'否',library:'否'}],baseline:{row:{saLzkId:args.id}},live:{row:{saLzkId:args.id,itemId:'item1',gh:'001'},comparison:[{label:'作者信息',sa:'是否通讯作者：是',library:'是否通讯作者：否'}]}};
+      const task=window.testWorkspace.tasks.find(t=>t.id===args.id);task.issue_plan=structuredClone(checklist);
+      if(window.deferIssue)return new Promise(resolve=>{window.releaseIssue=()=>resolve(checklist);});
+      return checklist;
+    }
+    if(command==='run_step'&&args.action==='review_issue') {
+      const task=window.testWorkspace.tasks.find(t=>t.id===args.id);task.issue_reviews??=[];
+      task.issue_reviews.push({key:args.extra.key,outcome:args.extra.outcome,note:args.extra.note,evidence_id:'issue-proof',snapshot:args.extra.expected,created:1});
+      return {all_resolved:task.issue_reviews.length===2};
+    }
+    if(command==='run_step'&&args.action==='prepare_metadata') {
+      return {sa:{row:{saLzkId:args.id}},identity:{},names:['Test Author'],result:{item_id:'item1',staff_id:'001',scholar:{id:'scholar1',wno:'001',nameCn:'测试学者',nameEn:'Test Author'},authors:[{index:1,id:'author2',fullname:'Test Author',order:2,eligible:true,fields:['correspondent','commonFirst'],correspondent:false,commonFirst:false}],snapshot:{}}};
+    }
+    if(command==='run_step'&&args.action==='save_metadata') {
+      const task=window.testWorkspace.tasks.find(t=>t.id===args.id);
+      task.stage='unknown';task.pending_action='save_metadata';
+      throw {code:'REMOTE_RESULT_UNKNOWN',message:'模拟角色保存结果未知，请先回读。'};
+    }
+    if(command==='run_step'&&args.action==='verify_metadata') {
+      const task=window.testWorkspace.tasks.find(t=>t.id===args.id);task.stage='awaiting_review';task.pending_action=null;
+      task.issue_reviews.push({key:'first_author',outcome:'sa_correct',note:'经核对是共同第一作者',evidence_id:'metadata-proof',snapshot:{},created:1});return {verified:true};
+    }
+    return {};
+   }};
+   window.confirm=()=>true;
+  });
+  await page.goto('http://127.0.0.1:1420');
+  await page.getByText('测试论文 · 原始元数据与来源核验',{exact:true}).click();
+  assert.equal(await page.locator('button').filter({hasText:'检索 / 下载 WOS'}).isDisabled(),true,'负责人是队列的必要范围');
+  await page.getByLabel('负责人',{exact:true}).selectOption('测试负责人');
+  await page.getByRole('button',{name:'检索 / 下载 WOS',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.testCommands.find(c=>c.command==='run_queue').args.owner),'测试负责人');
+  assert.equal(await page.getByRole('button',{name:'保存核验结论',exact:true}).isDisabled(),true,'勾选不能代替实际查库');
+  await page.getByLabel('查本库的正确题名',{exact:true}).fill('来源中的正确题名');
+  await page.getByRole('button',{name:'查询本库并保存结果',exact:true}).click();
+  await page.getByText('全部查询明确返回零条。请结合文献身份与交大归属证据确认分支。',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>window.testCommands.find(c=>c.command==='run_step'&&c.args.action==='library_search').args.extra.title),'来源中的正确题名');
+  await page.evaluate(()=>window.libraryHasCandidate=true);
+  await page.getByRole('button',{name:'查询本库并保存结果',exact:true}).click();
+  await page.getByLabel('已核对的本库条目',{exact:true}).waitFor();
+  assert.equal(await page.getByLabel('已核对的本库条目',{exact:true}).inputValue(),'','候选不自动选择');
+  assert.equal(await page.getByRole('button',{name:'保存核验结论',exact:true}).isDisabled(),true,'已有候选不能判断缺失');
+  await page.getByLabel('核验分支').selectOption('corrected_existing');
+  await page.getByLabel('已核对的本库条目',{exact:true}).selectOption('library-item-001');
+  assert.equal(await page.getByRole('button',{name:'保存核验结论',exact:true}).isDisabled(),false,'明确选中实际候选后可保存人工核验');
+  await page.getByRole('button',{name:'展开论文详情',exact:true}).click();
+  fs.mkdirSync(path.join(__dirname,'../runtime'),{recursive:true});
+  await page.getByLabel('已核对的本库条目',{exact:true}).scrollIntoViewIfNeeded();
+  await page.evaluate(()=>window.scrollTo(0,0));
+  await page.screenshot({path:path.join(__dirname,'../runtime/desktop-ui-library.png'),fullPage:true});
+  await page.getByRole('button',{name:'返回任务列表',exact:true}).click();
+  await page.getByLabel('核验分支').selectOption('not_found');
+  await page.getByLabel('来源网址或材料名称').fill('测试网页');
+  await page.getByLabel('具体核验依据').fill('当前检索没有结果');
+  await page.getByLabel('核验结论 / 平台备注').fill('未查询到该文献');
+  await page.getByRole('button',{name:'保存核验结论'}).click();
+  assert.equal(await page.evaluate(()=>window.testCommands.find(c=>c.command==='review_task').args.review.route),'not_found');
+  await page.getByRole('tab',{name:'平台操作',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'1. 上传核验文件'}).isDisabled(),true);
+  await page.getByRole('button',{name:'读取可认领作者'}).click();
+  assert.equal(await page.getByRole('button',{name:'确认认领对象并提交'}).isDisabled(),true);
+  await page.getByLabel('确认论文中的作者行').selectOption('0');
+  await page.getByRole('button',{name:'确认认领对象并提交'}).click();
+  await page.getByRole('button',{name:'返回核对',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.testCommands.some(c=>c.command==='run_step'&&c.args.action==='submit_claim')),false,'取消确认不会提交平台');
+  await page.getByRole('button',{name:'确认认领对象并提交'}).click();
+  await page.getByRole('button',{name:'确认执行',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.testCommands.find(c=>c.command==='run_step'&&c.args.action==='submit_claim').args.extra.author_index),0);
+  await page.getByRole('button',{name:'按工号读取学者与别名',exact:true}).click();
+  await page.getByText('已有别名：已有署名',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'保存并回读别名',exact:true}).isDisabled(),true,'没有真实署名与来源时不能写入');
+  await page.getByLabel('来源中的真实署名',{exact:true}).fill('Test Author');
+  await page.getByLabel('署名来源依据',{exact:true}).selectOption('source');
+  await page.getByRole('button',{name:'保存并回读别名',exact:true}).click();
+  await page.getByRole('dialog').getByText(/工号：001/).waitFor();
+  await page.getByRole('button',{name:'返回核对',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.testCommands.some(c=>c.command==='run_step'&&c.args.action==='add_alias')),false);
+  await page.getByRole('button',{name:'保存并回读别名',exact:true}).click();
+  await page.getByRole('button',{name:'确认执行',exact:true}).click();
+  assert.deepEqual(await page.evaluate(()=>window.testCommands.find(c=>c.command==='run_step'&&c.args.action==='add_alias').args.extra),{alias:'Test Author',evidence_id:'source'});
+  await page.getByRole('tab',{name:'核验',exact:true}).click();
+  fs.mkdirSync(path.join(__dirname,'../runtime'),{recursive:true});
+  await page.evaluate(()=>{window.scrollTo(0,0);document.querySelector('.detail-scroll').scrollTop=0;});
+  await page.screenshot({path:path.join(__dirname,'../runtime/desktop-ui.png'),fullPage:true});
+  await page.getByRole('button',{name:'切换深色主题',exact:true}).click();
+  assert.equal(await page.locator('html').evaluate(el=>el.classList.contains('dark')),true,'主题切换生效');
+  assert.equal(await page.evaluate(()=>localStorage.getItem('workspace-theme')),'dark','主题偏好保留');
+  await page.screenshot({path:path.join(__dirname,'../runtime/desktop-ui-dark.png'),fullPage:true});
+  await page.getByRole('button',{name:'切换浅色主题',exact:true}).click();
+  await page.getByRole('button',{name:'展开或收起侧栏',exact:true}).click();
+  assert.equal(await page.locator('[data-collapsible="icon"]').count()>0,true,'侧栏可以收起');
+  await page.getByRole('button',{name:'展开或收起侧栏',exact:true}).click();
+  await page.setViewportSize({width:960,height:680});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'最小窗口不应产生全页横向溢出');
+  await page.screenshot({path:path.join(__dirname,'../runtime/desktop-ui-compact.png'),fullPage:true});
+  await page.getByRole('button',{name:'模板与材料',exact:true}).click();
+  await page.getByLabel('工作表名称').fill('会议论文');
+  await page.getByRole('button',{name:'选择 Excel 并注册'}).click();
+  assert.equal(await page.evaluate(()=>window.testCommands.find(c=>c.command==='register_template').args.sheet),'会议论文');
+  assert.equal(await page.evaluate(()=>window.testCommands.find(c=>c.command==='register_template').args.headerRow),1,'按实际模板默认第二行表头');
+  await page.getByRole('button',{name:'任务工作台',exact:true}).click();
+  await page.evaluate(()=>{const original=window.testWorkspace.tasks[0];window.testWorkspace.tasks=Array.from({length:25},(_,i)=>({...original,id:String(10001+i),record:{...original.record,sa_id:String(10001+i),row:i+2,title:`测试论文 ${String(i+1).padStart(2,'0')}`}}));});
+  await page.getByRole('button',{name:'刷新工作台',exact:true}).click();
+  await page.getByRole('button',{name:'下一页',exact:true}).click();
+  await page.getByText('测试论文 13',{exact:true}).waitFor();
+  assert.equal(await page.locator('.task-table-panel').getByText('测试论文 01',{exact:true}).count(),0,'表格分页更新');
+  await page.getByRole('button',{name:'按题名排序',exact:true}).click();
+  await page.getByRole('button',{name:'按题名排序',exact:true}).click();
+  await page.getByText('测试论文 25',{exact:true}).waitFor();
+  await page.getByText('测试论文 25',{exact:true}).click();
+  await page.getByLabel('来源网址或材料名称',{exact:true}).fill('待保存的来源说明');
+  const beforeExpand=await page.evaluate(()=>window.testCommands.length);
+  await page.getByRole('button',{name:'展开论文详情',exact:true}).click();
+  assert.equal(await page.locator('.task-table-panel').isVisible(),false,'展开详情时隐藏列表，保留分页与选中状态');
+  assert.equal(await page.getByRole('button',{name:'返回任务列表',exact:true}).getAttribute('aria-expanded'),'true');
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'展开详情在最小窗口不横向溢出');
+  assert.equal(await page.getByLabel('来源网址或材料名称',{exact:true}).inputValue(),'待保存的来源说明','展开不清空尚未保存的核验内容');
+  await page.screenshot({path:path.join(__dirname,'../runtime/desktop-ui-expanded.png'),fullPage:true});
+  await page.getByRole('button',{name:'返回任务列表',exact:true}).click();
+  assert.equal(await page.locator('.task-table-panel').isVisible(),true);
+  assert.equal(await page.getByText('测试论文 01',{exact:true}).count(),0,'返回仍保留原来的分页');
+  assert.equal(await page.getByLabel('来源网址或材料名称',{exact:true}).inputValue(),'待保存的来源说明');
+  assert.equal(await page.evaluate(()=>window.testCommands.length),beforeExpand,'详情展开与返回不触发平台或本地写入');
+  await page.getByRole('tab',{name:'平台操作',exact:true}).click();
+  await page.evaluate(()=>{window.deferAlias=true;});
+  await page.getByRole('button',{name:'按工号读取学者与别名',exact:true}).click();
+  await page.waitForFunction(()=>typeof window.releaseAlias==='function');
+  await page.getByText('测试论文 24',{exact:true}).click();
+  await page.evaluate(()=>window.releaseAlias());
+  await page.getByRole('button',{name:'按工号读取学者与别名',exact:true}).waitFor({state:'visible'});
+  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(button=>button.textContent.trim()==='按工号读取学者与别名'&&!button.disabled));
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.equal(await page.getByRole('button',{name:'保存并回读别名',exact:true}).count(),0,'切换任务后迟到的身份读取不能显示在另一条任务上');
+  await page.evaluate(()=>{const task=window.testWorkspace.tasks.find(t=>t.id==='10024');task.route='duplicate';task.record.matches=2;task.record.item_ids=',item-primary,item-source';task.evidence.push({id:'merge-proof',kind:'human_review',source:'本地合成文献依据',text:'已核对为同一论文',created:1});});
+  await page.getByRole('button',{name:'刷新工作台',exact:true}).click();
+  await page.getByText('测试论文 23',{exact:true}).click();await page.getByText('测试论文 24',{exact:true}).click();
+  await page.getByRole('button',{name:'按题名读取重复候选',exact:true}).click();
+  assert.equal(await page.getByLabel('重复候选组',{exact:true}).inputValue(),'','候选不应自动选择第一组');
+  await page.getByLabel('重复候选组',{exact:true}).selectOption('group-1');
+  await page.getByRole('button',{name:'读取选定组的完整字段',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'确认本条合并并回读',exact:true}).isDisabled(),true);
+  await page.getByLabel('合并后主条目',{exact:true}).selectOption('item-primary');
+  await page.getByLabel('本次被合并条目',{exact:true}).selectOption('item-primary');
+  await page.getByLabel('合并来源依据',{exact:true}).selectOption('merge-proof');
+  await page.getByLabel('保留字段与差异核对',{exact:true}).fill('已核对 DOI 和作者，合并后回查出版信息。');
+  await page.getByLabel('已依据来源核实为同一论文，并核对主条目与保留字段',{exact:true}).check();
+  assert.equal(await page.getByRole('button',{name:'确认本条合并并回读',exact:true}).isDisabled(),true,'同一条目不能合并到自身');
+  await page.getByLabel('本次被合并条目',{exact:true}).selectOption('item-source');
+  await page.getByRole('button',{name:'确认本条合并并回读',exact:true}).click();
+  await page.getByRole('dialog').getByText(/被合并 ID：item-source/).waitFor();
+  await page.getByRole('button',{name:'返回核对',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.testCommands.some(c=>c.command==='run_step'&&c.args.action==='merge_duplicate')),false);
+  await page.getByRole('button',{name:'确认本条合并并回读',exact:true}).click();
+  await page.getByRole('button',{name:'确认执行',exact:true}).click();
+  await page.getByRole('button',{name:'核验上次合并结果',exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'核验上次别名保存结果',exact:true}).count(),0,'结果未知时只展示对应操作的回读');
+  assert.equal(await page.getByRole('button',{name:'核验上次 SA 操作结果',exact:true}).count(),0);
+  assert.deepEqual(await page.evaluate(()=>window.testCommands.find(c=>c.command==='run_step'&&c.args.action==='merge_duplicate').args.extra),{source_id:'item-source',target_id:'item-primary',evidence_id:'merge-proof',retained:'已核对 DOI 和作者，合并后回查出版信息。',identity_confirmed:true});
+  await page.getByRole('button',{name:'核验上次合并结果',exact:true}).click();
+  await page.getByText('item-source → item-primary',{exact:true}).waitFor();
+  await page.screenshot({path:path.join(__dirname,'../runtime/desktop-ui-duplicate.png'),fullPage:true});
+  await page.evaluate(()=>{const task=window.testWorkspace.tasks.find(t=>t.id==='10023');task.route='existing';task.record.matches=1;task.record.item_ids='item1';task.record.reason='通讯作者标记不一致；第一作者标记不一致';});
+  await page.getByRole('button',{name:'刷新工作台',exact:true}).click();
+  await page.getByText('测试论文 23',{exact:true}).click();
+  await page.getByRole('tab',{name:'核验',exact:true}).click();
+  assert.equal(await page.getByLabel('待处理原因已逐项解决',{exact:true}).count(),0,'匹配数 1 不再有总勾选绕过逐项核对');
+  await page.getByRole('button',{name:'读取 / 刷新逐项核对清单',exact:true}).click();
+  assert.equal(await page.getByLabel('本次核对的原因',{exact:true}).inputValue(),'','逐项核对不默认选择原因');
+  await page.getByLabel('本次核对的原因',{exact:true}).selectOption('corresponding_author');
+  await page.getByLabel('本项处理结论',{exact:true}).selectOption('library_correct');
+  assert.equal(await page.getByRole('button',{name:'保存本项并核验回读',exact:true}).isDisabled(),true);
+  await page.getByLabel('本项原文或来源',{exact:true}).fill('本地测试原文');await page.getByLabel('本项具体依据',{exact:true}).fill('该署名没有通讯作者标记');await page.getByLabel('本项核对备注',{exact:true}).fill('经核对不是通讯作者');
+  await page.getByRole('button',{name:'保存本项并核验回读',exact:true}).click();
+  const savedIssue=await page.evaluate(()=>window.testCommands.find(c=>c.command==='run_step'&&c.args.action==='review_issue').args);
+  assert.equal(savedIssue.id,'10023');assert.equal(savedIssue.approved,false);assert.equal(savedIssue.extra.key,'corresponding_author');assert.equal(savedIssue.extra.expected.row.saLzkId,'10023');
+  await page.getByText('仍有原因需要分别核对。',{exact:true}).waitFor();
+  await page.getByLabel('本次核对的原因',{exact:true}).selectOption('first_author');
+  assert.equal(await page.getByLabel('本项原文或来源',{exact:true}).inputValue(),'','下一原因独立取证，不沿用上一项结论');
+  await page.getByLabel('本项处理结论',{exact:true}).selectOption('sa_correct');
+  await page.getByRole('button',{name:'打开对应条目的编辑页',exact:true}).waitFor();
+  await page.getByRole('button',{name:'按工号读取可编辑作者字段',exact:true}).click();
+  assert.equal(await page.getByLabel('本库待修改的作者行',{exact:true}).evaluate(el=>el.selectedOptions[0]._value),null,'作者角色修改不自动选择第一行');
+  await page.getByLabel('本库待修改的作者行',{exact:true}).selectOption('1');
+  assert.equal(await page.getByRole('button',{name:'确认保存作者角色并回读',exact:true}).isDisabled(),true,'没有本项原文依据不得保存本库');
+  await page.getByLabel('本项原文或来源',{exact:true}).fill('本地共同第一作者原文');await page.getByLabel('本项具体依据',{exact:true}).fill('Test Author 有共同贡献标记');await page.getByLabel('本项核对备注',{exact:true}).fill('经核对是共同第一作者');
+  await page.getByRole('button',{name:'确认保存作者角色并回读',exact:true}).click();await page.getByRole('dialog').getByText(/作者 ID：author2/).waitFor();
+  await page.getByRole('button',{name:'返回核对',exact:true}).click();assert.equal(await page.evaluate(()=>window.testCommands.some(c=>c.command==='run_step'&&c.args.action==='save_metadata')),false);
+  await page.getByRole('button',{name:'确认保存作者角色并回读',exact:true}).click();await page.getByRole('button',{name:'确认执行',exact:true}).click();
+  await page.getByRole('button',{name:'核验上次本库字段保存结果',exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>window.testCommands.find(c=>c.command==='run_step'&&c.args.action==='save_metadata').args),{id:'10023',action:'save_metadata',approved:true,extra:{key:'first_author',author_index:1,source:'本地共同第一作者原文',proof:'Test Author 有共同贡献标记',note:'经核对是共同第一作者'}});
+  assert.equal(await page.getByRole('button',{name:'确认保存作者角色并回读',exact:true}).isDisabled(),true,'结果未知不能再次保存');
+  await page.getByRole('button',{name:'核验上次本库字段保存结果',exact:true}).click();
+  assert.equal(await page.getByLabel('本库待修改的作者行',{exact:true}).count(),0,'成功回读后清空编辑预览，避免沿用旧表单');
+  await page.screenshot({path:path.join(__dirname,'../runtime/desktop-ui-issues.png'),fullPage:true});
+  await page.evaluate(()=>{const task=window.testWorkspace.tasks.find(t=>t.id==='10023');task.record.matches=0;task.record.item_ids='';task.route='corrected_existing';task.sa_snapshot={row:{saLzkId:task.id,gh:'001',matchCount:1,itemId:'item1'}};});
+  await page.getByRole('button',{name:'刷新工作台',exact:true}).click();
+  assert.equal(await page.getByLabel('待处理原因已逐项解决',{exact:true}).count(),0,'原始名单为零但实时 SA 为一时，仍必须逐项核对');
+  await page.getByLabel('核验结论 / 平台备注',{exact:true}).fill('逐项结论由服务器核验');
+  await page.getByRole('button',{name:'保存核验结论',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.testCommands.filter(c=>c.command==='review_task').at(-1).args.review.issues_resolved),true,'实时关联后的逐项结论不再依赖原始匹配数');
+  await page.evaluate(()=>window.deferIssue=true);
+  await page.getByRole('button',{name:'读取 / 刷新逐项核对清单',exact:true}).click();
+  await page.waitForFunction(()=>typeof window.releaseIssue==='function');await page.getByText('测试论文 22',{exact:true}).click();await page.evaluate(()=>window.releaseIssue());
+  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='刷新工作台'&&!b.disabled));
+  assert.equal(await page.getByLabel('本次核对的原因',{exact:true}).count(),0,'迟到的核对结果不显示在另一任务');
+  await page.getByRole('button',{name:'模型与设置',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'迁移这些记录',exact:true}).count(),0,'没有预览不能迁移');
+  await page.getByRole('button',{name:'选择旧版目录并预览',exact:true}).click();
+  await page.getByText('old-001 · 旧版模拟论文',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>window.testCommands.some(c=>c.command==='migrate_legacy')),false,'预览不执行迁移');
+  await page.evaluate(()=>window.legacyChanged=true);
+  await page.getByRole('button',{name:'迁移这些记录',exact:true}).click();
+  await page.getByText('预览后旧数据发生变化，请重新读取迁移预览。',{exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>window.testCommands.find(c=>c.command==='migrate_legacy').args),{root:'D:/synthetic-legacy',fingerprint:'preview-input'});
+  await page.getByRole('button',{name:'选择旧版目录并预览',exact:true}).click();
+  await page.getByRole('button',{name:'迁移这些记录',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'迁移这些记录',exact:true}).count(),0,'成功后清空已消费的迁移预览');
+  await page.screenshot({path:path.join(__dirname,'../runtime/desktop-ui-migration.png'),fullPage:true});
+  await page.evaluate(()=>{const t=window.testWorkspace.tasks.find(t=>t.id==='10022');t.pending_input={id:'new-proposal',record:{...t.record,title:'变更后的题名',staff_id:'002'},input_hash:'new-input-file',source_file:'隔离测试/new.xlsx',previous_fingerprint:'old-facts',created:1};t.last_error={code:'INPUT_CHANGED',message:'名单关键字段变化'};});
+  await page.getByRole('button',{name:'任务工作台',exact:true}).click();await page.getByRole('button',{name:'刷新工作台',exact:true}).click();
+  await page.getByRole('tab',{name:'核验',exact:true}).click();
+  await page.getByText('新名单版本待核验',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'确认采用新名单版本',exact:true}).count(),0,'没有实时准备不能接受新版本');
+  await page.getByRole('button',{name:'读取新版本与实时 SA',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'确认采用新名单版本',exact:true}).isDisabled(),true,'仅实时查询不能替代人工版本核对');
+  await page.getByLabel('版本与责任人安排来源',{exact:true}).fill('新名单及责任人安排');
+  await page.getByLabel('新版本的具体核验依据',{exact:true}).fill('确认完整工号 002 及新题名，责任人安排无误');
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'新版本核验在最小窗口不产生全页横向溢出');
+  await page.screenshot({path:path.join(__dirname,'../runtime/desktop-ui-version.png'),fullPage:true});
+  await page.getByLabel('已核对新名单事实、责任人安排及本次回读',{exact:true}).check();
+  await page.evaluate(()=>window.versionChanged=true);
+  await page.getByRole('button',{name:'确认采用新名单版本',exact:true}).click();
+  await page.getByText('平台字段在核对后变化，请重新读取新版本。',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>window.testWorkspace.tasks.find(t=>t.id==='10022').record.staff_id),'001','读取变化后的错误不改旧记录');
+  await page.evaluate(()=>window.versionChanged=false);
+  await page.getByRole('button',{name:'读取新版本与实时 SA',exact:true}).click();
+  await page.getByLabel('已核对新名单事实、责任人安排及本次回读',{exact:true}).check();
+  await page.getByRole('button',{name:'确认采用新名单版本',exact:true}).click();
+  assert.deepEqual(await page.evaluate(()=>window.testCommands.filter(c=>c.command==='accept_input_version').at(-1).args),{id:'10022',proposalId:'new-proposal',source:'新名单及责任人安排',proof:'确认完整工号 002 及新题名，责任人安排无误',approved:true});
+  assert.equal(await page.getByText('新名单版本待核验',{exact:true}).count(),0);
+  assert.equal(await page.evaluate(()=>window.testWorkspace.tasks.find(t=>t.id==='10022').record.staff_id),'002');
+  await page.evaluate(()=>{const t=window.testWorkspace.tasks.find(t=>t.id==='10022');t.pending_input={id:'another-proposal',record:{...t.record,title:'另一个新版本'},input_hash:'another-file',source_file:'隔离测试/another.xlsx',previous_fingerprint:'new-facts',created:2};window.deferVersion=true;});
+  await page.getByRole('button',{name:'刷新工作台',exact:true}).click();await page.getByRole('button',{name:'读取新版本与实时 SA',exact:true}).click();
+  await page.waitForFunction(()=>typeof window.releaseVersion==='function');
+  const otherVersionTask=page.locator('.task-table-panel tbody tr[aria-label]:not([data-state="selected"])').first();
+  const otherVersionTitle=await otherVersionTask.getAttribute('aria-label');
+  assert.ok(otherVersionTitle,'当前页存在可切换的另一篇论文');
+  await otherVersionTask.click();await page.evaluate(()=>window.releaseVersion());
+  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.getAttribute('aria-label')==='刷新工作台'&&!b.disabled));
+  assert.equal(await page.getByRole('button',{name:'确认采用新名单版本',exact:true}).count(),0,'迟到的版本准备不显示在另一任务');
+  console.log('Desktop UI: interaction, confirmation, layout, legacy preview, scoped input-version review/acceptance and late-result isolation checks passed (mock IPC; no live platform writes).');
+ }finally{await browser.close();}
+})().catch(e=>{console.error(e);process.exit(1);});

@@ -1,0 +1,52 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Offline metadata editor contract</title></head><body>
+<main id="app"><h1>OFFLINE TEST — synthetic metadata only</h1></main>
+<div id="detail" class="el-drawer"><div id="owner"><div id="edit" class="el-drawer"></div></div></div>
+<script>
+window.testConfig={};window.metadataWrites=0;window.metadataReads=0;
+const copy=value=>JSON.parse(JSON.stringify(value));
+window.persistedForm={id:'item-001',modelId:'model-001',modelName:'期刊论文',datasetIds:['dataset-001'],dataSources:['WOS'],fullTexts:[{id:'file-001',name:'source.pdf'}],
+  updateTime:'version-1',metadata:{title:['A synthetic paper'],doi:['10.1234/synthetic'],wos:['WOS:000000000000001'],volume:['12'],issue:['3'],pages:['100-108'],issued:['2026-01-01'],abstract:['Important original content'],
+    author:[{id:'author-001',fullname:'Other, Y',order:1,scholarId:'',institutionOrderNums:'1',email:'other@example.invalid',correspondent:false,commonFirst:false,ownFirst:false,ownCorrespondent:false,commonCorrespondent:false},
+      {id:'author-002',fullname:'Demo, X',order:2,scholarId:'scholar-001',institutionOrderNums:'1,2',email:'demo@example.invalid',correspondent:false,commonFirst:false,ownFirst:false,ownCorrespondent:false,commonCorrespondent:false}],
+    authorInstitution:[{id:'institution-1',address:'Synthetic University',order:1,topInstitutionId:'institution-synthetic'},{id:'institution-2',address:'Shanghai Jiao Tong University',order:2,topInstitutionId:'1244586319225556993'}]}};
+const schema=()=>[{fieldName:'author',actualLabel:'作者',reveal:1,dataType:4,editable:testConfig.readOnly?0:1,required:1,customConfig:{correspondent:true,commonFirst:true,institutionOrderNums:true}}];
+const editor={$options:{name:'itemModelEdit'},$el:document.getElementById('edit'),$children:[],itemId:'item-001',auth:false,loading:false,ruleForm:copy(persistedForm),modelFieldList:schema(),validInfo:{author:{}},
+  $nextTick:async()=>render(),
+  async getItemDetailData(){metadataReads++;this.ruleForm={};this.loading=true;await new Promise(resolve=>setTimeout(resolve,5));
+    if(testConfig.failRead){this.loading=false;return;}
+    this.ruleForm=copy(persistedForm);for(const a of this.ruleForm.metadata.author)if(Array.isArray(a.institutionOrderNums))a.institutionOrderNums=a.institutionOrderNums.toString();
+    // The public save method clears loading before model definitions finish.
+    // Exercise that race instead of pretending getItemDetailData awaits them.
+    this.loading=false;setTimeout(()=>{this.modelFieldList=schema();this.loading=false;render();},testConfig.modelDelay||5);
+  },
+  onSubmit(){if(testConfig.validationFails)return false;this.submitData(this.ruleForm);},
+  async submitData(form){metadataWrites++;this.loading=true;for(const author of form.metadata.author)author.institutionOrderNums=author.institutionOrderNums?author.institutionOrderNums.split(','):[];
+    if(testConfig.hangSave){await new Promise(()=>{});return;}
+    await new Promise(resolve=>setTimeout(resolve,5));
+    if(!testConfig.rejectSave){persistedForm=copy(form);persistedForm.updateTime='version-2';if(testConfig.mutateOther)persistedForm.metadata.pages=['WRONG'];}
+    if(!testConfig.rejectSave)this.getItemDetailData();this.loading=false;
+  }};
+Object.defineProperty(editor,'header',{get(){throw new Error('Credentials must never be inspected');}});
+const owner={itemId:'item-001',drawer:true,shows:true,__libraryTask:'sa-001',$el:document.getElementById('owner'),$refs:{itemModelEdit:editor},handleCloses(){this.drawer=false;this.shows=false;this.$el.style.display='none';}};
+const row={id:'compare-001',saLzkId:'sa-001',itemId:'item-001',gh:'00001',matchCount:1,markStatus:'待处理',titleValue:'A synthetic paper'};
+const detail={dialogVisible:true,currentSaLzkId:'sa-001',dialogLoading:false,$el:document.getElementById('detail'),$refs:{itemEdit:owner}};
+const vm={$options:{name:'dataCompare'},$children:[editor],$refs:{compareDetailDrawer:detail},tableData:[row],loading:false};
+document.getElementById('app').__vue__=vm;
+function render(){
+  editor.$el.innerHTML='';editor.$children=[];
+  for(const [index,author]of (editor.ruleForm.metadata?.author||[]).entries()){
+    const line=document.createElement('div');line.className='el-form-item';
+    const name=document.createElement('div');name.innerHTML='<input>';name.querySelector('input').value=author.fullname;
+    name.__vue__={$options:{name:'ElInput'},$el:name,value:author.fullname,$vnode:{data:{model:{expression:'val.fullname'}}}};line.appendChild(name);
+    for(const field of ['correspondent','commonFirst'])if(!(field==='commonFirst'&&index===0)&&!testConfig.missingCheckbox){
+      const element=document.createElement('label');element.innerHTML='<input type="checkbox">'+field;
+      const input=element.querySelector('input');input.checked=author[field];input.disabled=!!testConfig.disabled;
+      element.__vue__={$options:{name:'ElCheckbox'},$el:element,value:author[field],disabled:!!testConfig.disabled,
+        $vnode:{data:{model:{expression:'val.'+field,callback:value=>{author[field]=value;input.checked=value;element.__vue__.value=value;}}}}};
+      if(testConfig.hiddenCheckbox)element.style.display='none';line.appendChild(element);
+    }editor.$el.appendChild(line);
+  }
+  const submit=document.createElement('button');submit.textContent='提交';submit.onclick=()=>editor.onSubmit();editor.$el.appendChild(submit);
+}
+render();window.editor=editor;window.editOwner=owner;window.compare=vm;
+</script></body></html>

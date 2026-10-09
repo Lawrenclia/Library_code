@@ -32,11 +32,14 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
     const checked=await execute(cmd('import_check'));
     assert.equal(checked.ok,true,JSON.stringify(checked));
     assert.equal(checked.data.batch.actual,0);
+    assert.equal(checked.data.items[0].metadata.wosId[0],candidate.wos,'回读保留完整文献字段');
     const pushed=await execute(cmd('import_push',{batch:checked.data.batch}));assert.equal(pushed.ok,true,JSON.stringify(pushed));
     const verified=await execute(cmd('import_check',{batch_id:'batch-001',expect_pushed:true}));
     assert.equal(verified.data.batch.status,2);
     assert.equal(await page.evaluate(()=>push.form.duplicateItemProcessingType),'4');
     assert.equal(await page.evaluate(()=>push.form.duplicateQueryType),'ppt-composite');
+    assert.equal(pushed.data.push_settings.duplicateItemProcessingType,'4');
+    assert.match(pushed.data.duplicate_query_label,/题名相似度.*题名相似度/);
     assert.deepEqual(await page.evaluate(()=>writes),{upload:1,import:1,push:1});
   });
   test('wrong route and foreign drawer never mutate',async()=>{
@@ -50,6 +53,54 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
     assert.equal((await execute(cmd('import_submit',{upload:u}))).ok,true);
     assert.equal((await execute(cmd('import_submit',{upload:u}))).ok,false);
     assert.equal(await page.evaluate(()=>writes.import),1);
+  });
+  test('lost upload confirmation restores only the original upload with no repeated write',async()=>{
+    await upload();await page.evaluate(()=>{drawer.__saImport.uploaded=false;delete drawer.__saImport.serverName;});
+    const read=await execute(cmd('import_check',{expect_upload:true,content:Buffer.from('synthetic TXT').toString('base64'),contentSha:candidate.sha256}));
+    assert.equal(read.ok,true,JSON.stringify(read));assert.equal(read.data.verified,true);assert.equal(read.data.uploaded,true);
+    assert.equal(read.data.instructions,'SA补充-demo-001');assert.equal(read.data.server_name,'synthetic-object.txt');
+    assert.deepEqual(await page.evaluate(()=>writes),{upload:1,import:0,push:0});
+    assert.equal((await execute(cmd('import_submit',{upload:read.data}))).ok,true);
+    assert.equal(await page.evaluate(()=>writes.import),1);
+  });
+  test('upload readback refuses changed original bytes, form, response and checkpoint',async()=>{
+    for(const scenario of ['bytes','description','institution','response','logicalFailure','missingMarker','markerChange','fileSwap','formDuringRead']){
+      await reset();await upload();
+      await page.evaluate(s=>{const input=drawer.$el.querySelector('input');
+        if(s==='bytes'){const dt=new DataTransfer();dt.items.add(new File(['wrong content'],input.files[0].name));input.files=dt.files;}
+        if(s==='description')drawer.form.instructions='SA补充-other';
+        if(s==='institution')drawer.form.datasetId='other';
+        if(s==='response')drawer.fileList[0].response={success:false};
+        if(s==='logicalFailure')drawer.fileList[0].response={success:false,code:200,data:{name:'synthetic-object.txt'}};
+        if(s==='missingMarker')delete drawer.__saImport;
+        if(['markerChange','fileSwap','formDuringRead'].includes(s)){
+          const file=input.files[0],original=file.arrayBuffer.bind(file);
+          file.arrayBuffer=async()=>{const bytes=await original();
+            if(s==='markerChange')drawer.__saImport.sha256='b'.repeat(64);
+            if(s==='formDuringRead')drawer.form.instructions='SA补充-other';
+            if(s==='fileSwap'){const dt=new DataTransfer();dt.items.add(new File([bytes],file.name));input.files=dt.files;}
+            return bytes;};
+        }
+      },scenario);
+      const read=await execute(cmd('import_check',{expect_upload:true,content:Buffer.from('synthetic TXT').toString('base64'),contentSha:candidate.sha256}));
+      assert.equal(read.ok,false,scenario);assert.deepEqual(await page.evaluate(()=>writes),{upload:1,import:0,push:0},scenario);
+    }
+  });
+  test('closed upload without a batch stays unknown; an actual verified batch can recover',async()=>{
+    const data=await upload();await page.evaluate(()=>drawer.drawer=false);
+    let read=await execute(cmd('import_check',{expect_upload:true}));assert.equal(read.ok,false);assert.equal(read.code,'REMOTE_RESULT_UNKNOWN');
+    assert.deepEqual(await page.evaluate(()=>writes),{upload:1,import:0,push:0});
+    await page.evaluate(()=>drawer.drawer=true);await execute(cmd('import_submit',{upload:data}));
+    read=await execute(cmd('import_check',{expect_upload:true}));assert.equal(read.ok,true,JSON.stringify(read));assert.equal(read.data.batch.status,1);
+    assert.deepEqual(await page.evaluate(()=>writes),{upload:1,import:1,push:0});
+  });
+  test('HTTP 200 with explicit upload failure cannot become an uploaded checkpoint',async()=>{
+    await page.evaluate(()=>{const input=drawer.$el.querySelector('input');input.addEventListener('change',()=>setTimeout(()=>{
+      drawer.fileList[0].response={success:false,code:200,data:{name:'not-confirmed.txt'}};
+    },35));});
+    const result=await execute(cmd('import_upload',{content:Buffer.from('synthetic TXT').toString('base64'),contentSha:candidate.sha256}));
+    assert.equal(result.ok,false);assert.equal(result.submitted,true);assert.equal(await page.evaluate(()=>drawer.__saImport.uploaded),false);
+    assert.deepEqual(await page.evaluate(()=>writes),{upload:1,import:0,push:0});
   });
   test('wrong instructions and unhashed upload are refused',async()=>{
     assert.equal((await execute(cmd('import_upload',{instructions:'SA补充-other'}))).ok,false);
@@ -80,6 +131,28 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
     await page.evaluate(()=>push.duplicateQueryTypes=[{value:'default',label:'唯一标识'}]);
     assert.match((await execute(cmd('import_push',{batch:r.data.batch}))).error,/PPT/);
     assert.equal(await page.evaluate(()=>writes.push),0);
+  });
+  test('PPT merge and new-item enums come from visible labels, not fixed numbers',async()=>{
+    await submit();const checked=await execute(cmd('import_check'));
+    await page.evaluate(()=>{push.$children.find(v=>v.prop==='duplicateItemProcessingType').$children[0].label='live-priority';push.$children.find(v=>v.prop==='newItemProcessingType').$children[0].label='live-create';});
+    const pushed=await execute(cmd('import_push',{batch:checked.data.batch}));assert.equal(pushed.ok,true,JSON.stringify(pushed));
+    assert.equal(await page.evaluate(()=>push.form.duplicateItemProcessingType),'live-priority');
+    assert.equal(await page.evaluate(()=>push.form.newItemProcessingType),'live-create');
+  });
+  test('missing, duplicate, changed or disabled PPT radio choices stop before push',async()=>{
+    for(const scenario of ['missing','duplicate','changed','disabled','hidden','boolean']){
+      await reset();await submit();const checked=await execute(cmd('import_check'));
+      await page.evaluate(s=>{const item=push.$children.find(v=>v.prop==='duplicateItemProcessingType');const radio=item.$children[0];
+        if(s==='missing')item.$children=[];
+        if(s==='duplicate')item.$children.push({...radio});
+        if(s==='changed')radio.$el.textContent='整体覆盖';
+        if(s==='disabled')radio.isDisabled=true;
+        if(s==='hidden')radio.$el.style.display='none';
+        if(s==='boolean')push.$children.find(v=>v.prop==='owner').$children[0].label=false;
+      },scenario);
+      const result=await execute(cmd('import_push',{batch:checked.data.batch}));assert.equal(result.ok,false,scenario);assert.equal(result.submitted,false,scenario);
+      assert.equal(await page.evaluate(()=>writes.push),0,scenario);
+    }
   });
   test('WOS author search and foreign hosts are rejected',async()=>{
     await page.goto('https://www.webofscience.com/wos/author/author-search');
@@ -120,6 +193,88 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
     await page.goto(read.data.navigate_url);
     const verified=await page.evaluate(runWOSCommand,{...base,action:'wos_read_results'});
     assert.equal(verified.data.state,'record');assert.equal(verified.data.record_url,read.data.navigate_url);
+  });
+  test('101 results with one exact title open the matching detail and download through overlay',async()=>{
+    await page.goto('https://webofscience.clarivate.cn/wos/woscc/basic-search');
+    await page.evaluate(()=>{
+      window.wosOverlay=true;
+      const search=document.querySelector('button'), original=search.onclick;
+      search.onclick=()=>{
+        original();
+        history.replaceState({},'', '/wos/woscc/summary/search-id/session-id');
+        document.querySelector('h1').textContent='101 results from Web of Science Core Collection';
+        main.insertAdjacentHTML('afterbegin','<a href="/wos/woscc/full-record/WOS:000123456789099">Unrelated paper</a><button>Export</button>');
+      };
+    });
+    const base={...cmd('wos_search'),title:'SYNTHETIC PAPER'};
+    const found=await page.evaluate(runWOSCommand,base);
+    assert.equal(found.ok,true,JSON.stringify(found));
+    assert.ok(page.url().endsWith('/full-record/WOS:000123456789012'));
+    const prepared=await page.evaluate(runWOSCommand,{...base,action:'wos_prepare_export'});
+    assert.equal(prepared.ok,true,JSON.stringify(prepared));
+    assert.ok(page.url().endsWith('(overlay:export/ext)'));
+    assert.equal(prepared.data.record_url,found.data.record_url);
+    const download=page.waitForEvent('download');
+    const done=await page.evaluate(runWOSCommand,{...base,action:'wos_download'});
+    assert.equal(done.ok,true,JSON.stringify(done));
+    assert.equal((await download).suggestedFilename(),'wos-synthetic.txt');
+    assert.equal(await page.evaluate(()=>exportsMade),1);
+  });
+  test('overlay on a different record cannot submit the prepared export',async()=>{
+    await page.goto('https://webofscience.clarivate.cn/wos/woscc/full-record/WOS:000123456789012');
+    const base={...cmd('wos_prepare_export'),title:'Synthetic paper'};
+    assert.equal((await page.evaluate(runWOSCommand,base)).ok,true);
+    await page.evaluate(()=>history.replaceState({},'', '/wos/woscc/full-record/WOS:000123456789013(overlay:export/ext)'));
+    assert.equal((await page.evaluate(runWOSCommand,{...base,action:'wos_download'})).ok,false);
+    assert.equal(await page.evaluate(()=>exportsMade),0);
+  });
+  test('same-URL search accepts newly rendered results',async()=>{
+    await page.goto('https://webofscience.clarivate.cn/wos/woscc/basic-search');
+    await page.evaluate(()=>{
+      const button=main.querySelector('button'), original=button.onclick;
+      button.onclick=()=>{const previous=location.href;original();history.replaceState({},'',previous);};
+    });
+    const result=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
+    assert.equal(result.ok,true,JSON.stringify(result));
+    assert.ok(page.url().includes('/full-record/'));
+  });
+  test('same-URL no-results message is reported without waiting for navigation',async()=>{
+    await page.goto('https://webofscience.clarivate.cn/wos/woscc/basic-search');
+    await page.evaluate(()=>main.querySelector('button').onclick=()=>{main.innerHTML='<div role="alert"><strong>Your search found no results</strong><p>Check the spelling and/or broaden your search parameters</p></div>';});
+    const result=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
+    assert.equal(result.ok,false);assert.match(result.error,/未找到记录/);
+  });
+  test('successive searches recognize a replaced no-results banner on the same form',async()=>{
+    await page.goto('https://webofscience.clarivate.cn/wos/woscc/basic-search');
+    await page.evaluate(()=>{
+      const banner=document.createElement('div');banner.textContent='Your search found no results';main.append(banner);
+      main.querySelector('button').onclick=()=>{searches++;banner.remove();main.append(banner);};
+    });
+    for(const title of ['First missing paper','Second missing paper']){
+      const result=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title});
+      assert.equal(result.ok,false);assert.match(result.error,/未找到记录/);
+    }
+    assert.equal(await page.evaluate(()=>searches),2);
+  });
+  test('unchanged previous no-results banner does not decide the next query',async()=>{
+    await page.goto('https://webofscience.clarivate.cn/wos/woscc/basic-search');
+    await page.evaluate(()=>{
+      main.insertAdjacentHTML('beforeend','<strong>Your search found no results</strong>');
+      main.querySelector('button').onclick=()=>{};
+    });
+    const result=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Next paper',expires:Date.now()+13300});
+    assert.equal(result.ok,false);assert.match(result.error,/新结果/);
+  });
+  test('changed URL with unchanged stale records cannot export old results',async()=>{
+    await page.goto('https://webofscience.clarivate.cn/wos/woscc/basic-search');
+    await page.evaluate(()=>{
+      main.insertAdjacentHTML('beforeend','<h1>1 result</h1><a href="/wos/woscc/full-record/WOS:000123456789012">Synthetic paper</a>');
+      main.querySelector('button').onclick=()=>history.pushState({},'', '/wos/woscc/summary/new-query');
+    });
+    const result=await page.evaluate(runWOSCommand,{...cmd('wos_search'),expires:Date.now()+13300,title:'Synthetic paper'});
+    assert.equal(result.ok,false);assert.match(result.error,/新结果/);
+    assert.equal(await page.evaluate(()=>exportsMade),0);
+    assert.ok(page.url().includes('/summary/'));
   });
   test('WOS multiple matches pause without opening the first record',async()=>{
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
@@ -189,7 +344,7 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
     await page.evaluate(()=>{const alert=document.createElement('section');alert.setAttribute('role','alert');
       alert.textContent='您的检索未找到结果';document.getElementById('main').prepend(alert);});
-    const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Next paper'});
+    const r=await page.evaluate(runWOSCommand,{...cmd('wos_start_search'),title:'Next paper'});
     assert.equal(r.ok,false);assert.match(r.error,/保留上一条零结果/);
     assert.equal(await page.evaluate(()=>searches),0);
   });
@@ -200,6 +355,38 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
     const d=await page.evaluate(inspectWorkPage);
     assert.equal(d.summary_route,true);assert.equal(d.canonical_record_link_count,1);assert.equal(d.encoded_record_link_count,1);
     assert.ok(!JSON.stringify(d).includes('DO_NOT_DISCLOSE_TITLE'));
+  });
+  test('PPT Chinese results list selects one paper and downloads Full Record TXT',async()=>{
+    await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
+    await page.evaluate(()=>{
+      document.querySelector('button').onclick=()=>{
+        searches++;
+        recordPage();
+        const exportAction=document.getElementById('export').onclick;
+        history.pushState({},'', '/wos/woscc/summary/ppt-example/session-id');
+        const main=document.getElementById('main');
+        main.innerHTML='<h1>1 文献</h1><article><input type="checkbox"><a href="/wos/woscc/full-record/WOS:000123456789012">Synthetic paper</a></article><button id="export" disabled><span>导出</span><mat-icon>expand_more</mat-icon></button>';
+        const button=document.getElementById('export');
+        document.querySelector('input').onchange=e=>button.disabled=!e.target.checked;
+        button.onclick=()=>{
+          exportAction();
+          const menu=main.lastElementChild;
+          menu.innerHTML='<span>制表符分隔文件</span><mat-icon>download</mat-icon>';
+        };
+      };
+    });
+    const base={...cmd('wos_search'),title:'Synthetic paper',doi:'10.1234/test'};
+    const found=await page.evaluate(runWOSCommand,base);
+    assert.equal(found.ok,true,JSON.stringify(found));
+    assert.ok(page.url().includes('/summary/'));
+    const prep=await page.evaluate(runWOSCommand,{...base,action:'wos_prepare_export'});
+    assert.equal(prep.ok,true,JSON.stringify(prep));
+    assert.equal(await page.locator('input[type="checkbox"]').isChecked(),true);
+    const download=page.waitForEvent('download');
+    const result=await page.evaluate(runWOSCommand,{...base,action:'wos_download'});
+    assert.equal(result.ok,true,JSON.stringify(result));
+    assert.equal((await download).suggestedFilename(),'wos-synthetic.txt');
+    assert.equal(await page.evaluate(()=>exportsMade),1);
   });
   test('WOS Oops page reports site failure before field selection or any search',async()=>{
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
@@ -224,11 +411,57 @@ const cmd=(action,more={})=>({action,sa_id:'demo-001',instructions:'SA补充-dem
     const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
     assert.equal(r.ok,true,JSON.stringify(r));assert.equal(await page.evaluate(()=>searches),1);
   });
+  test('fielded navigation outranks persistent Advanced links and waits for the selected form',async()=>{
+    await page.goto('https://webofscience.clarivate.cn/wos/woscc/basic-search');
+    await page.evaluate(()=>{
+      main.innerHTML='<nav><a href="/wos/woscc/advanced-search">Advanced Search</a><a href="/wos/woscc/advanced-search">Advanced Search</a></nav><div role="button">Fielded Search</div>';
+      main.querySelector('[role="button"]').onclick=e=>{
+        e.currentTarget.setAttribute('aria-selected','true');
+        setTimeout(()=>searchPage(),350);
+      };
+    });
+    const result=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
+    assert.equal(result.ok,true,JSON.stringify(result));
+    assert.equal(await page.evaluate(()=>searches),1);
+  });
+  test('duplicate Advanced anchors to the same route are one entrance',async()=>{
+    await page.goto('https://webofscience.clarivate.cn/wos/');
+    await page.evaluate(()=>{
+      main.innerHTML='<nav><a href="/wos/woscc/advanced-search">Advanced Search</a><a href="/wos/woscc/advanced-search">Advanced Search</a></nav>';
+      for(const a of main.querySelectorAll('a'))a.onclick=e=>{
+        e.preventDefault();history.pushState({},'',a.href);
+        main.innerHTML='<button role="tab">Fielded Search</button>';
+        main.querySelector('button').onclick=()=>searchPage();
+      };
+    });
+    const result=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
+    assert.equal(result.ok,true,JSON.stringify(result));
+  });
+  test('different Advanced destinations remain ambiguous and diagnosis includes anchors',async()=>{
+    await page.goto('https://webofscience.clarivate.cn/wos/');
+    await page.evaluate(()=>main.innerHTML='<a href="/wos/woscc/advanced-search">Advanced Search</a><a href="/wos/author/advanced-search">Advanced Search</a>');
+    const result=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
+    assert.equal(result.ok,false);assert.match(result.error,/入口不唯一/);
+    const diagnostic=await page.evaluate(inspectWorkPage);
+    assert.equal(diagnostic.navigation.length,2);
+    assert.equal(diagnostic.navigation[0].label,'Advanced Search');
+  });
   test('WOS multiple field rows are still refused',async()=>{
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');
     await page.evaluate(()=>document.getElementById('main').appendChild(document.querySelector('select').cloneNode(true)));
     const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
     assert.match(r.error,/识别到 2 个/);assert.equal(await page.evaluate(()=>searches),0);
+  });
+  test('CN landing page waits for delayed Advanced Search then enters fielded search',async()=>{
+    await page.goto('https://webofscience.clarivate.cn/wos/');
+    await page.evaluate(()=>{
+      document.getElementById('main').innerHTML='<h1>Smart Search</h1>';
+      setTimeout(()=>smartPage(),250);
+    });
+    const r=await page.evaluate(runWOSCommand,{...cmd('wos_search'),title:'Synthetic paper'});
+    assert.equal(r.ok,true,JSON.stringify(r));
+    assert.equal(await page.evaluate(()=>searches),1);
+    assert.ok(page.url().includes('/wos/woscc/full-record/'));
   });
   test('WOS Chinese all-fields selector is supported',async()=>{
     await page.goto('https://www.webofscience.com/wos/woscc/basic-search');

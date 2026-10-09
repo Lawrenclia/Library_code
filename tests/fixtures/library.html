@@ -1,0 +1,25 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Offline institution front-end fixture</title></head><body>
+<main id="app"><h1>OFFLINE TEST — no production data</h1><form id="form"><input aria-label="题名"><button type="button">检索</button></form></main>
+<script>
+window.testConfig={};window.searches=[];window.testItems=Array.from({length:12},(_,i)=>({id:'1244586319225556'+String(i).padStart(3,'0'),modelName:'期刊论文',metadata:{title:['Correct paper title '+i],doi:['10.1234/test'],pages:['10-20'],abstract:['完整摘要必须保留'],author:[{id:'author1',fullname:'Test Author',order:1}]}}));
+const copy=v=>JSON.parse(JSON.stringify(v));
+const listeners=new Map();
+const bus={$on(name,fn){if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name).add(fn);},$off(name,fn){listeners.get(name)?.delete(fn);},$emit(name,...args){for(const fn of listeners.get(name)||[])fn(...args);}};
+const form={aggregationSize:'100',beginTime:null,modelIds:[],endTime:null,datasetId:'',containFullText:'',institutionId:'1244586319225556993',partition:{category:'',quartile:''},query:{current:1,size:10,descs:'_score'},fieldFilters:[],queryFields:[{field:'ALL',logicalOperator:null,precise:false,value:null},{field:'ALL',logicalOperator:'AND',precise:false,value:null}]};
+const modal={$options:{name:'searchModal'},$el:document.getElementById('form'),$refs:{ruleForm:{validate(fn){fn(!testConfig.validationFalse);}}},loading:false,ruleForm:copy(form),retrievalFieldList:[{id:'f1',fieldName:'title',label:'题名'},{id:'f2',fieldName:'doi',label:'DOI'},{id:'f3',fieldName:'wosId',label:'WOS ID'}],submitForm(ref){this.$refs[ref].validate(valid=>{if(valid){this.loading=true;vm.handleEmit(copy(this.ruleForm));}});}};
+const vm={$options:{name:'advancedSearch'},$el:document.getElementById('app'),$children:[modal],$refs:{searchModalRef:modal},loading:false,ruleForm:copy(form),$EventBus:bus,$nextTick:()=>Promise.resolve(),handleEmit(e){this.ruleForm={...this.ruleForm,...e};this.advanceSubmit(this.ruleForm);},async advanceSubmit(params){this.loading=true;const sent=copy(params);searches.push(sent);await new Promise(r=>setTimeout(r,5));
+ if(!testConfig.failQuery){const current=sent.query.current;let rows=copy(testConfig.rows??testItems);if(testConfig.zero)rows=[];
+  if(testConfig.numericId&&rows.length)rows[0].id=1244586319225556993;
+  let records=rows.slice((current-1)*10,current*10);if(testConfig.repeatPage&&current===2)records[0]=copy(rows[0]);
+  if(testConfig.truncate&&current===1)records.pop();
+  let total=rows.length+(testConfig.changeTotal&&current===2?1:0);
+  if(testConfig.changeForm)this.ruleForm.containFullText='YES';
+  const eventParams=copy(sent);if(testConfig.foreignEvent)eventParams.queryFields[0].value='Foreign title';
+  bus.$emit('searchItemList',{page:{current,size:10,total,records},aggregations:{}},{},eventParams,true);
+ }
+ this.loading=false;modal.loading=false;
+}};
+Object.defineProperty(vm,'$store',{get(){throw Error('Adapter must not read account/store state');}});
+Object.defineProperty(vm,'headers',{get(){throw Error('Adapter must not inspect request headers');}});
+document.getElementById('app').__vue__=vm;window.vm=vm;window.modal=modal;window.listenerCount=()=>[...listeners.values()].reduce((n,s)=>n+s.size,0);
+</script></body></html>

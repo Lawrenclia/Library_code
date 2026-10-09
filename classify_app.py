@@ -15,7 +15,7 @@ from ui_theme import P, install_theme, style_text
 
 class ClassifyApp:
     def __init__(self, root, parent=None, on_busy=None, on_review=None, on_export=None,
-                 on_settings=None, on_export_skipped=None):
+                 on_settings=None, on_export_skipped=None, on_browser=None):
         self.root = root
         self.embedded = parent is not None
         self.on_busy = on_busy
@@ -50,7 +50,9 @@ class ClassifyApp:
         ttk.Label(header,text='论文分类工作台',style='Title.TLabel').pack(side='left')
         self.key_status=tk.StringVar(value='密钥已配置' if self.store.configured() else '请配置密钥')
         ttk.Label(header,textvariable=self.key_status,style='Muted.TLabel').pack(side='right')
-        ttk.Label(page,text='成果类型与导入渠道，一处查看。每批自动保存，随时继续。',style='Muted.TLabel').pack(anchor='w',pady=(4,14))
+        if on_browser:
+            ttk.Button(header,text='内置 WOS 浏览器',command=on_browser).pack(side='right',padx=12)
+        ttk.Label(page,text='选择负责人 → 分类与核对 → 下载数据库记录 → 准备提交',style='Muted.TLabel').pack(anchor='w',pady=(4,14))
         self.summary = tk.StringVar()
         self.metrics={name:tk.StringVar(value='—') for name in ('名单记录','分类任务','已处理','渠道待判定','分类失败')}
         cards=ttk.Frame(page)
@@ -79,12 +81,13 @@ class ClassifyApp:
                                         state='readonly',width=4)
         self.batch_combo.pack(side='left',padx=8)
         self.combo.bind('<<ComboboxSelected>>',self.change_model)
-        actions = ttk.Frame(settings)
-        actions.pack(side='right')
+        actions = ttk.Frame(page)
+        actions.pack(fill='x',pady=(10,0))
         self.start_button = ttk.Button(actions,text='开始 / 继续分类',command=self.start,style='Primary.TButton')
         self.start_button.pack(side='left')
         self.stop_button = ttk.Button(actions,text='本批完成后停止',command=self.request_stop,state='disabled')
         self.stop_button.pack(side='left',padx=8)
+        ttk.Label(actions,text='每批自动保存 · 可随时继续',style='Muted.TLabel').pack(side='right')
         ttk.Label(page,textvariable=self.summary,style='Muted.TLabel').pack(anchor='w',pady=(10,4))
         self.status = tk.StringVar(value=f'准备就绪；{self.model.get()} 默认每批 {limits(self.model.get())["batch_size"]} 篇。')
         self.status_label=ttk.Label(page,textvariable=self.status,wraplength=1000)
@@ -95,10 +98,13 @@ class ClassifyApp:
         filters.pack(fill='x',pady=(0,8))
         ttk.Label(filters,text='搜索题名 / DOI').pack(side='left')
         self.search=tk.StringVar()
-        ttk.Entry(filters,textvariable=self.search,width=26).pack(side='left',padx=(8,14),fill='x',expand=True)
+        self.search_entry=ttk.Entry(filters,textvariable=self.search,width=26)
+        self.search_entry.pack(side='left',padx=(8,14),fill='x',expand=True)
+        self.search_entry.bind('<Escape>',lambda event:self.reset_filters())
         self.channel=tk.StringVar(value='全部渠道')
         from import_channels import CHANNELS
         ttk.Combobox(filters,textvariable=self.channel,values=['全部渠道',*CHANNELS,'待判定','未处理','分类失败'],state='readonly',width=14).pack(side='left')
+        ttk.Button(filters,text='重置筛选',command=self.reset_filters).pack(side='left',padx=(8,0))
         self.search.trace_add('write',lambda *_:self.filter_results())
         self.channel.trace_add('write',lambda *_:self.filter_results())
         self.count_text=tk.StringVar(value='暂无结果')
@@ -110,20 +116,22 @@ class ClassifyApp:
         ttk.Label(page,text='AI 建议需核实收录及导出文件。开始会使用模型额度；原名单保持不变。',style='Muted.TLabel').pack(side='bottom',anchor='w',pady=(8,0))
         footer=ttk.Frame(page)
         footer.pack(side='bottom',fill='x',pady=(12,0))
-        self.report_button=ttk.Button(footer,text='查看分类报告',command=lambda:self.open_report('分类建议.md'))
+        reports=ttk.Frame(footer)
+        reports.pack(fill='x',pady=(8,0),side='bottom')
+        self.report_button=ttk.Button(reports,text='查看分类报告',command=lambda:self.open_report('分类建议.md'))
         self.report_button.pack(side='left')
-        self.channel_button=ttk.Button(footer,text='查看渠道分组',command=lambda:self.open_report('导入渠道分类.md'))
+        self.channel_button=ttk.Button(reports,text='查看渠道分组',command=lambda:self.open_report('导入渠道分类.md'))
         self.channel_button.pack(side='left',padx=8)
         if self.on_review:
-            self.review_button=ttk.Button(footer,text='转到人工处理',command=self.review_selected)
+            self.review_button=ttk.Button(reports,text='转到人工处理',command=self.review_selected)
             self.review_button.pack(side='left')
         if self.on_export:
-            self.export_button=ttk.Button(footer,text='下载 WOS 元数据',command=self.export_wos)
-            self.export_button.pack(side='left',padx=8)
+            self.export_button=ttk.Button(footer,text='下载 WOS 元数据',command=self.export_wos,style='Primary.TButton')
+            self.export_button.pack(side='left')
         if self.on_export_skipped:
             self.skipped_export_button=ttk.Button(footer,text='搜索跳过项',command=self.export_skipped_wos)
-            self.skipped_export_button.pack(side='left')
-        ttk.Button(footer,text='结果文件夹',command=self.open_output).pack(side='right')
+            self.skipped_export_button.pack(side='left',padx=8)
+        ttk.Button(reports,text='结果文件夹',command=self.open_output).pack(side='right')
         panes=ttk.Panedwindow(page,orient='vertical')
         panes.pack(fill='both',expand=True)
         table=ttk.Frame(panes)
@@ -139,6 +147,8 @@ class ClassifyApp:
         scroll.pack(side='right',fill='y')
         self.tree.pack(fill='both',expand=True)
         self.tree.tag_configure('pending',foreground=P.amber)
+        self.tree.tag_configure('failed',foreground=P.red)
+        self.tree.tag_configure('alternate',background=P.white)
         self.tree.bind('<<TreeviewSelect>>',self.show_detail)
         detail=ttk.Frame(panes,padding=(0,10,0,0))
         panes.add(detail,weight=1)
@@ -391,11 +401,16 @@ class ClassifyApp:
         self._sync_start_button()
         self.filter_results()
 
+    def reset_filters(self):
+        self.search.set('')
+        self.channel.set('全部渠道')
+
     def filter_results(self):
         selected=self.tree.selection()
         self.tree.delete(*self.tree.get_children())
         query=self.search.get().strip().casefold()
         category=self.channel.get()
+        visible_count=0
         for index,item in enumerate(self.records):
             result=item.get('classification') or {}
             route=item.get('import_route') or {}
@@ -405,13 +420,29 @@ class ClassifyApp:
                 channel='分类失败' if item.get('failure') else '未处理'
             if query not in (item.get('title','')+' '+item.get('doi','')).casefold() or (category!='全部渠道' and category!=channel):
                 continue
-            self.tree.insert('', 'end',iid=str(index),values=('、'.join(map(str,item['rows'])),item['title'],result.get('type') or '待判定',channel,item.get('status','未处理')),tags=('pending',) if channel in ('待判定','未处理','分类失败') else ())
+            tags=[]
+            if channel=='分类失败':
+                tags.append('failed')
+            elif channel in ('待判定','未处理'):
+                tags.append('pending')
+            if visible_count%2:
+                tags.append('alternate')
+            self.tree.insert('', 'end',iid=str(index),values=('、'.join(map(str,item['rows'])),item['title'],result.get('type') or '待判定',channel,item.get('status','未处理')),tags=tuple(tags))
+            visible_count+=1
         self.count_text.set(f'{len(self.tree.get_children())} / {len(self.records)} 项')
         if selected and self.tree.exists(selected[0]):
             self.tree.selection_set(selected[0])
             self.show_detail()
         else:
-            self.set_detail('选择一篇论文查看详情。' if self.tree.get_children() else '没有匹配的结果。可调整搜索词或渠道筛选。')
+            if self.tree.get_children():
+                hint='选择一篇论文查看详情。'
+            elif self.records:
+                hint='没有符合筛选条件的论文。点击“重置筛选”查看全部结果。'
+            elif not self.owner.get():
+                hint='先选择负责人，再开始分类或查看已有结果。'
+            else:
+                hint='当前负责人及模型暂无结果。点击“开始 / 继续分类”生成分类建议。'
+            self.set_detail(hint)
 
     def set_detail(self,text):
         self.detail.configure(state='normal')

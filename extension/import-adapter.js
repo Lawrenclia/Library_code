@@ -95,10 +95,57 @@ async function runImportCommand(command) {
         fail("导入后的题名或 WOS 入藏号不一致/缺失");
       if(candidate.doi && norm(scalar("doi")).replace(/^https?:\/\/doi.org\//,"")!==candidate.doi)
         fail("导入后的 DOI 不一致");
+      const items=JSON.parse(JSON.stringify(view.tableData));
       view.drawer=false; await vm.$nextTick();
-      return batch;
+      return items;
     };
     if(command.action==="import_scan")return {ok:true,data:{batches:await scan()}};
+    if(command.action==='import_check' && command.expect_upload===true) {
+      // Read the existing upload only. Never reopen a drawer, assign a file, or submit.
+      const state=drawer.__saImport;
+      if(drawer.drawer && state?.sa_id===command.sa_id && state.submitted!==true){
+        if(state.sha256!==candidate.sha256 || state.instructions!==command.instructions ||
+          typeof command.content!=='string' || command.content.length>700000 || command.contentSha!==candidate.sha256)
+          fail('原上传版本或核验文件不一致，保持结果未知');
+        const bytes=Uint8Array.from(atob(command.content),c=>c.charCodeAt(0));
+        if(!bytes.length || bytes.length>524288)fail('核验文件大小异常');
+        const tree=one(descendants(drawer).filter(v=>v.$options?.name==='selectTree'),'所属机构选择器');
+        const nodes=[];const walk=items=>items.forEach(n=>{if(n.name==='上海交通大学')nodes.push(n);if(n.children)walk(n.children);});
+        if(!Array.isArray(tree.treeData))fail('原上传机构树不可用');walk(tree.treeData);
+        const institution=one(nodes,'上海交通大学机构');
+        const datasetId=institution.id,originalTree=JSON.stringify(tree.treeData);
+        const input=one([...drawer.$el.querySelectorAll('input[type="file"]')],'原上传文件控件');
+        const filename='SA-WOS-'+command.sa_id+'.txt';
+        const originalForm=JSON.stringify(drawer.form);
+        const validForm=()=>drawer.drawer && drawer.__saImport===state && state.submitted!==true &&
+          state.sa_id===command.sa_id && state.sha256===candidate.sha256 && state.instructions===command.instructions &&
+          state.datasetId===datasetId && drawer.form.datasetId===datasetId && tree.label==='上海交通大学' && JSON.stringify(tree.treeData)===originalTree &&
+          drawer.form.instructions===command.instructions && JSON.stringify(drawer.form)===originalForm;
+        if(typeof institution.id!=='string' || !institution.id || !validForm() || input.accept!=='.txt' ||
+          input.files?.length!==1 || (state.originalFile&&input.files[0]!==state.originalFile) || input.files[0].name!==filename || input.files[0].size!==bytes.length)
+          fail('原上传窗口、机构、说明或文件已变化，保持结果未知');
+        if(drawer.fileList.some(f=>f.status==='fail'||f.status==='error'))fail('原上传尚无成功回执，保持结果未知');
+        await wait(()=>drawer.fileList.length===1&&drawer.fileList[0].status==='success','只读等待原上传回执');
+        const file=drawer.fileList[0],response=JSON.stringify(file.response);
+        const originalFile=input.files[0];const actual=new Uint8Array(await originalFile.arrayBuffer());
+        check();
+        if(!validForm() || input.files?.length!==1 || input.files[0]!==originalFile || drawer.fileList.length!==1 || drawer.fileList[0]!==file || JSON.stringify(file.response)!==response ||
+          file.status!=='success' || file.name!==filename || file.size!==bytes.length || actual.length!==bytes.length ||
+          actual.some((b,i)=>b!==bytes[i]) || typeof file.response?.data?.name!=='string' || !file.response.data.name.trim() ||
+          file.response.success===false || (file.response.success!==true&&file.response.code!==200) || (state.serverName&&state.serverName!==file.response.data.name))
+          fail('原上传字节或成功回执不一致，保持结果未知');
+        // Restore only the page-side checkpoint used by the next explicit import.
+        state.uploaded=true;state.serverName=file.response.data.name;
+        return {ok:true,data:{verified:true,uploaded:true,sa_id:command.sa_id,instructions:command.instructions,
+          sha256:candidate.sha256,dataset_id:institution.id,dataset_label:tree.label,filename,size:bytes.length,
+          server_name:state.serverName,response:JSON.parse(response)}};
+      }
+      const batches=await scan();
+      if(!batches.length)return {ok:false,code:'REMOTE_RESULT_UNKNOWN',submitted:false,
+        error:'原上传窗口已关闭或重载，未找到可验证批次。保持结果未知，请人工核对平台，不重新上传。'};
+      const batch=one(batches,'对应原说明的批次');const items=await verify(batch);
+      return {ok:true,data:{verified:true,batch,items}};
+    }
     if(command.action==="import_upload") {
       if(drawer.drawer || (drawer.__saImport?.sa_id===command.sa_id && drawer.__saImport?.uploaded))fail("上传窗口/上传记录已存在，禁止自动重复上传");
       if((await scan()).length)fail("已有相同说明批次，禁止再次导入");
@@ -116,15 +163,16 @@ async function runImportCommand(command) {
       if(typeof institution.id!=="string" || !institution.id)fail("所属机构编号不可靠");
       tree.handleNodeClick(institution); drawer.form.instructions=command.instructions; await vm.$nextTick();
       if(drawer.form.datasetId!==institution.id || tree.label!=="上海交通大学")fail("机构选择未成功");
+      drawer.__saImport.datasetId=institution.id;drawer.__saImport.instructions=command.instructions;
       const input=one([...drawer.$el.querySelectorAll('input[type="file"]')],"WOS TXT 上传控件");
       if(input.accept!==".txt" || drawer.fileList.length)fail("不是空白 TXT 上传控件");
       const filename="SA-WOS-"+command.sa_id+".txt";
       const dt=new DataTransfer();dt.items.add(new File([bytes],filename,{type:"text/plain"}));
-      submitted=true; input.files=dt.files; input.dispatchEvent(new Event("change",{bubbles:true}));
+      submitted=true; input.files=dt.files;drawer.__saImport.originalFile=input.files[0]; input.dispatchEvent(new Event("change",{bubbles:true}));
       await wait(()=>drawer.fileList.length===1 && drawer.fileList[0].status==="success","上传 TXT");
       const file=drawer.fileList[0];
-      if(file.name!==filename || file.size!==bytes.length || !file.response?.data?.name ||
-         (file.response.success!==true && file.response.code!==200))fail("上传响应未确认成功");
+      if(file.name!==filename || file.size!==bytes.length || typeof file.response?.data?.name!=='string' || !file.response.data.name.trim() ||
+         file.response.success===false || (file.response.success!==true && file.response.code!==200))fail("上传响应未确认成功");
       drawer.__saImport.uploaded=true; drawer.__saImport.serverName=file.response.data.name;
       drawer.__saImport.datasetId=institution.id;
       return {ok:true,data:{uploaded:true,sha256:candidate.sha256,dataset_id:institution.id,filename}};
@@ -154,8 +202,8 @@ async function runImportCommand(command) {
     }
     const batch=one(batches,"对应说明的批次");
     if(command.batch_id && batch.id!==command.batch_id)fail("批次 ID 改变");
-    await verify(batch);
-    if(command.action==="import_check")return {ok:true,data:{verified:true,batch}};
+    const items=await verify(batch);
+    if(command.action==="import_check")return {ok:true,data:{verified:true,batch,items}};
     if(command.action==="import_push") {
       const expected=command.batch;
       if(!expected || ["id","modelId","instructions","total","actual","fail","status"].some(k=>expected[k]!==batch[k]))
@@ -169,17 +217,39 @@ async function runImportCommand(command) {
       const desired="唯一标识+期刊&发表时间&页码&卷&期&题名相似度+题名相似度";
       const option=one(push.duplicateQueryTypes.filter(o=>clean(o.label)===desired),"PPT 指定查重方式");
       if(typeof option.value!=="string" || ["custom",""].includes(option.value))fail("查重选项值未知");
-      Object.assign(push.form,{duplicateChecking:true,duplicateQueryType:option.value,duplicateItemProcessingType:"4",
-        newItemProcessingType:"1",owner:true,updateFields:[]});
+      const liveChoice=(field,label,text)=>{
+        const item=one(descendants(push).filter(v=>v.$options?.name==='ElFormItem' && v.prop===field &&
+          norm(v.label).replace(/[：:]/g,'')===norm(label)),"PPT 字段 "+label);
+        const radio=one(descendants(item).filter(v=>v.$options?.name==='ElRadio' && visible(v.$el) &&
+          norm(v.$el.textContent)===norm(text)),"PPT 选项 "+label+" / "+text);
+        if(radio.disabled===true || radio.isDisabled===true || radio.$el.querySelector('input[disabled]'))
+          fail("PPT 选项不可用："+label+" / "+text);
+        if(typeof radio.label!=='boolean' && (typeof radio.label!=='string' || !radio.label))
+          fail("PPT 选项值未知："+label);
+        return radio.label;
+      };
+      const duplicateChecking=liveChoice('duplicateChecking','是否查重','是');
+      if(duplicateChecking!==true)fail("是否查重选项含义已变化");
+      push.form.duplicateChecking=duplicateChecking;await vm.$nextTick();
+      const choices={duplicateChecking,duplicateQueryType:option.value,
+        duplicateItemProcessingType:liveChoice('duplicateItemProcessingType','重复条目元数据','根据优先级合并'),
+        newItemProcessingType:liveChoice('newItemProcessingType','不存在的条目','新增'),
+        owner:liveChoice('owner','是否本校成果','是')};
+      if(choices.owner!==true)fail("是否本校成果选项含义已变化");
+      Object.assign(push.form,{...choices,updateFields:[]});
       await vm.$nextTick(); check();
       if(push.form.batchId!==batch.id || push.form.modelId!==batch.modelId || push.form.duplicateChecking!==true ||
-        push.form.duplicateQueryType!==option.value || push.form.duplicateItemProcessingType!=="4" ||
-        push.form.newItemProcessingType!=="1" || push.form.owner!==true || push.form.updateFields.length)fail("推送设置验证失败");
+        push.form.duplicateQueryType!==option.value || push.form.duplicateItemProcessingType!==choices.duplicateItemProcessingType ||
+        push.form.newItemProcessingType!==choices.newItemProcessingType || push.form.owner!==true || push.form.updateFields.length ||
+        liveChoice('duplicateChecking','是否查重','是')!==choices.duplicateChecking ||
+        liveChoice('duplicateItemProcessingType','重复条目元数据','根据优先级合并')!==choices.duplicateItemProcessingType ||
+        liveChoice('newItemProcessingType','不存在的条目','新增')!==choices.newItemProcessingType ||
+        liveChoice('owner','是否本校成果','是')!==choices.owner)fail("推送设置验证失败");
       push.__saImport.submitted=true;submitted=true;push.onSubmit();
       await wait(()=>!push.drawer,"提交推送",10000);
-      return {ok:true,data:{submitted:true,batch_id:batch.id}};
+      return {ok:true,data:{submitted:true,batch_id:batch.id,push_settings:choices,duplicate_query_label:option.label,items}};
     }
     fail("未执行未知命令");
-  } catch(error) { return {ok:false,error:(submitted?"[已提交或结果不明，勿重试] ":"[已暂停] ")+error.message}; }
+  } catch(error) { return {ok:false,submitted,error:(submitted?"[已提交或结果不明，勿重试] ":"[已暂停] ")+error.message}; }
 }
 if(typeof module!=="undefined")module.exports={runImportCommand};

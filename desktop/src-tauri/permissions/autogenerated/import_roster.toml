@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-roster"
+description = "Enables the import_roster command without any pre-configured scope."
+commands.allow = ["import_roster"]
+
+[[permission]]
+identifier = "deny-import-roster"
+description = "Denies the import_roster command without any pre-configured scope."
+commands.deny = ["import_roster"]
