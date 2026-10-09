@@ -65,7 +65,7 @@ const assert=require('node:assert/strict');
  const timer=setTimeout(()=>child.kill(),240000);
  try{
   const code=await new Promise((resolve,reject)=>{child.once('exit',resolve);child.once('error',reject);});
-  const created=fs.readdirSync(root).filter(n=>!before.has(n));assert.equal(created.length,1,output);
+  const created=fs.readdirSync(root).filter(n=>!before.has(n)&&fs.existsSync(path.join(root,n,'native-smoke.json'))&&JSON.parse(fs.readFileSync(path.join(root,n,'native-smoke.json'),'utf8')).process_id===child.pid);assert.equal(created.length,1,output);
   const report=JSON.parse(fs.readFileSync(path.join(root,created[0],'native-smoke.json'),'utf8'));
   const summary=JSON.stringify({failure:report.failure,tasks:report.workspace?.tasks?.map(t=>({id:t.id,stage:t.stage,error:t.last_error}))});
   assert.equal(code,0,summary);assert.equal(report.passed,true,summary);

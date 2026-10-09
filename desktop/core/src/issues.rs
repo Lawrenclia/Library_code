@@ -264,6 +264,12 @@ pub fn resolve(
             if ["corresponding_author", "first_author", "first_institution"].contains(&key) =>
         {
             let expected = issue_value(&plan.baseline, key, "sa")?;
+            if issue_value(snapshot, key, "sa")?.trim() != expected.trim() {
+                return Err(Failure::new(
+                    "TASK_CHANGED",
+                    "SA 本项值在取证后变化，请重新核对原文和实时字段。",
+                ));
+            }
             if !["是", "否"].contains(&expected.trim()) || value.trim() != expected.trim() {
                 return Err(Failure::new(
                     "REVIEW_REQUIRED",

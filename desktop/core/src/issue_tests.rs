@@ -142,6 +142,68 @@ fn library_correct_keeps_fields_but_requires_real_per_issue_evidence() {
     );
 }
 #[test]
+fn sa_correct_refuses_changed_sa_role_or_unit_and_preserves_existing_conclusion() {
+    for (key, label) in [
+        ("corresponding_author", "是否通讯作者"),
+        ("first_author", "是否第一作者"),
+        ("first_institution", "交大是否第一单位"),
+    ] {
+        let mut t = task();
+        let mut before = snapshot(
+            "通讯作者标记不一致；第一作者标记不一致；交大是否第一单位不一致",
+            SA,
+            LIB,
+            "已认领",
+        );
+        before["comparison"][3]["library"] = "否".into();
+        prepare(&mut t, &before).unwrap();
+        evidence(&mut t);
+        let mut after = before.clone();
+        after["comparison"][1]["library"] = SA.into();
+        after["comparison"][3]["library"] = "是".into();
+        for original_key in ["corresponding_author", "first_author", "first_institution"] {
+            resolve(
+                &mut t,
+                &after,
+                original_key,
+                "sa_correct",
+                "paper",
+                "原文确认是，已回读本库修正",
+            )
+            .unwrap();
+        }
+        assert_resolved(&t, &after).unwrap();
+        let original = serde_json::to_value(&t.issue_reviews).unwrap();
+        let mut changed = after.clone();
+        if key == "first_institution" {
+            changed["comparison"][3]["sa"] = "否".into();
+        } else {
+            changed["comparison"][1]["sa"] = SA
+                .replace(&format!("{label}：是"), &format!("{label}：否"))
+                .into();
+        }
+        assert_eq!(
+            resolve(
+                &mut t,
+                &changed,
+                key,
+                "sa_correct",
+                "paper",
+                "旧原文结论不能沿用"
+            )
+            .unwrap_err()
+            .code,
+            "TASK_CHANGED",
+            "{key}"
+        );
+        assert_eq!(serde_json::to_value(&t.issue_reviews).unwrap(), original);
+        assert_eq!(
+            assert_resolved(&t, &changed).unwrap_err().code,
+            "TASK_CHANGED"
+        );
+    }
+}
+#[test]
 fn claim_requires_current_relationship_and_exact_staff_id() {
     let mut t = task();
     let s = snapshot("作者不一致", SA, SA, "未认领");

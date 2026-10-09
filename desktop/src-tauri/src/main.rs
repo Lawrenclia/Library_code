@@ -5,6 +5,8 @@ mod browser;
 mod download_smoke;
 mod engine;
 #[cfg(feature = "smoke-test")]
+mod metadata_smoke;
+#[cfg(feature = "smoke-test")]
 mod queue_smoke;
 #[cfg(feature = "smoke-test")]
 mod restart_smoke;

@@ -489,6 +489,13 @@ impl Engine {
                 "名单关键字段已变化，先处理任务版本，不能按旧名单写入。",
             ));
         }
+        if is_write(action) && (t.stage == Stage::Unknown || !self.store.unresolved(id)?.is_empty())
+        {
+            return Err(Failure::new(
+                "REMOTE_RESULT_UNKNOWN",
+                "本条有未确认结果，先核验原操作；不会重新准备或发送写入。",
+            ));
+        }
         if action == "library_search" {
             if t.stage == Stage::Completed {
                 return Err(Failure::new("INVALID_TRANSITION", "任务已经完成。"));

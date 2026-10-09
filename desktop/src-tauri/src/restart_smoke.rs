@@ -10,6 +10,7 @@ const ID: &str = "restart-import";
 pub fn valid_phase(phase: &str) -> bool {
     crate::queue_smoke::valid_phase(phase)
         || crate::download_smoke::valid_phase(phase)
+        || crate::metadata_smoke::valid_phase(phase)
         || matches!(
             phase,
             "submit" | "push" | "verify" | "upload" | "upload-readback"
@@ -171,6 +172,9 @@ async fn recover(app: &AppHandle, engine: &Engine, action: &str, expected: Stage
 pub async fn run(app: &AppHandle, phase: &str) -> Result<()> {
     let engine = app.state::<Engine>();
     let _lease = engine.acquire()?;
+    if crate::metadata_smoke::valid_phase(phase) {
+        return crate::metadata_smoke::run(app, &engine, phase).await;
+    }
     if crate::download_smoke::valid_phase(phase) {
         return crate::download_smoke::run(app, &engine, phase).await;
     }
