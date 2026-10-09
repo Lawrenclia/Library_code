@@ -94,6 +94,13 @@ async function runScholarCommand(command) {
     if (found.length > 1) fail('IDENTITY_CONFLICT', '同名别名记录不唯一，请人工核对。');
     if (command.action === 'alias_check') {
       if (found.length !== 1) fail('REMOTE_RESULT_UNKNOWN', '尚未回读到目标别名，不能重复新增。');
+      if (command.expected_aliases != null) {
+        if (!Array.isArray(command.expected_aliases)) fail('PAGE_UNSUPPORTED', '原别名快照不完整。');
+        const old = command.expected_aliases, existing = old.some(a => norm(a.nameAlias) === norm(command.alias));
+        if (!old.every(a => aliases.some(current => equal(a, current))) || aliases.length !== old.length + (existing ? 0 : 1) ||
+            (!existing && (found[0].defaultNameCn !== 0 || found[0].defaultNameEn !== 0)))
+          fail('REMOTE_RESULT_UNKNOWN', '原别名列表或默认姓名发生变化，请核对原保存结果。');
+      }
       return {ok: true, data: {verified: true, scholar, aliases, alias: found[0]}};
     }
     if (command.confirmed !== true || !equal(aliases, command.expected_aliases)) fail('TASK_CHANGED', '别名列表或本条确认已变化，请重新读取。');

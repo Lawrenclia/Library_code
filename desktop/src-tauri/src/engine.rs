@@ -16,6 +16,17 @@ pub struct Engine {
     pub pause: Arc<AtomicBool>,
 }
 impl Engine {
+    fn record_alias(task: &mut Task, payload: &Value, result: &Value, live: &Value) -> Result<()> {
+        alias::assert_result(task, payload, result, live)?;
+        task.evidence.push(Evidence {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: "alias_verified".into(),
+            source: "机构库学者管理 · 完整别名与 SA 回读".into(),
+            text: json!({"payload":payload,"result":result,"sa_after":live}).to_string(),
+            created: now(),
+        });
+        Ok(())
+    }
     pub fn new(root: std::path::PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&root)?;
         let root = root.canonicalize()?;
@@ -826,6 +837,12 @@ impl Engine {
             return Ok(result);
         }
         if action == "prepare_alias" {
+            if matches!(t.stage, Stage::Unknown | Stage::Completed) {
+                return Err(Failure::new(
+                    "INVALID_TRANSITION",
+                    "先核验上次别名操作，或当前任务已完成。",
+                ));
+            }
             if files::ensure_metadata_evidence(&mut t)? {
                 self.store.save(&mut t, "metadata_sources_restored")?;
             }
@@ -837,7 +854,7 @@ impl Engine {
                     "SA 工号与名单工号不一致，不能定位别名对象。",
                 ));
             }
-            let result = self
+            let mut result = self
                 .browser
                 .execute(
                     app,
@@ -847,6 +864,9 @@ impl Engine {
                     60,
                 )
                 .await?;
+            result["sa"] = d;
+            result["input_hash"] = t.input_hash.clone().into();
+            result["record_fingerprint"] = t.record.fingerprint().into();
             self.store
                 .set_setting(&format!("alias:{id}"), result.clone())?;
             self.changed(app);
@@ -862,23 +882,14 @@ impl Engine {
             }
             let saved: Value = serde_json::from_str(attempts[0]["data"].as_str().unwrap_or("{}"))?;
             let p = &saved["payload"];
-            let result = self.browser.execute(app, "scholar", "alias_check", json!({"sa_id":id,"staff_id":p["staff_id"],"alias":p["alias"],"expected_scholar_id":p["expected_scholar"]["id"]}), 60).await?;
-            if result["verified"] != true {
-                return Err(Failure::new(
-                    "REMOTE_RESULT_UNKNOWN",
-                    "尚未确认别名保存结果。",
-                ));
-            }
+            let before = self.read_sa(app, &mut t).await?;
+            alias::assert_plan(&t, p, &before)?;
+            let result = self.browser.execute(app, "scholar", "alias_check", json!({"sa_id":id,"staff_id":p["staff_id"],"alias":p["alias"],"expected_scholar":p["expected_scholar"],"expected_aliases":p["expected_aliases"]}), 60).await?;
+            let after = self.read_sa(app, &mut t).await?;
+            Self::record_alias(&mut t, p, &result, &after)?;
             t.stage = serde_json::from_value(p["previous_stage"].clone())?;
             t.running = false;
             t.last_error = None;
-            t.evidence.push(Evidence {
-                id: uuid::Uuid::new_v4().to_string(),
-                kind: "alias_verified".into(),
-                source: "机构库学者管理 · 回读".into(),
-                text: result.to_string(),
-                created: now(),
-            });
             self.store.verify_attempt(
                 &mut t,
                 attempts[0]["id"].as_str().unwrap_or(""),
@@ -1325,14 +1336,8 @@ impl Engine {
                     .ok_or_else(|| Failure::new("REVIEW_REQUIRED", "先按工号读取学者与别名。"))?;
                 let alias = extra["alias"].as_str().unwrap_or("").trim();
                 let evidence_id = extra["evidence_id"].as_str().unwrap_or("");
-                validate_alias_source(&t, alias, evidence_id)?;
                 let d = self.read_sa(app, &mut t).await?;
-                if d["row"]["gh"] != prepared["staff_id"]
-                    || prepared["staff_id"] != t.record.staff_id
-                {
-                    return Err(Failure::new("IDENTITY_CONFLICT", "工号在读取后已变化。"));
-                }
-                let p = json!({"sa_id":id,"staff_id":prepared["staff_id"],"expected_scholar":prepared["scholar"],"expected_aliases":prepared["aliases"],"alias":alias,"evidence_id":evidence_id,"confirmed":true,"previous_stage":t.stage});
+                let p = alias::payload(&t, &d, &prepared, alias, evidence_id)?;
                 ("scholar", p, t.stage.clone())
             }
             "import_upload" => {
@@ -1707,13 +1712,21 @@ impl Engine {
                     t.record.done = true;
                 }
                 if action == "add_alias" {
-                    t.evidence.push(Evidence {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        kind: "alias_verified".into(),
-                        source: "机构库学者管理 · 回读".into(),
-                        text: d.to_string(),
-                        created: now(),
-                    });
+                    let fresh = self.read_sa(app, &mut t).await?;
+                    if let Err(error) = Self::record_alias(&mut t, &audit, &d, &fresh) {
+                        t.stage = Stage::Unknown;
+                        t.running = false;
+                        t.last_error = Some(error.clone());
+                        self.store.finish_attempt(
+                            &mut t,
+                            &attempt,
+                            "unknown",
+                            json!(error),
+                            "alias_unconfirmed",
+                        )?;
+                        self.changed(app);
+                        return Err(error);
+                    }
                 }
                 let state = if t.stage == Stage::Unknown {
                     "unknown"
