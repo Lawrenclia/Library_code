@@ -169,6 +169,10 @@ impl Engine {
             }
             return Ok(());
         }
+        if self.store.recover_native_download(id)? {
+            self.changed(app);
+            return Ok(());
+        }
         if let Some(a) = self.store.reusable_artifact(&t.record)? {
             let raw = std::fs::read(&a.path)?;
             if hash(&raw) != a.candidate.sha256 {
@@ -209,8 +213,7 @@ impl Engine {
         self.changed(app);
         let mut payload = payload;
         payload["expected_record_url"] = url.into();
-        let (path, source) = self.browser.download(app, payload).await?;
-        self.attach(id, &path, "WOS".into(), source)?;
+        self.browser.download(app, &self.store, &t, payload).await?;
         self.changed(app);
         Ok(())
     }

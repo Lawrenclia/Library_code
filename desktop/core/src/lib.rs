@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod download;
 pub mod files;
 pub mod issues;
 pub mod legacy;
@@ -12,6 +13,8 @@ pub mod templates;
 pub mod versions;
 pub use model::*;
 pub use store::Store;
+#[cfg(test)]
+mod download_tests;
 #[cfg(test)]
 mod issue_tests;
 #[cfg(test)]

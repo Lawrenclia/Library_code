@@ -138,7 +138,7 @@ impl Store {
     pub fn report_snapshot(&self) -> Result<(Vec<Task>, Vec<DownloadQueue>)> {
         let mut db = self.connect()?;
         let tx = db.transaction()?;
-        let tasks = {
+        let mut tasks: Vec<Task> = {
             let mut stmt = tx.prepare("SELECT data FROM tasks ORDER BY rowid")?;
             let raw = stmt.query_map([], |r| r.get::<_, String>(0))?;
             let mut tasks = Vec::new();
@@ -147,6 +147,24 @@ impl Store {
             }
             tasks
         };
+        // Include failed/unconfirmed receipts too; an absent artifact must not
+        // hide the original request, scope or owned path in the source report.
+        for task in &mut tasks {
+            let mut stmt =
+                tx.prepare("SELECT data FROM native_downloads WHERE task_id=? ORDER BY rowid")?;
+            let rows = stmt.query_map([&task.id], |r| r.get::<_, String>(0))?;
+            for raw in rows {
+                let raw = raw?;
+                let receipt: crate::download::DownloadReceipt = serde_json::from_str(&raw)?;
+                task.evidence.push(crate::Evidence {
+                    id: format!("{}:receipt", receipt.id),
+                    kind: "native_download_receipt".into(),
+                    source: receipt.record_url,
+                    text: raw,
+                    created: receipt.finished.unwrap_or(receipt.created),
+                });
+            }
+        }
         let queues = {
             let mut stmt = tx.prepare("SELECT data FROM download_queues ORDER BY rowid")?;
             let raw = stmt.query_map([], |r| r.get::<_, String>(0))?;

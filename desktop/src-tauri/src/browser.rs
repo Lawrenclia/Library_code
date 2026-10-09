@@ -41,6 +41,7 @@ struct Pending {
     sender: oneshot::Sender<Value>,
 }
 struct Capture {
+    receipt: library_core::download::DownloadReceipt,
     record_url: String,
     url: Option<String>,
     path: Option<PathBuf>,
@@ -180,6 +181,7 @@ impl Browser {
         let downloads = root.join("downloads");
         std::fs::create_dir_all(&downloads)?;
         let capture = self.capture.clone();
+        let download_store = library_core::Store::new(root)?;
         let download_app = app.clone();
         let popup_app = app.clone();
         let popup_profile = profile.clone();
@@ -210,7 +212,9 @@ impl Browser {
                         if let Some(c)=lock.as_mut(){
                             let canonical=current.as_str().replace("(overlay:export/ext)","");
                             if canonical.split('#').next()!=c.record_url.split('#').next()||c.path.is_some(){#[cfg(feature="smoke-test")]eprintln!("Download rejected: record {} vs {}",canonical,c.record_url);return false;}
-                            *destination=downloads.join(format!("{}.txt",uuid::Uuid::new_v4().simple()));c.path=Some(destination.clone());c.url=Some(url.to_string());
+                            // Persist ownership before WebView2 accepts this request.
+                            if download_store.request_native_download(&c.receipt.id,url.as_str()).is_err(){return false;}
+                            *destination=PathBuf::from(&c.receipt.path);c.path=Some(destination.clone());c.url=Some(url.to_string());
                         }else{*destination=downloads.join(format!("manual-{}.txt",uuid::Uuid::new_v4().simple()));}
                         #[cfg(feature="smoke-test")]eprintln!("Download accepted: {:?}",destination);
                         true
@@ -219,8 +223,14 @@ impl Browser {
                         #[cfg(feature="smoke-test")]
                         eprintln!("Native download finished: {} {:?} {}",url,path,success);
                         let mut lock=capture.lock().unwrap();
-                        let matched=lock.as_ref().map(|c|c.url.as_deref()==Some(url.as_str())&&c.path.as_deref()==path.as_deref()).unwrap_or(false);
-                        if matched {let c=lock.take().unwrap();let result=if success{path.clone().filter(|p|std::fs::metadata(p).map(|m|m.len()>0&&m.len()<=512*1024).unwrap_or(false)).ok_or_else(||Failure::new("FILE_INVALID","下载文件为空、过大或不存在。"))}else{Err(Failure::new("DOWNLOAD_FAILED","原生下载未完成。"))};let _=c.sender.send(result);}
+                        // A failed native download may omit its final path.
+                        // Only the still-owned capture can supply that path.
+                        let receipt_path=path.clone().or_else(||if !success{lock.as_ref().filter(|c|c.url.as_deref()==Some(url.as_str())).and_then(|c|c.path.clone())}else{None});
+                        let matched=lock.as_ref().map(|c|c.url.as_deref()==Some(url.as_str())&&c.path.as_deref()==receipt_path.as_deref()).unwrap_or(false);
+                        // The ledger also handles a late Finished after its
+                        // awaiting future timed out and dropped the capture.
+                        let persisted=receipt_path.as_ref().map(|p|download_store.finish_native_download(url.as_str(),p,success)).transpose();
+                        if matched {let c=lock.take().unwrap();let result=match persisted {Ok(Some(Some(r))) if r.state=="completed"=>Ok(PathBuf::from(r.path)),Err(e)=>Err(e),_=>Err(Failure::new("DOWNLOAD_FAILED","原生下载未完成或回执未保存。"))};let _=c.sender.send(result);}
                         use tauri::Emitter;let _=download_app.emit_to("main","download-event",json!({"success":success,"path":path.map(|p|p.to_string_lossy().to_string())}));true
                     },_=>false,
                 }
@@ -477,7 +487,13 @@ impl Browser {
             "WOS 结果等待超时，没有重复提交检索。",
         ))
     }
-    pub async fn download(&self, app: &AppHandle, payload: Value) -> Result<(PathBuf, String)> {
+    pub async fn download(
+        &self,
+        app: &AppHandle,
+        store: &library_core::Store,
+        task: &library_core::Task,
+        payload: Value,
+    ) -> Result<()> {
         let prepared = self
             .execute(app, "wos", "wos_prepare_export", payload.clone(), 35)
             .await?;
@@ -485,13 +501,26 @@ impl Browser {
             .as_str()
             .ok_or_else(|| Failure::new("PAGE_UNSUPPORTED", "导出未提供记录来源。"))?
             .to_string();
+        if !Url::parse(&record)
+            .ok()
+            .as_ref()
+            .map(core_record)
+            .unwrap_or(false)
+        {
+            return Err(Failure::new(
+                "IDENTITY_CONFLICT",
+                "下载来源不是核心合集记录。",
+            ));
+        }
         let (tx, rx) = oneshot::channel();
         {
             let mut cap = self.capture.lock().unwrap();
             if cap.is_some() {
                 return Err(Failure::new("BUSY", "已有下载进行中。"));
             }
+            let receipt = store.prepare_native_download(task, &record)?;
             *cap = Some(Capture {
+                receipt,
                 record_url: record.clone(),
                 url: None,
                 path: None,
@@ -499,15 +528,42 @@ impl Browser {
             });
         }
         if let Err(e) = self.execute(app, "wos", "wos_download", payload, 35).await {
-            self.capture.lock().unwrap().take();
+            if let Some(c) = self.capture.lock().unwrap().take() {
+                store.abandon_unrequested_download(&c.receipt.id)?;
+            }
+            if store.recover_native_download(&task.id)? {
+                return Ok(());
+            }
             return Err(e);
         }
         let result = tokio::time::timeout(Duration::from_secs(40), rx).await;
-        self.capture.lock().unwrap().take();
-        let path = result
-            .map_err(|_| Failure::new("DOWNLOAD_FAILED", "没有收到完整文件，未采纳其他下载。"))?
+        if let Some(c) = self.capture.lock().unwrap().take() {
+            store.abandon_unrequested_download(&c.receipt.id)?;
+        }
+        if result.is_err() && store.recover_native_download(&task.id)? {
+            return Ok(());
+        }
+        let _path = result
+            .map_err(|_| {
+                Failure::new(
+                    "DOWNLOAD_RESULT_UNKNOWN",
+                    "下载完成尚未确认，保留原回执，不自动重新下载。",
+                )
+            })?
             .map_err(|_| Failure::new("BROWSER_DISCONNECTED", "下载通道已结束。"))??;
-        Ok((path, record))
+        #[cfg(feature = "smoke-test")]
+        if fixture_origin().is_some()
+            && std::env::var("DESKTOP_SMOKE_RESTART_PHASE").as_deref() == Ok("download-complete")
+        {
+            println!("DOWNLOAD_COMPLETE_BEFORE_ADOPTION");
+            tokio::time::sleep(Duration::from_secs(120)).await;
+            return Err(Failure::new(
+                "TEST_FAILED",
+                "下载完成边界未被测试程序终止。",
+            ));
+        }
+        store.recover_native_download(&task.id)?;
+        Ok(())
     }
 }
 fn page_error(message: &str) -> Failure {
