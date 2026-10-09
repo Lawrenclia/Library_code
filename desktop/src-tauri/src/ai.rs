@@ -55,7 +55,7 @@ pub async fn classify(e: &Engine, id: &str, template: Option<Value>) -> Result<V
         .filter(|s| {
             !matches!(
                 s.kind.as_str(),
-                "alias_verified" | "claim_verified" | "sa_read"
+                "alias_verified" | "claim_verified" | "sa_read" | "material_validation"
             )
         })
         .cloned()

@@ -20,8 +20,12 @@ pub struct Template {
     pub sheet: String,
     pub header_row: u32,
     pub columns: Vec<String>,
+    #[serde(default)]
+    pub headers: Vec<String>,
     pub required: Vec<String>,
     pub notes: String,
+    #[serde(default)]
+    pub field_rules: Vec<crate::template_rules::FieldRule>,
 }
 pub fn inspect(
     path: &Path,
@@ -30,6 +34,8 @@ pub fn inspect(
     required: Vec<String>,
     notes: String,
 ) -> Result<Template> {
+    let raw = std::fs::read(path)?;
+    let fingerprint = hash(&raw);
     let mut book = open_workbook_auto(path).map_err(Failure::storage)?;
     let sheets = book.worksheets();
     let (sheet, range) = if sheet_name.is_empty() {
@@ -44,22 +50,70 @@ pub fn inspect(
     let relative = header_row
         .checked_sub(range.start().map(|v| v.0).unwrap_or(0))
         .ok_or_else(|| Failure::new("TEMPLATE_INVALID", "表头行不存在。"))?;
-    let columns: Vec<_> = range
+    let headers: Vec<_> = range
         .rows()
         .nth(relative as usize)
         .ok_or_else(|| Failure::new("TEMPLATE_INVALID", "表头行不存在。"))?
         .iter()
         .map(|v| v.to_string().trim().to_string())
         .collect();
-    if columns.is_empty()
-        || columns.iter().any(|s| s.is_empty())
-        || columns.iter().collect::<HashSet<_>>().len() != columns.len()
-    {
-        return Err(Failure::new("TEMPLATE_INVALID", "表头有空列或重复列。"));
+    if headers.is_empty() || headers.iter().any(|s| s.is_empty()) {
+        return Err(Failure::new("TEMPLATE_INVALID", "表头有空列。"));
+    }
+    let columns: Vec<_> = headers
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            if headers.iter().filter(|s| *s == name).count() > 1 {
+                format!("{name} [{}列]", column(i))
+            } else {
+                name.clone()
+            }
+        })
+        .collect();
+    if columns.iter().collect::<HashSet<_>>().len() != columns.len() {
+        return Err(Failure::new(
+            "TEMPLATE_INVALID",
+            "列位置标记与原表头冲突，请核对模板。",
+        ));
     }
     if required.iter().any(|s| !columns.contains(s)) {
-        return Err(Failure::new("TEMPLATE_INVALID", "必填列不在模板表头内。"));
+        return Err(Failure::new(
+            "TEMPLATE_INVALID",
+            format!(
+                "必填列不在模板表头内或有重名，重名列须带列位置：{}",
+                columns.join("、")
+            ),
+        ));
     }
+    let mut field_rules = vec![];
+    for (row_index, row) in range.rows().take(relative as usize).enumerate() {
+        for (i, cell) in row.iter().enumerate() {
+            if let Some(name) = columns.get(i) {
+                field_rules.extend(crate::template_rules::instruction_rules(
+                    name,
+                    &format!(
+                        "{sheet}!{}{}",
+                        column(i),
+                        range.start().unwrap_or((0, 0)).0 + row_index as u32 + 1
+                    ),
+                    &cell.to_string(),
+                ));
+            }
+        }
+    }
+    let mut archive = zip::ZipArchive::new(Cursor::new(&raw)).map_err(Failure::storage)?;
+    let book_xml = read_xml(&mut archive, "xl/workbook.xml")?;
+    let rels = read_xml(&mut archive, "xl/_rels/workbook.xml.rels")?;
+    let target = sheet_path(&book_xml, &rels, sheet)?;
+    let xml = read_xml(&mut archive, &target)?;
+    field_rules.extend(crate::template_rules::worksheet_rules(
+        &xml,
+        path,
+        sheet,
+        header_row + 1,
+        &columns,
+    )?);
     let mut notes = notes;
     let format_notes: Vec<_> = range
         .rows()
@@ -79,7 +133,12 @@ pub fn inspect(
         notes.push_str("\n模板原文格式要求：\n");
         notes.push_str(&format_notes.join("\n"));
     }
-    let fingerprint = hash(&std::fs::read(path)?);
+    if fingerprint != hash(&std::fs::read(path)?) {
+        return Err(Failure::new(
+            "TEMPLATE_CHANGED",
+            "读取期间模板发生变化，请重新注册。",
+        ));
+    }
     let id = hash(
         serde_json::to_string(&(&fingerprint, sheet, header_row, &columns, &required, &notes))?
             .as_bytes(),
@@ -96,9 +155,23 @@ pub fn inspect(
         sheet: sheet.clone(),
         header_row,
         columns,
+        headers,
         required,
         notes,
+        field_rules,
     })
+}
+fn read_xml<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> Result<String> {
+    let file = archive.by_name(name).map_err(Failure::storage)?;
+    if file.size() > 8 * 1024 * 1024 {
+        return Err(Failure::new("TEMPLATE_INVALID", "工作表过大。"));
+    }
+    let mut out = String::new();
+    file.take(8 * 1024 * 1024 + 1).read_to_string(&mut out)?;
+    Ok(out)
 }
 fn attr(e: &BytesStart, key: &[u8]) -> Option<String> {
     e.attributes()
@@ -332,6 +405,73 @@ pub fn write(
     fields: &BTreeMap<String, String>,
     destination: &Path,
 ) -> Result<Vec<String>> {
+    let report = inspect_fields(template, fields)?;
+    if !report.invalid.is_empty() || !report.requires_review.is_empty() {
+        return Err(Failure::new(
+            "INCOMPLETE_METADATA",
+            "模板格式或枚举未通过校验，请使用材料检查查看逐字段原因。",
+        ));
+    }
+    write_checked(template, fields, destination).map(|r| r.missing)
+}
+pub fn inspect_fields(
+    template: &Template,
+    fields: &BTreeMap<String, String>,
+) -> Result<crate::template_rules::Validation> {
+    let actual = inspect(
+        Path::new(&template.path),
+        &template.sheet,
+        template.header_row,
+        template.required.clone(),
+        String::new(),
+    )?;
+    if actual.fingerprint != template.fingerprint || actual.columns != template.columns {
+        return Err(Failure::new(
+            "TEMPLATE_CHANGED",
+            "模板内容已变化，请重新注册。",
+        ));
+    }
+    if fields.keys().any(|k| !actual.columns.contains(k)) {
+        return Err(Failure::new(
+            "TEMPLATE_INVALID",
+            "返回字段包含模板之外的列。",
+        ));
+    }
+    let mut report = crate::template_rules::validate(&actual.required, &actual.field_rules, fields);
+    let supplemental = template
+        .notes
+        .split("\n模板原文格式要求：\n")
+        .next()
+        .unwrap_or("")
+        .trim();
+    if !supplemental.is_empty() {
+        report
+            .requires_review
+            .push(crate::template_rules::FieldProblem {
+                column: "模板补充要求".into(),
+                reason: "注册时的补充说明尚未自动验证，请逐项核对。".into(),
+                rule_source: supplemental.into(),
+            });
+        report.ready = false;
+    }
+    if actual.required.is_empty() {
+        report
+            .requires_review
+            .push(crate::template_rules::FieldProblem {
+                column: "必填要求".into(),
+                reason: "尚未配置实际模板的必填列，不能判断材料完整。".into(),
+                rule_source: "模板注册要求".into(),
+            });
+        report.ready = false;
+    }
+    Ok(report)
+}
+pub fn write_checked(
+    template: &Template,
+    fields: &BTreeMap<String, String>,
+    destination: &Path,
+) -> Result<crate::template_rules::Validation> {
+    let report = inspect_fields(template, fields)?;
     if fields.keys().any(|k| !template.columns.contains(k)) {
         return Err(Failure::new(
             "TEMPLATE_INVALID",
@@ -341,6 +481,14 @@ pub fn write(
     if destination == Path::new(&template.path) {
         return Err(Failure::new("TEMPLATE_INVALID", "不能覆盖原始模板。"));
     }
+    if destination.exists()
+        && destination.canonicalize()? == Path::new(&template.path).canonicalize()?
+    {
+        return Err(Failure::new(
+            "TEMPLATE_INVALID",
+            "不能通过另一路径覆盖原始模板。",
+        ));
+    }
     let raw = std::fs::read(&template.path)?;
     if hash(&raw) != template.fingerprint {
         return Err(Failure::new(
@@ -349,20 +497,21 @@ pub fn write(
         ));
     }
     let mut archive = zip::ZipArchive::new(Cursor::new(raw)).map_err(Failure::storage)?;
-    let mut read_xml = |name: &str| -> Result<String> {
-        let mut out = String::new();
-        let file = archive.by_name(name).map_err(Failure::storage)?;
-        if file.size() > 8 * 1024 * 1024 {
-            return Err(Failure::new("TEMPLATE_INVALID", "工作表过大。"));
-        }
-        file.take(8 * 1024 * 1024 + 1).read_to_string(&mut out)?;
-        Ok(out)
-    };
-    let book = read_xml("xl/workbook.xml")?;
-    let rels = read_xml("xl/_rels/workbook.xml.rels")?;
+    let book = read_xml(&mut archive, "xl/workbook.xml")?;
+    let rels = read_xml(&mut archive, "xl/_rels/workbook.xml.rels")?;
     let target = sheet_path(&book, &rels, &template.sheet)?;
-    let xml = read_xml(&target)?;
-    let filled = fill_sheet(&xml, template.header_row + 2, fields, &template.columns)?;
+    let xml = read_xml(&mut archive, &target)?;
+    // Invalid values stay in the provenance, but cannot become upload cells.
+    let mut accepted = fields.clone();
+    for name in report
+        .invalid
+        .iter()
+        .map(|p| &p.column)
+        .chain(report.missing.iter())
+    {
+        accepted.insert(name.clone(), String::new());
+    }
+    let filled = fill_sheet(&xml, template.header_row + 2, &accepted, &template.columns)?;
     let mut result = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for index in 0..archive.len() {
         let file = archive.by_index(index).map_err(Failure::storage)?;
@@ -381,12 +530,7 @@ pub fn write(
     }
     let output = result.finish().map_err(Failure::storage)?.into_inner();
     std::fs::write(destination, output)?;
-    Ok(template
-        .required
-        .iter()
-        .filter(|k| fields.get(*k).map(|s| s.trim().is_empty()).unwrap_or(true))
-        .cloned()
-        .collect())
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -413,5 +557,162 @@ mod tests {
             &["题名".into()]
         )
         .is_err());
+    }
+    #[test]
+    fn all_four_original_templates_validate_then_reopen_actual_outputs() {
+        for name in ["期刊论文", "会议论文", "科技论文", "著作章节"] {
+            let path =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../templates/{name}.xlsx"));
+            let required = vec![
+                "题名".into(),
+                "作者".into(),
+                "作者单位".into(),
+                "发表日期".into(),
+            ];
+            let template = inspect(&path, "", 1, required, String::new()).unwrap();
+            assert!(template
+                .field_rules
+                .iter()
+                .any(|r| matches!(r.check, crate::template_rules::Check::PublicationDate)));
+            let fields = BTreeMap::from([
+                ("题名".into(), "测试来源题名".into()),
+                ("作者".into(), "张三(1,2);李四(1)".into()),
+                ("作者单位".into(), "(1)交大;(2)其他大学".into()),
+                ("发表日期".into(), "2024-02-29".into()),
+            ]);
+            let dir = tempfile::tempdir().unwrap();
+            let output = dir.path().join("valid.xlsx");
+            assert!(write_checked(&template, &fields, &output).unwrap().ready);
+            let mut reopened = open_workbook_auto(&output).unwrap();
+            let sheet = reopened.worksheet_range(&template.sheet).unwrap();
+            for (k, v) in &fields {
+                assert_eq!(
+                    sheet
+                        .get_value((
+                            2,
+                            template.columns.iter().position(|c| c == k).unwrap() as u32
+                        ))
+                        .unwrap()
+                        .to_string(),
+                    *v
+                );
+            }
+            let mut bad = fields.clone();
+            bad.insert("发表日期".into(), "2023-02-29".into());
+            bad.remove("题名");
+            // Legacy schemas with no cached rules still read the actual worksheet.
+            let mut legacy = template.clone();
+            legacy.field_rules.clear();
+            let output = dir.path().join("draft.xlsx");
+            let report = write_checked(&legacy, &bad, &output).unwrap();
+            assert!(!report.ready);
+            assert!(report.missing.contains(&"题名".into()));
+            assert!(report.invalid.iter().any(|p| p.column == "发表日期"));
+            let mut reopened = open_workbook_auto(&output).unwrap();
+            let sheet = reopened.worksheet_range(&template.sheet).unwrap();
+            assert_eq!(
+                sheet
+                    .get_value((
+                        2,
+                        template
+                            .columns
+                            .iter()
+                            .position(|c| c == "发表日期")
+                            .unwrap() as u32
+                    ))
+                    .unwrap()
+                    .to_string(),
+                ""
+            );
+            assert_eq!(hash(&std::fs::read(&path).unwrap()), template.fingerprint);
+            let mut before =
+                zip::ZipArchive::new(Cursor::new(std::fs::read(&path).unwrap())).unwrap();
+            let mut after =
+                zip::ZipArchive::new(Cursor::new(std::fs::read(&output).unwrap())).unwrap();
+            assert_eq!(
+                read_xml(&mut before, "xl/styles.xml").unwrap(),
+                read_xml(&mut after, "xl/styles.xml").unwrap()
+            );
+        }
+    }
+    #[test]
+    fn invalid_or_missing_cells_clear_old_sample_values_and_changed_template_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("template.xlsx");
+        let mut book = rust_xlsxwriter::Workbook::new();
+        let sheet = book.add_worksheet();
+        sheet
+            .write_string(
+                0,
+                0,
+                "格式：yyyy || yyyy-MM || yyyy-MM-dd || yyyy-MM-dd HH:mm:ss",
+            )
+            .unwrap();
+        sheet.write_string(1, 0, "发表日期").unwrap();
+        sheet.write_string(1, 1, "题名").unwrap();
+        sheet.write_string(2, 0, "2000-01-01").unwrap();
+        sheet.write_string(2, 1, "示例题名").unwrap();
+        book.save(&path).unwrap();
+        let template = inspect(&path, "", 1, vec!["题名".into()], String::new()).unwrap();
+        let output = dir.path().join("draft.xlsx");
+        let report = write_checked(
+            &template,
+            &BTreeMap::from([("发表日期".into(), "not-a-date".into())]),
+            &output,
+        )
+        .unwrap();
+        assert!(!report.ready);
+        let mut book = open_workbook_auto(&output).unwrap();
+        let data = book.worksheet_range(&template.sheet).unwrap();
+        assert_eq!(data.get_value((2, 0)).unwrap().to_string(), "");
+        assert_eq!(data.get_value((2, 1)).unwrap().to_string(), "");
+        let mut supplemental = template.clone();
+        supplemental.notes = "编码必须符合平台自定义规则".into();
+        assert!(inspect_fields(&supplemental, &BTreeMap::new())
+            .unwrap()
+            .requires_review
+            .iter()
+            .any(|p| p.column == "模板补充要求"));
+        std::fs::write(&path, b"changed").unwrap();
+        assert!(write_checked(&template, &BTreeMap::new(), &output).is_err());
+    }
+    #[test]
+    fn duplicated_headers_keep_both_columns_and_do_not_accept_ambiguous_required_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("same.xlsx");
+        let mut book = rust_xlsxwriter::Workbook::new();
+        let sheet = book.add_worksheet();
+        sheet.write_string(1, 0, "页数").unwrap();
+        sheet.write_string(1, 1, "页数").unwrap();
+        book.save(&path).unwrap();
+        assert!(inspect(&path, "", 1, vec!["页数".into()], String::new()).is_err());
+        let template = inspect(
+            &path,
+            "",
+            1,
+            vec!["页数 [A列]".into(), "页数 [B列]".into()],
+            String::new(),
+        )
+        .unwrap();
+        assert_eq!(template.headers, vec!["页数", "页数"]);
+        let output = dir.path().join("both.xlsx");
+        assert!(
+            write_checked(
+                &template,
+                &BTreeMap::from([
+                    ("页数 [A列]".into(), "11".into()),
+                    ("页数 [B列]".into(), "22".into())
+                ]),
+                &output
+            )
+            .unwrap()
+            .ready
+        );
+        let mut reopened = open_workbook_auto(&output).unwrap();
+        let data = reopened.worksheet_range(&template.sheet).unwrap();
+        assert_eq!(data.get_value((1, 0)).unwrap().to_string(), "页数");
+        assert_eq!(data.get_value((1, 1)).unwrap().to_string(), "页数");
+        assert_eq!(data.get_value((2, 0)).unwrap().to_string(), "11");
+        assert_eq!(data.get_value((2, 1)).unwrap().to_string(), "22");
     }
 }

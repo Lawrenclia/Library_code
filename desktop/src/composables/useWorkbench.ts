@@ -14,6 +14,7 @@ import type {
   Workspace,
   Review,
   Template,
+  MaterialValidation,
   DuplicateScan,
   DuplicatePrepared,
   IssueChecklist,
@@ -964,17 +965,39 @@ export function useWorkbench() {
   }
   async function fill() {
     if (!current.value) return;
-    const result = await run<{
-      missing: string[];
-      path: string;
-      cancelled?: boolean;
-    }>("fill_template", { id: current.value.id, templateId: templateId.value });
+    const target = {
+      id: current.value.id,
+      revision: current.value.revision,
+      template: templateId.value,
+    };
+    materialValidation.value = null;
+    const result = await run<MaterialValidation>("fill_template", {
+      id: current.value.id,
+      templateId: templateId.value,
+    });
     if (result && !result.cancelled) {
-      message.value = result.missing.length
-        ? `材料已保存，必填内容待补充：${result.missing.join("、")}`
-        : `材料已保存：${result.path}`;
+      if (
+        current.value?.id !== target.id ||
+        current.value.revision !== (result.task_revision ?? target.revision) ||
+        templateId.value !== target.template
+      )
+        return;
+      materialValidation.value = result;
+      const problems = [
+        ...result.missing,
+        ...(result.invalid || []).map((p) => p.column),
+        ...(result.requires_review || []).map((p) => p.column),
+      ];
+      message.value =
+        result.ready === true && !problems.length
+          ? `材料已保存，模板校验通过：${result.path}`
+          : `材料草稿已保存，待补充或核对：${[...new Set(problems)].join("、") || "模板规则"}`;
     }
   }
+  const materialValidation = ref<MaterialValidation | null>(null);
+  watch([selectedId, templateId, () => current.value?.revision], () => {
+    materialValidation.value = null;
+  });
   const unlisteners: UnlistenFn[] = [];
   onMounted(async () => {
     try {
@@ -1034,6 +1057,7 @@ export function useWorkbench() {
     templateSheet,
     required,
     templateNotes,
+    materialValidation,
     api,
     proof,
     source,

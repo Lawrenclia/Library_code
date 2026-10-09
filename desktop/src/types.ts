@@ -244,6 +244,26 @@ export interface Template {
   sheet: string;
   header_row: number;
   columns: string[];
+  headers?: string[];
   required: string[];
   notes: string;
+  field_rules?: {
+    column: string;
+    source: string;
+    check: { kind: string; values?: string[] };
+  }[];
+}
+export interface MaterialProblem {
+  column: string;
+  reason: string;
+  rule_source: string;
+}
+export interface MaterialValidation {
+  path: string;
+  task_revision?: number;
+  missing: string[];
+  invalid?: MaterialProblem[];
+  requires_review?: MaterialProblem[];
+  ready?: boolean;
+  cancelled?: boolean;
 }

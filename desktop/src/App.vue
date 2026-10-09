@@ -72,6 +72,7 @@ const {
   templateSheet,
   required,
   templateNotes,
+  materialValidation,
   api,
   proof,
   source,
@@ -1840,8 +1841,53 @@ function frameworkBrowser(role: string, entry?: string) {
                     :disabled="locked"
                     @click="fill"
                     ><FileSpreadsheet />检查必填项并导出模板材料</Button
-                  ></template
-                >
+                  >
+                  <div
+                    v-if="materialValidation"
+                    class="space-y-2 rounded-lg border p-3"
+                    data-testid="material-validation"
+                  >
+                    <p class="text-xs font-medium">
+                      {{
+                        materialValidation.ready
+                          ? "模板校验通过"
+                          : "材料草稿待补充或核对"
+                      }}
+                    </p>
+                    <p class="break-all text-[11px] text-muted-foreground">
+                      {{ materialValidation.path }}
+                    </p>
+                    <p v-if="materialValidation.missing.length" class="text-xs">
+                      必填缺项：{{ materialValidation.missing.join("、") }}
+                    </p>
+                    <div
+                      v-for="p in materialValidation.invalid || []"
+                      :key="p.column + p.rule_source"
+                      class="rounded bg-destructive/5 p-2 text-[11px] leading-6"
+                    >
+                      <p>{{ p.column }}：{{ p.reason }}</p>
+                      <p class="text-muted-foreground">
+                        原要求：{{ p.rule_source }}
+                      </p>
+                    </div>
+                    <p
+                      v-if="materialValidation.invalid?.length"
+                      class="text-[11px] text-muted-foreground"
+                    >
+                      未通过校验的字段已留空，原建议和来源仍保存在材料记录中。
+                    </p>
+                    <div
+                      v-for="p in materialValidation.requires_review || []"
+                      :key="p.column + p.rule_source"
+                      class="rounded bg-muted/40 p-2 text-[11px] leading-6"
+                    >
+                      <p>{{ p.column }}：{{ p.reason }}</p>
+                      <p class="text-muted-foreground">
+                        原要求：{{ p.rule_source }}
+                      </p>
+                    </div>
+                  </div>
+                </template>
                 <p v-else class="helper">
                   保存来源后可调用。没有证据支持的内容保持待补充。
                 </p></template
@@ -1934,12 +1980,30 @@ function frameworkBrowser(role: string, entry?: string) {
             <p class="text-xs leading-6">
               必填：{{ s.required.join("、") || "尚未配置，请补充要求" }}
             </p>
+            <p
+              v-if="s.field_rules?.length"
+              class="mt-2 text-[11px] text-muted-foreground"
+            >
+              已读取
+              {{ s.field_rules.length }} 条字段规则；导出时重新核对实际模板。
+            </p>
             <details v-if="s.notes">
               <summary>查看字段与格式要求</summary>
               <p
                 class="mt-2 whitespace-pre-wrap text-[11px] leading-6 text-muted-foreground"
               >
                 {{ s.notes }}
+              </p>
+            </details>
+            <details>
+              <summary>查看可填写列名</summary>
+              <p
+                class="mt-2 break-words text-[11px] leading-6 text-muted-foreground"
+              >
+                {{ s.columns.join("、") }}
+              </p>
+              <p class="mt-2 text-[11px] text-muted-foreground">
+                同名列使用列位置区分，导出的 Excel 原表头保持不变。
               </p>
             </details></CardContent
           ></Card

@@ -71,13 +71,14 @@ pub(crate) async fn register_template(
 #[tauri::command]
 pub(crate) async fn fill_template(
     window: WebviewWindow,
+    app: AppHandle,
     state: State<'_, Engine>,
     id: String,
     template_id: String,
 ) -> Result<Value> {
     local(&window)?;
     let _lease = state.acquire()?;
-    let task = state.store.task(&id)?;
+    let mut task = state.store.task(&id)?;
     let schemas: Vec<Template> =
         serde_json::from_value(state.store.setting("templates")?.unwrap_or(json!([])))?;
     let template = schemas
@@ -86,6 +87,7 @@ pub(crate) async fn fill_template(
         .ok_or_else(|| Failure::new("TEMPLATE_INVALID", "模板不存在。"))?;
     let classification = task
         .classification
+        .clone()
         .ok_or_else(|| Failure::new("EVIDENCE_REQUIRED", "先调用 AI 并核对有来源的模板字段。"))?;
     if classification["template_id"].as_str() != Some(&template.id) {
         return Err(Failure::new(
@@ -93,6 +95,7 @@ pub(crate) async fn fill_template(
             "AI 填写建议属于其他模板，请针对当前模板重新生成。",
         ));
     }
+    library_core::catalog::validate_ai(&classification, &task.evidence, Some(&json!(template)))?;
     let fields: std::collections::BTreeMap<String, String> = classification["fields"]
         .as_object()
         .ok_or_else(|| Failure::new("AI_RESULT_INVALID", "缺少已核验字段。"))?
@@ -115,13 +118,27 @@ pub(crate) async fn fill_template(
     let Some(file) = file else {
         return Ok(json!({"cancelled":true}));
     };
-    let missing = library_core::templates::write(template, &fields, file.path())?;
+    let validation = library_core::templates::write_checked(template, &fields, file.path())?;
     let audit = state.store.root.join("materials");
     std::fs::create_dir_all(&audit)?;
-    let provenance = json!({"sa_id":id,"template_id":template.id,"template_hash":template.fingerprint,"output":file.path().to_string_lossy(),"output_hash":hash(&std::fs::read(file.path())?),"fields":classification["fields"],"evidence":task.evidence,"missing":missing});
-    std::fs::write(
-        audit.join(format!("{}.json", uuid::Uuid::new_v4())),
-        serde_json::to_vec_pretty(&provenance)?,
-    )?;
-    Ok(json!({"path":file.path().to_string_lossy(),"missing":missing,"ready":missing.is_empty()}))
+    let source_evidence: Vec<_> = task
+        .evidence
+        .iter()
+        .filter(|e| e.kind != "material_validation")
+        .collect();
+    let provenance = json!({"schema":"template_material_v1","sa_id":id,"input_hash":task.input_hash,"record_fingerprint":task.record.fingerprint(),"classification_hash":hash(classification.to_string().as_bytes()),"template_id":template.id,"template_hash":template.fingerprint,"output":file.path().to_string_lossy(),"output_hash":hash(&std::fs::read(file.path())?),"fields":classification["fields"],"evidence":source_evidence,"validation":validation,"missing":validation.missing,"invalid_fields_omitted":true});
+    let audit_path = audit.join(format!("{}.json", uuid::Uuid::new_v4()));
+    std::fs::write(&audit_path, serde_json::to_vec_pretty(&provenance)?)?;
+    task.evidence.push(Evidence {
+        id: uuid::Uuid::new_v4().to_string(),
+        kind: "material_validation".into(),
+        source: audit_path.to_string_lossy().into(),
+        text: provenance.to_string(),
+        created: now(),
+    });
+    state.store.save(&mut task, "material_exported")?;
+    state.changed(&app);
+    Ok(
+        json!({"path":file.path().to_string_lossy(),"task_revision":task.revision,"missing":validation.missing,"invalid":validation.invalid,"requires_review":validation.requires_review,"ready":validation.ready}),
+    )
 }

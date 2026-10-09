@@ -416,6 +416,48 @@ pub fn archive(root: &Path, raw: &[u8]) -> Result<std::path::PathBuf> {
 pub fn export_report(tasks: &[Task], path: &Path) -> Result<()> {
     export_report_with_queues(tasks, &[], path)
 }
+fn report_missing(task: &Task) -> String {
+    let Some(ai) = &task.classification else {
+        return String::new();
+    };
+    let mut missing: Vec<String> = ai["missing"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(material) = task
+        .evidence
+        .iter()
+        .rev()
+        .filter(|e| e.kind == "material_validation")
+        .filter_map(|e| serde_json::from_str::<serde_json::Value>(&e.text).ok())
+        .find(|m| {
+            m["schema"] == "template_material_v1"
+                && m["classification_hash"] == hash(ai.to_string().as_bytes())
+                && m["input_hash"] == task.input_hash
+                && m["record_fingerprint"] == task.record.fingerprint()
+        })
+    {
+        if let Some(a) = material["validation"]["missing"].as_array() {
+            missing.extend(a.iter().filter_map(|v| v.as_str().map(str::to_string)));
+        }
+        for kind in ["invalid", "requires_review"] {
+            if let Some(a) = material["validation"][kind].as_array() {
+                missing.extend(a.iter().map(|v| {
+                    format!(
+                        "{}：{}",
+                        v["column"].as_str().unwrap_or("字段"),
+                        v["reason"].as_str().unwrap_or("待核对")
+                    )
+                }));
+            }
+        }
+    }
+    serde_json::to_string(&missing).unwrap_or_default()
+}
 pub fn export_report_with_queues(
     tasks: &[Task],
     queues: &[crate::queue::DownloadQueue],
@@ -470,7 +512,7 @@ pub fn export_report_with_queues(
                 .join("\n"),
             a.map(|a| a.path.clone()).unwrap_or_default(),
             a.map(|a| a.candidate.sha256.clone()).unwrap_or_default(),
-            ai.map(|v| v["missing"].to_string()).unwrap_or_default(),
+            report_missing(t),
             serde_json::to_value(&t.route)?.as_str().unwrap().into(),
             serde_json::to_value(&t.stage)?.as_str().unwrap().into(),
             t.platform_id.clone(),
@@ -1060,6 +1102,45 @@ mod tests {
             store.reusable_artifact(&rec()).unwrap_err().code,
             "AMBIGUOUS_RESULT"
         );
+    }
+    #[test]
+    fn actual_material_problems_survive_restart_and_excel_but_do_not_attach_to_new_ai_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path()).unwrap();
+        store.import(vec![rec()], "input".into()).unwrap();
+        let mut task = store.task("sa1").unwrap();
+        let ai = json!({"type":"期刊论文","channel":"general","missing":[],"template_id":"template1","fields":{"发表日期":{"value":"2023-02-29","evidence_ids":["proof"]}}});
+        task.classification = Some(ai.clone());
+        let original = json!({"schema":"template_material_v1","sa_id":task.id,"input_hash":task.input_hash,"record_fingerprint":task.record.fingerprint(),"classification_hash":hash(ai.to_string().as_bytes()),"output":"draft.xlsx","output_hash":"original-output-hash","validation":{"missing":["题名"],"invalid":[{"column":"发表日期","reason":"实际日期无效","rule_source":"Sheet1!G1"}],"requires_review":[{"column":"代码","reason":"动态枚举需核对","rule_source":"Sheet1!AA3"}],"ready":false}});
+        task.evidence.push(Evidence {
+            id: "material".into(),
+            kind: "material_validation".into(),
+            source: "materials/audit.json".into(),
+            text: original.to_string(),
+            created: 1,
+        });
+        store.save(&mut task, "material_exported").unwrap();
+        drop(store);
+        let store = Store::new(dir.path()).unwrap();
+        let mut task = store.task("sa1").unwrap();
+        let output = dir.path().join("report.xlsx");
+        export_report(&[task.clone()], &output).unwrap();
+        let mut book = open_workbook_auto(&output).unwrap();
+        let summary = book.worksheet_range("任务与来源").unwrap();
+        let problems = summary.get_value((1, 10)).unwrap().to_string();
+        for text in ["题名", "实际日期无效", "动态枚举需核对"] {
+            assert!(problems.contains(text), "{problems}");
+        }
+        let sources = book.worksheet_range("原始来源依据").unwrap();
+        assert_eq!(
+            sources.get_value((1, 6)).unwrap().to_string(),
+            original.to_string()
+        );
+        task.classification.as_mut().unwrap()["fields"]["发表日期"]["value"] = json!("2024-02-29");
+        assert_eq!(report_missing(&task), "[]"); // Historical draft remains evidence; it is not the new AI proposal.
+        task.classification = Some(ai);
+        task.input_hash = "new-input".into();
+        assert_eq!(report_missing(&task), "[]");
     }
     #[test]
     fn report_preserves_long_unicode_source_without_truncation() {

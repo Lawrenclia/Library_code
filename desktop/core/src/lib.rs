@@ -14,6 +14,7 @@ pub mod model;
 pub mod queue;
 pub mod sa;
 pub mod store;
+pub mod template_rules;
 pub mod templates;
 pub mod versions;
 pub mod workflow;
