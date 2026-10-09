@@ -141,6 +141,63 @@ export function useWorkbench() {
   );
   const metadataPrepared = ref<MetadataPrepared | null>(null);
   const metadataAuthor = ref<number | null>(null);
+  const metadataOperation = ref("role");
+  const metadataOrder = ref<number[]>([]);
+  const metadataOrderChanged = computed(
+    () =>
+      metadataOperation.value === "role" ||
+      metadataOrder.value.some((index, position) => index !== position),
+  );
+  function clearMetadata() {
+    metadataPrepared.value = null;
+    metadataAuthor.value = null;
+    metadataOperation.value = "role";
+    metadataOrder.value = [];
+  }
+  const orderedMetadataRows = computed(() =>
+    metadataOrder.value.map((index) => {
+      const row =
+        metadataOperation.value === "author_order"
+          ? metadataPrepared.value?.result.authors.find(
+              (r) => r.index === index,
+            )
+          : metadataPrepared.value?.result.institutions?.find(
+              (r) => r.index === index,
+            );
+      return {
+        index,
+        label: row
+          ? "fullname" in row
+            ? row.fullname
+            : row.address
+          : "原列表条目",
+      };
+    }),
+  );
+  function chooseMetadataOperation() {
+    metadataAuthor.value = null;
+    const rows =
+      metadataOperation.value === "author_order"
+        ? metadataPrepared.value?.result.authors
+        : metadataOperation.value === "institution_order"
+          ? metadataPrepared.value?.result.institutions
+          : [];
+    metadataOrder.value = rows?.map((row) => row.index) || [];
+  }
+  function moveMetadataRow(position: number, offset: number) {
+    if (
+      locked.value ||
+      position + offset < 0 ||
+      position + offset >= metadataOrder.value.length
+    )
+      return;
+    const next = [...metadataOrder.value];
+    [next[position], next[position + offset]] = [
+      next[position + offset],
+      next[position],
+    ];
+    metadataOrder.value = next;
+  }
   const libraryTitle = ref("");
   const librarySearch = computed<LibrarySearch | null>(() => {
     const evidence = current.value?.evidence
@@ -208,7 +265,15 @@ export function useWorkbench() {
           : "";
     return (
       metadataPrepared.value?.result.authors.filter(
-        (a) => a.eligible && a.fields.includes(field),
+        (a) =>
+          a.eligible &&
+          (metadataOperation.value === "role"
+            ? a.fields.includes(field)
+            : metadataOperation.value === "author_order"
+              ? metadataPrepared.value?.result.can_reorder_authors === true
+              : metadataOperation.value === "institution_order" &&
+                metadataPrepared.value?.result.can_reorder_institutions ===
+                  true),
       ) || []
     );
   });
@@ -448,8 +513,7 @@ export function useWorkbench() {
     issueSource.value = "";
     issueProof.value = "";
     issueNote.value = "";
-    metadataPrepared.value = null;
-    metadataAuthor.value = null;
+    clearMetadata();
     libraryTitle.value = t?.artifact?.candidate.title || t?.record.title || "";
     proof.value = "";
     source.value = t?.artifact?.record_url || "";
@@ -502,8 +566,7 @@ export function useWorkbench() {
     issueSource.value = "";
     issueProof.value = "";
     issueNote.value = "";
-    metadataPrepared.value = null;
-    metadataAuthor.value = null;
+    clearMetadata();
   });
   watch(
     () =>
@@ -678,8 +741,7 @@ export function useWorkbench() {
     )
       clearDuplicate();
     if (action === "verify_metadata" && result && selectedId.value === t.id) {
-      metadataPrepared.value = null;
-      metadataAuthor.value = null;
+      clearMetadata();
       await prepareIssues();
     }
   }
@@ -759,7 +821,13 @@ export function useWorkbench() {
   async function prepareMetadata() {
     const id = current.value?.id,
       key = issueKey.value;
-    if (!id || !["corresponding_author", "first_author"].includes(key)) return;
+    if (
+      !id ||
+      !["corresponding_author", "first_author", "first_institution"].includes(
+        key,
+      )
+    )
+      return;
     const result = await run<MetadataPrepared>(
       "run_step",
       { id, action: "prepare_metadata", approved: false, extra: {} },
@@ -768,6 +836,9 @@ export function useWorkbench() {
     if (result && selectedId.value === id && issueKey.value === key) {
       metadataPrepared.value = result;
       metadataAuthor.value = null;
+      metadataOperation.value =
+        key === "first_institution" ? "institution_order" : "role";
+      chooseMetadataOperation();
     }
   }
   async function saveMetadata() {
@@ -781,6 +852,7 @@ export function useWorkbench() {
       !id ||
       !prepared ||
       !author ||
+      !metadataOrderChanged.value ||
       issueOutcome.value !== "sa_correct" ||
       !issueSource.value.trim() ||
       !issueProof.value.trim() ||
@@ -789,6 +861,8 @@ export function useWorkbench() {
       return;
     const extra = {
       key,
+      operation: metadataOperation.value,
+      order: [...metadataOrder.value],
       author_index: author.index,
       source: issueSource.value,
       proof: issueProof.value,
@@ -796,7 +870,7 @@ export function useWorkbench() {
     };
     if (
       !(await confirmAction(
-        `修改本库作者角色并保存\n\nSA ID：${id}\n平台条目：${prepared.result.item_id}\n完整工号：${prepared.result.staff_id}\n作者署名：${author.fullname}\n作者 ID：${author.id}\n字段：${selectedIssue.value?.label}\n按已核对的 SA 值：${selectedIssue.value?.sa}\n原文来源：${extra.source}\n具体依据：${extra.proof}\n\n确认保存本条角色修改，并回读本库和 SA？`,
+        `修改本库字段并保存\n\nSA ID：${id}\n平台条目：${prepared.result.item_id}\n完整工号：${prepared.result.staff_id}\n作者署名：${author.fullname}\n作者 ID：${author.id}\n字段：${selectedIssue.value?.label}\n方式：${extra.operation === "author_order" ? "调整完整作者署名顺序" : extra.operation === "institution_order" ? "调整完整单位顺序并同步作者单位编号" : key === "first_author" ? "共同第一作者标记" : "通讯作者标记"}\n按已核对的 SA 值：${selectedIssue.value?.sa}\n${extra.operation !== "role" ? "新顺序：\n" + orderedMetadataRows.value.map((row, i) => `${i + 1}. ${row.label}`).join("\n") + "\n" : ""}原文来源：${extra.source}\n具体依据：${extra.proof}\n\n确认保存本条修改，并回读完整本库字段和 SA？`,
       ))
     )
       return;
@@ -805,6 +879,8 @@ export function useWorkbench() {
       issueKey.value !== key ||
       metadataPrepared.value !== prepared ||
       metadataAuthor.value !== author.index ||
+      metadataOperation.value !== extra.operation ||
+      JSON.stringify(metadataOrder.value) !== JSON.stringify(extra.order) ||
       issueOutcome.value !== "sa_correct" ||
       extra.source !== issueSource.value ||
       extra.proof !== issueProof.value ||
@@ -817,11 +893,10 @@ export function useWorkbench() {
     const result = await run(
       "run_step",
       { id, action: "save_metadata", approved: true, extra },
-      "本库角色已保存；完整字段和 SA 已回读，本项结论已记录。",
+      "本库修改已保存；完整字段和 SA 已回读，本项结论已记录。",
     );
     if (result && selectedId.value === id) {
-      metadataPrepared.value = null;
-      metadataAuthor.value = null;
+      clearMetadata();
       await prepareIssues();
     }
   }
@@ -1018,6 +1093,12 @@ export function useWorkbench() {
     saveIssue,
     metadataPrepared,
     metadataAuthor,
+    metadataOperation,
+    metadataOrder,
+    metadataOrderChanged,
+    orderedMetadataRows,
+    chooseMetadataOperation,
+    moveMetadataRow,
     libraryTitle,
     librarySearch,
     libraryCheckReady,

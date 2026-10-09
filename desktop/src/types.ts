@@ -146,6 +146,14 @@ export interface MetadataPrepared {
       correspondent: boolean;
       commonFirst: boolean;
     }[];
+    can_reorder_authors?: boolean;
+    can_reorder_institutions?: boolean;
+    institutions?: {
+      index: number;
+      order: number;
+      address: string;
+      first_institution_value: string | null;
+    }[];
     snapshot: Record<string, unknown>;
   };
 }

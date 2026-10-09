@@ -129,6 +129,12 @@ const {
   saveIssue,
   metadataPrepared,
   metadataAuthor,
+  metadataOperation,
+  metadataOrder,
+  metadataOrderChanged,
+  orderedMetadataRows,
+  chooseMetadataOperation,
+  moveMetadataRow,
   editableAuthors,
   prepareMetadata,
   saveMetadata,
@@ -781,14 +787,16 @@ function clearFilters() {
                       <section
                         v-if="
                           issueOutcome === 'sa_correct' &&
-                          ['corresponding_author', 'first_author'].includes(
-                            issueKey,
-                          )
+                          [
+                            'corresponding_author',
+                            'first_author',
+                            'first_institution',
+                          ].includes(issueKey)
                         "
                         class="space-y-3 rounded-lg border p-3"
                       >
                         <p class="text-xs font-medium">
-                          按已核对的来源修改作者角色
+                          按已核对的来源修改作者与单位信息
                         </p>
                         <p class="helper">
                           先打开并登录学者管理；程序按完整工号查询实际身份，再读取编辑页。明确选择作者、填写下方本项来源、依据和备注后，才能确认保存。
@@ -819,6 +827,44 @@ function clearFilters() {
                           >按工号读取可编辑作者字段</Button
                         >
                         <template v-if="metadataPrepared">
+                          <label class="field"
+                            >本项修改方式<select
+                              aria-label="本项修改方式"
+                              v-model="metadataOperation"
+                              class="native-select mt-2 w-full"
+                              @change="chooseMetadataOperation"
+                            >
+                              <option
+                                v-if="issueKey !== 'first_institution'"
+                                value="role"
+                              >
+                                {{
+                                  issueKey === "first_author"
+                                    ? "共同第一作者标记"
+                                    : "通讯作者标记"
+                                }}
+                              </option>
+                              <option
+                                v-if="
+                                  issueKey === 'first_author' &&
+                                  metadataPrepared.result.can_reorder_authors
+                                "
+                                value="author_order"
+                              >
+                                调整完整作者署名顺序
+                              </option>
+                              <option
+                                v-if="issueKey === 'first_institution'"
+                                value="institution_order"
+                                :disabled="
+                                  !metadataPrepared.result
+                                    .can_reorder_institutions
+                                "
+                              >
+                                调整完整单位顺序与作者单位编号
+                              </option>
+                            </select></label
+                          >
                           <p class="helper">
                             {{
                               metadataPrepared.result.scholar.nameCn ||
@@ -847,21 +893,63 @@ function clearFilters() {
                             </select></label
                           >
                           <p v-if="!editableAuthors.length" class="helper">
-                            没有唯一、可见且可编辑的对应作者控件，请在实际编辑页核对。署名顺序或其他角色标记的修正不能通过这个复选框代替。
+                            当前表单没有本项所需的完整可编辑字段，请在实际编辑页核对。
                           </p>
+                          <div
+                            v-if="
+                              metadataOperation !== 'role' &&
+                              editableAuthors.length
+                            "
+                            class="space-y-2"
+                          >
+                            <p class="helper">
+                              按照原文核对下方完整顺序。原有身份与角色标记保留；单位调整同时更新每位作者的单位编号。
+                            </p>
+                            <ol class="space-y-2" aria-label="修改后的完整顺序">
+                              <li
+                                v-for="(row, position) in orderedMetadataRows"
+                                :key="row.index"
+                                class="flex items-center gap-2 rounded-md border p-2 text-xs"
+                              >
+                                <span class="min-w-0 flex-1 break-words"
+                                  >{{ position + 1 }}. {{ row.label }}</span
+                                >
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  :aria-label="`上移 ${row.label}`"
+                                  :disabled="locked || position === 0"
+                                  @click="moveMetadataRow(position, -1)"
+                                  >上移</Button
+                                >
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  :aria-label="`下移 ${row.label}`"
+                                  :disabled="
+                                    locked ||
+                                    position === metadataOrder.length - 1
+                                  "
+                                  @click="moveMetadataRow(position, 1)"
+                                  >下移</Button
+                                >
+                              </li>
+                            </ol>
+                          </div>
                           <Button
                             class="w-full"
                             size="sm"
                             :disabled="
                               locked ||
                               metadataAuthor === null ||
+                              !metadataOrderChanged ||
                               !issueSource.trim() ||
                               !issueProof.trim() ||
                               !issueNote.trim() ||
                               ['unknown', 'completed'].includes(current.stage)
                             "
                             @click="saveMetadata"
-                            >确认保存作者角色并回读</Button
+                            >确认保存本项修改并回读</Button
                           >
                         </template>
                       </section>

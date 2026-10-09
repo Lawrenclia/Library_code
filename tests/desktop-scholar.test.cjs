@@ -28,6 +28,21 @@ const {runScholarCommand}=require('../desktop/src-tauri/browser/scholar-adapter.
   test('read-only recovery checks exact saved alias on same scholar',async()=>{await page.evaluate(()=>persistedAliases=[{id:'saved',scholarId:'scholar-001',nameAlias:'Demo, X',defaultNameCn:0,defaultNameEn:0,isSet:false}]);const r=await run(cmd('alias_check',{alias:'Demo, X',expected_scholar_id:'scholar-001'}));assert.equal(r.data.verified,true);assert.equal(await page.evaluate(()=>aliasWrites),0);});
   test('unverified absence cannot authorize a repeated save',async()=>{const r=await run(cmd('alias_check',{alias:'Demo, X',expected_scholar_id:'scholar-001'}));assert.equal(r.code,'REMOTE_RESULT_UNKNOWN');assert.equal(await page.evaluate(()=>aliasWrites),0);});
   test('foreign host and expired commands are refused',async()=>{await page.goto('http://example.test/#/scholar/list');assert.equal((await run(cmd('alias_read'))).code,'AUTH_REQUIRED');await reset();assert.equal((await run(cmd('alias_read',{expires:0}))).ok,false);});
+  test('metadata identity read closes its own clean window and next SA can query without reusing identity',async()=>{
+    const first=await run(cmd('alias_read',{close_after_read:true}));assert.equal(first.ok,true,JSON.stringify(first));
+    assert.equal(await page.evaluate(()=>aliasModal.dialogVisible),false);
+    const second=await run(cmd('alias_read',{sa_id:'next-sa',close_after_read:true}));assert.equal(second.ok,true,JSON.stringify(second));
+    assert.equal(second.data.scholar.wno,'00001');assert.equal(await page.evaluate(()=>aliasWrites),0);assert.equal(await page.evaluate(()=>aliasModal.dialogVisible),false);
+  });
+  test('read-and-close never discards a manual draft, another task window or in-flight save',async()=>{
+    await prepare();await page.evaluate(()=>aliasModal.data.unshift({isSet:true,id:'',scholarId:'scholar-001',nameAlias:'manual draft'}));
+    assert.equal((await run(cmd('alias_read',{close_after_read:true}))).code,'REVIEW_REQUIRED');assert.equal(await page.evaluate(()=>aliasModal.data[0].nameAlias),'manual draft');
+    await reset();await prepare();assert.equal((await run(cmd('alias_read',{sa_id:'different-sa',close_after_read:true}))).code,'REVIEW_REQUIRED');
+    assert.equal(await page.evaluate(()=>aliasModal.dialogVisible),true);
+    await reset();await prepare();await page.evaluate(()=>aliasModal.loading=true);
+    assert.equal((await run(cmd('alias_read',{close_after_read:true}))).code,'PAGE_TIMEOUT');assert.equal(await page.evaluate(()=>aliasModal.dialogVisible),true);
+    assert.equal(await page.evaluate(()=>aliasWrites),0);
+  });
   for(const [name,fn] of cases){await reset();await fn();console.log('PASS '+name);}
   console.log(`Desktop scholar: ${cases.length} isolated UI contract checks passed; no live writes.`);
  }finally{await browser.close();}

@@ -38,6 +38,7 @@ async function runScholarCommand(command) {
       fail('PAGE_UNSUPPORTED', '学者或别名窗口结构已变化。');
     if (modal.data.some(a => a.isSet)) fail('REVIEW_REQUIRED', '别名窗口有未保存编辑，先人工处理。');
     if (modal.dialogVisible) {
+      if (modal.loading) fail('PAGE_TIMEOUT', '别名窗口仍在加载或保存，不能关闭。');
       if (modal.__libraryTask !== command.sa_id || modal.__libraryStaff !== command.staff_id)
         fail('REVIEW_REQUIRED', '存在人工打开的别名窗口。');
       modal.dialogVisible = false;
@@ -77,7 +78,16 @@ async function runScholarCommand(command) {
     }).sort((a,b) => a.id.localeCompare(b.id));
     guard();
     const aliases = snapshot();
-    if (command.action === 'alias_read') return {ok: true, data: {scholar, aliases, staff_id: command.staff_id}};
+    if (command.action === 'alias_read') {
+      if(command.close_after_read===true){
+        guard();
+        if(modal.loading || modal.data.some(a=>a.isSet) || !equal(snapshot(),aliases))
+          fail('REVIEW_REQUIRED','身份读取后别名窗口发生变化，不能自动关闭。');
+        modal.dialogVisible=false;
+        await wait(()=>panels().length===0,'收起程序打开的只读身份窗口');
+      }
+      return {ok: true, data: {scholar, aliases, staff_id: command.staff_id}};
+    }
     if (typeof command.alias !== 'string' || !command.alias.trim() || command.alias.length > 200 || /[\r\n\u0000-\u001f]/.test(command.alias))
       fail('REVIEW_REQUIRED', '别名须为来源中的单个真实署名。');
     const found = aliases.filter(a => norm(a.nameAlias) === norm(command.alias));

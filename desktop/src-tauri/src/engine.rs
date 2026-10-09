@@ -591,7 +591,7 @@ impl Engine {
                     app,
                     "scholar",
                     "alias_read",
-                    json!({"sa_id":id,"staff_id":t.record.staff_id}),
+                    json!({"sa_id":id,"staff_id":t.record.staff_id,"close_after_read":true}),
                     60,
                 )
                 .await?;
@@ -1202,7 +1202,7 @@ impl Engine {
                         app,
                         "scholar",
                         "alias_read",
-                        json!({"sa_id":id,"staff_id":t.record.staff_id}),
+                        json!({"sa_id":id,"staff_id":t.record.staff_id,"close_after_read":true}),
                         60,
                     )
                     .await?;
@@ -1215,16 +1215,32 @@ impl Engine {
                 let index = extra["author_index"]
                     .as_u64()
                     .ok_or_else(|| Failure::new("REVIEW_REQUIRED", "请选择已核对的作者行。"))?;
-                let payload = metadata::payload(
-                    &mut t,
-                    &live,
-                    &prepared,
-                    extra["key"].as_str().unwrap_or(""),
-                    index,
-                    extra["source"].as_str().unwrap_or(""),
-                    extra["proof"].as_str().unwrap_or(""),
-                    extra["note"].as_str().unwrap_or(""),
-                )?;
+                let operation = extra["operation"].as_str().unwrap_or("role");
+                let payload = if operation == "role" {
+                    metadata::payload(
+                        &mut t,
+                        &live,
+                        &prepared,
+                        extra["key"].as_str().unwrap_or(""),
+                        index,
+                        extra["source"].as_str().unwrap_or(""),
+                        extra["proof"].as_str().unwrap_or(""),
+                        extra["note"].as_str().unwrap_or(""),
+                    )?
+                } else {
+                    metadata::order_payload(
+                        &mut t,
+                        &live,
+                        &prepared,
+                        extra["key"].as_str().unwrap_or(""),
+                        index,
+                        operation,
+                        &extra["order"],
+                        extra["source"].as_str().unwrap_or(""),
+                        extra["proof"].as_str().unwrap_or(""),
+                        extra["note"].as_str().unwrap_or(""),
+                    )?
+                };
                 self.browser
                     .execute(
                         app,

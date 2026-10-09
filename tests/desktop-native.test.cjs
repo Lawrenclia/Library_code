@@ -5,7 +5,7 @@ const assert=require('node:assert/strict');
 (async()=>{
  const fixture=fs.readFileSync(path.join(__dirname,'fixtures/wos.html'),'utf8').replace('searches++;history.pushState',`if(main.querySelector('input').value.startsWith('Missing')){main.insertAdjacentHTML('afterbegin','<p>Your search found no results</p>');return;}searches++;history.pushState`).replace('<script>',`<script>window.addEventListener('unhandledrejection',e=>fetch('/diagnostic',{method:'POST',body:String(e.reason?.message||e.reason)}));window.addEventListener('error',e=>fetch('/diagnostic',{method:'POST',body:String(e.message)}));fetch('/diagnostic',{method:'POST',body:'loaded: '+location.pathname+'; ipc='+typeof window.__TAURI_INTERNALS__});`);
  let mergeCount=0,metadataCount=0,zeroLinkCount=0,zeroClaimCount=0,zeroCompleteCount=0;
- const importReceipts={upload:[],submit:[],push:[]};let fullImportComplete=false;
+ const importReceipts={upload:[],submit:[],push:[]},metadataReceipts=[];let fullImportComplete=false;
  const sa=fs.readFileSync(path.join(__dirname,'fixtures/compare.html'),'utf8').replace('姓名：测试员<br/>是否通讯作者：是','姓名：测试员<br/>工号：001<br/>是否第一作者：是<br/>是否通讯作者：是').replace('</script>',`
  Object.assign(synthetic,{saLzkId:'smoke-duplicate',gh:'001',matchCount:2,itemId:',item-primary,item-source',reason:'重复数据'});
  const originalQuery=vm.getData.bind(vm);
@@ -13,6 +13,10 @@ const assert=require('node:assert/strict');
   if(vm.searchForm.saLzkId==='smoke-metadata'){
    Object.assign(synthetic,{saLzkId:'smoke-metadata',itemId:'item-metadata',gh:'001',matchCount:1,reason:'通讯作者标记不一致；第一作者标记不一致'});
    if(!window.startedMetadata){synthetic.markStatus='待处理';synthetic.remark='';window.startedMetadata=true;}
+   testConfig.claim='已认领';
+  }else if(vm.searchForm.saLzkId==='smoke-order'){
+   Object.assign(synthetic,{saLzkId:'smoke-order',itemId:'item-order',gh:'001',matchCount:1,reason:'第一作者标记不一致；交大是否第一单位不一致'});
+   if(!window.startedOrder){synthetic.markStatus='待处理';synthetic.remark='';window.startedOrder=true;}
    testConfig.claim='已认领';
   }else if(vm.searchForm.saLzkId==='smoke-existing'){
    Object.assign(synthetic,{saLzkId:'smoke-existing',itemId:'item-existing',matchCount:1,reason:'通讯作者标记不一致；第一作者标记不一致'});
@@ -44,7 +48,7 @@ const assert=require('node:assert/strict');
   if(req.url==='/diagnostic'){let body='';req.on('data',b=>body+=b);req.on('end',()=>console.log('Fixture diagnostic:',body));res.writeHead(200);res.end();return;}
   if(req.url==='/native/state'){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({merged:mergeCount>0}));return;}
   if(req.url==='/native/merged'&&req.method==='POST'){mergeCount++;res.writeHead(200);res.end();return;}
-  if(req.url==='/native/metadata-save'&&req.method==='POST'){metadataCount++;res.writeHead(200);res.end();return;}
+  if(req.url==='/native/metadata-save'&&req.method==='POST'){let body='';req.on('data',b=>body+=b);req.on('end',()=>{metadataCount++;metadataReceipts.push(JSON.parse(body));res.writeHead(200);res.end();});return;}
   if(req.url==='/native/zero-link'&&req.method==='POST'){zeroLinkCount++;res.writeHead(200);res.end();return;}
   if(req.url==='/native/zero-claim'&&req.method==='POST'){zeroClaimCount++;res.writeHead(200);res.end();return;}
   if(req.url==='/native/zero-complete'&&req.method==='POST'){zeroCompleteCount++;if(importReceipts.push.length&&!fullImportComplete)fullImportComplete=true;res.writeHead(200);res.end();return;}
@@ -66,7 +70,12 @@ const assert=require('node:assert/strict');
   const summary=JSON.stringify({failure:report.failure,tasks:report.workspace?.tasks?.map(t=>({id:t.id,stage:t.stage,error:t.last_error}))});
   assert.equal(code,0,summary);assert.equal(report.passed,true,summary);
   assert.equal(mergeCount,1,'The native browser must merge once, then reject stale preparation.');
-  assert.equal(metadataCount,2,'Two independent author controls must each save once; stale repeats must not write.');
+  assert.equal(metadataCount,4,'Two role controls and two complete order operations must each save once; stale repeats must not write.');
+  const orderWrites=metadataReceipts.filter(r=>r.form.id==='item-order');assert.equal(orderWrites.length,2);
+  assert.deepEqual(orderWrites[0].form.metadata.author.map(a=>[a.id,a.order,a.commonFirst]),[['native-author-2',1,false],['native-author-1',2,false]]);
+  assert.deepEqual(orderWrites[1].form.metadata.authorInstitution.map(u=>[u.id,u.order]),[['unit-sjtu',1],['unit-other',2]]);
+  assert.deepEqual(orderWrites[1].form.metadata.author.map(a=>[a.id,a.institutionOrderNums]),[['native-author-2',['2','1']],['native-author-1',['2']]]);
+  assert.equal(orderWrites[1].form.metadata.abstract[0],'完整原文摘要仍保留');
   assert.equal(zeroLinkCount,3,'Full import, corrected and seeded pushed tasks each link once; repeat links only read back.');
   assert.equal(zeroClaimCount,1,'The shared scholar relationship is claimed once, not once per SA.');
   assert.equal(zeroCompleteCount,3,'Each independent SA task completes once only after live issue reviews.');
@@ -77,10 +86,12 @@ const assert=require('node:assert/strict');
   assert.equal(importReceipts.submit[0].form.datasetId,'sjtu-1');
   assert.deepEqual(importReceipts.push[0],{batchId:'batch-001',modelId:'article-model',duplicateChecking:true,duplicateQueryType:'ppt-composite',duplicateItemProcessingType:'4',newItemProcessingType:'1',owner:true,updateFields:[]});
   fs.writeFileSync(path.join(root,created[0],'native-import-receipts.json'),JSON.stringify(importReceipts,null,2));
+  fs.writeFileSync(path.join(root,created[0],'native-metadata-receipts.json'),JSON.stringify(metadataReceipts,null,2));
   console.log('Native Tauri: three zero results -> fourth search -> Full Record -> native TXT -> Rust identity -> complete source evidence -> cross-SA reuse without browser -> SQLite -> source Excel passed.');
   console.log('Native duplicate: SA -> full candidate group -> explicit main/source -> platform merge receipt -> fresh master/pool -> atomic SQLite proof -> fresh SA -> stale repeat rejected.');
   console.log('Native existing: fresh multi-reason plan -> independent source conclusions -> completion blocked with one unresolved -> final fresh read -> SA processed with both notes.');
   console.log('Native metadata: exact staff -> full editor snapshot -> explicit author -> corresponding/common-first saves -> full metadata and SA readback -> stale repeat blocked -> SA completed.');
+  console.log('Native complete order: original author IDs and flags -> author reorder -> institution reorder and all author references -> four full before/after receipts including role edits -> SA values verified -> original intent resolved -> independent SA completion; loopback fixtures only.');
   console.log('Native library: absence checkbox refused -> all three front queries -> complete evidence -> real candidate ID selection -> existing branch blocks new import.');
   console.log('Native zero-to-unique: corrected-existing and a seeded verified-push checkpoint -> actual link -> full live issue plan -> source conclusions -> exact-staff claim/readback -> independent SA completions; roster match counts remain zero. Upload/push is not exercised in this checkpoint test.');
   console.log('Native link recovery: fixture write -> deliberately omitted local finish -> SQLite reopen/startup recovery -> unknown blocks resend -> read-only SA check -> original pushed stage and immutable payload restored. WebView2/process restart is not exercised.');

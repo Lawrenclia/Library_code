@@ -139,6 +139,7 @@ async fn run(app: &AppHandle) -> Result<()> {
     verify_duplicate(app, &engine).await?;
     verify_existing(app, &engine).await?;
     verify_metadata(app, &engine).await?;
+    verify_metadata_order(app, &engine).await?;
     verify_library(app, &engine).await?;
     verify_zero_to_unique(app, &engine, "smoke-4", false).await?;
     // Start at a seeded verified-push checkpoint; this does not exercise upload/push.
@@ -936,6 +937,96 @@ async fn verify_existing(app: &AppHandle, engine: &Engine) -> Result<()> {
         return Err(Failure::new(
             "TEST_FAILED",
             "逐项结论未带入 SA 完成回读或状态不一致。",
+        ));
+    }
+    Ok(())
+}
+async fn verify_metadata_order(app: &AppHandle, engine: &Engine) -> Result<()> {
+    let mut record = engine.store.task("smoke-4")?.record;
+    record.sa_id = "smoke-order".into();
+    record.matches = 1;
+    record.item_ids = "item-order".into();
+    record.row = 12;
+    record.reason = "第一作者标记不一致；交大是否第一单位不一致".into();
+    engine.store.import(vec![record], "order-input".into())?;
+    app.get_webview_window("sa")
+        .unwrap()
+        .eval("resetNativeMetadataOrder();")
+        .map_err(Failure::storage)?;
+    let id = "smoke-order";
+    for (index, (key, operation)) in [
+        ("first_author", "author_order"),
+        ("first_institution", "institution_order"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let prepared = engine
+            .step(app, id, "prepare_metadata", false, json!({}))
+            .await?;
+        let author_index = if index == 0 { 1 } else { 0 };
+        if prepared["result"]["authors"][author_index]["id"] != "native-author-2"
+            || prepared["result"]["authors"][author_index]["eligible"] != true
+        {
+            return Err(Failure::new(
+                "TEST_FAILED",
+                "重排后的完整身份与原作者 ID 不一致。",
+            ));
+        }
+        let request = json!({"key":key,"operation":operation,"order":[1,0],"author_index":author_index,"source":"本地合成完整原文", "proof":"原文列出 Tester 第一署名，交大为第一单位，其他角色与单位关联不变。", "note":if index==0 {"原文核对完整作者顺序"} else {"原文核对完整单位顺序与作者编号"}});
+        engine
+            .step(app, id, "save_metadata", true, request.clone())
+            .await?;
+        let task = engine.store.task(id)?;
+        if task.issue_reviews.len() != index + 1 || !engine.store.unresolved(id)?.is_empty() {
+            return Err(Failure::new(
+                "TEST_FAILED",
+                "完整重排没有原子保存回读来源及本项结论。",
+            ));
+        }
+        if engine
+            .step(app, id, "save_metadata", true, request)
+            .await
+            .is_ok()
+        {
+            return Err(Failure::new("TEST_FAILED", "过期完整顺序被重复提交。"));
+        }
+    }
+    let task = engine.store.task(id)?;
+    let evidence: Vec<_> = task
+        .evidence
+        .iter()
+        .filter(|e| e.kind == "metadata_verified")
+        .collect();
+    if evidence.len() != 2 {
+        return Err(Failure::new("TEST_FAILED", "完整重排缺少两条独立来源。"));
+    }
+    engine.review(
+        id,
+        Review {
+            route: Route::Existing,
+            evidence_id: "".into(),
+            library_checked: true,
+            platform_id: "item-order".into(),
+            affiliation_confirmed: true,
+            identity_confirmed: true,
+            issues_resolved: true,
+            note: "原文完整顺序已核对".into(),
+        },
+        "本地合成完整原文".into(),
+        "实际回读全部字段、身份和关联。".into(),
+    )?;
+    engine.step(app, id, "complete", true, json!({})).await?;
+    let mut task = engine.store.task(id)?;
+    let fresh = engine.read_sa(app, &mut task).await?;
+    let note = fresh["row"]["remark"].as_str().unwrap_or("");
+    if task.stage != Stage::Completed
+        || !note.contains("完整作者顺序")
+        || !note.contains("完整单位顺序")
+    {
+        return Err(Failure::new(
+            "TEST_FAILED",
+            "完整作者/单位重排未完成独立 SA 回读。",
         ));
     }
     Ok(())

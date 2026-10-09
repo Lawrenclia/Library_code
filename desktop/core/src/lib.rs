@@ -5,6 +5,7 @@ pub mod issues;
 pub mod legacy;
 pub mod library;
 pub mod metadata;
+pub mod metadata_order;
 pub mod model;
 pub mod queue;
 pub mod sa;
@@ -19,6 +20,8 @@ mod download_tests;
 mod issue_tests;
 #[cfg(test)]
 mod library_tests;
+#[cfg(test)]
+mod metadata_order_tests;
 #[cfg(test)]
 mod metadata_tests;
 #[cfg(test)]

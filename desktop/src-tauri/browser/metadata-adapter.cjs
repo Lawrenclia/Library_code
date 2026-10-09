@@ -1,6 +1,7 @@
 /* Grounded in ItemEdit (wrapper) and itemModelEdit (module 7013), publicly
  * served in chunk-92b4b496.99ffa744.js on 2026-10-08. Only operates the
- * page's author checkbox bindings, onSubmit and getItemDetailData methods.
+ * page's complete editable form, author checkbox bindings, onSubmit and
+ * getItemDetailData methods. Order edits preserve all original entity IDs.
  * No REST, credentials, hidden author flags or inferred institution IDs. */
 async function runMetadataCommand(command) {
   let submitted = false, restoreSubmit;
@@ -114,6 +115,35 @@ async function runMetadataCommand(command) {
           checkbox.value !== author[field] || input.checked !== author[field]) fail('PAGE_UNSUPPORTED', '角色控件不可编辑或绑定值不一致。');
       return checkbox;
     };
+    const orderAvailable = (form, field) => {
+      const rows = form.metadata[field];
+      if (!Array.isArray(rows) || rows.length < 2 || rows.some((r,i)=>r.order!==i+1)) return false;
+      const schema = editor.modelFieldList.filter(f=>f.fieldName===field);
+      if (schema.length!==1 || schema[0].reveal!==1 || schema[0].dataType!==4 || schema[0].editable===0) return false;
+      const key = field==='author'?'fullname':'address';
+      return rows.every(r=>typeof r[key]==='string' && r[key].trim() && components().filter(v=>v.$options?.name==='ElInput' &&
+        v.$vnode?.data?.model?.expression===`val.${key}` && editor.$el.contains(v.$el) && visible(v.$el) && v.value===r[key] &&
+        !v.disabled && [...v.$el.querySelectorAll('input,textarea')].some(e=>visible(e)&&!e.disabled&&!e.readOnly)).length===1);
+    };
+    const orderedForm = (form, operation, order) => {
+      const field = operation==='author_order'?'author':operation==='institution_order'?'authorInstitution':'';
+      const rows = form.metadata[field];
+      if (!field || !Array.isArray(rows) || rows.length<2 || rows.some((r,i)=>r.order!==i+1) || !Array.isArray(order) ||
+        order.length!==rows.length || order.some(i=>!Number.isSafeInteger(i)||i<0||i>=rows.length) || new Set(order).size!==rows.length || order.every((v,i)=>v===i))
+        fail('REVIEW_REQUIRED','必须核对完整原顺序，不能缺少、重复或新增条目。');
+      const wanted=copy(form);wanted.metadata[field]=order.map((old,i)=>({...copy(rows[old]),order:i+1}));
+      if(operation==='institution_order'){
+        const mapping=Object.fromEntries(order.map((old,i)=>[String(old+1),String(i+1)]));
+        for(const author of wanted.metadata.author){
+          const original=author.institutionOrderNums;
+          const tokens=Array.isArray(original)?original:typeof original==='string'?original.split(','):null;
+          if(!tokens?.length || tokens.some(n=>typeof n!=='string'||!mapping[n]) || new Set(tokens).size!==tokens.length)
+            fail('PAGE_UNSUPPORTED','原作者单位编号不完整或越界，不能自动重排。');
+          const remapped=tokens.map(n=>mapping[n]);author.institutionOrderNums=Array.isArray(original)?remapped:remapped.join(',');
+        }
+      }
+      return wanted;
+    };
     if (command.action === 'metadata_read') {
       if (owner.__libraryClean && !equal(clean, owner.__libraryClean)) fail('REVIEW_REQUIRED', '尚未核验上次表单变化。');
       owner.__libraryClean = clean;
@@ -126,21 +156,36 @@ async function runMetadataCommand(command) {
           eligible: eligible(author), fields, correspondent: author.correspondent, commonFirst: author.commonFirst,
           ownFirst: author.ownFirst, ownCorrespondent: author.ownCorrespondent, commonCorrespondent: author.commonCorrespondent};
       });
-      return {ok: true, data: {item_id: command.item_id, staff_id: command.staff_id, scholar: copy(command.scholar), authors, snapshot: clean}};
+      const institutions=(clean.form.metadata.authorInstitution||[]).map((row,index)=>({index,order:row.order,address:row.address,
+        first_institution_value:typeof detail.getKmsTopInstitution==='function'?detail.getKmsTopInstitution({metadata:{authorInstitution:[{...copy(row),order:1}]}}):null}));
+      return {ok: true, data: {item_id: command.item_id, staff_id: command.staff_id, scholar: copy(command.scholar), authors, institutions,
+        can_reorder_authors:orderAvailable(clean.form,'author'),
+        can_reorder_institutions:orderAvailable(clean.form,'authorInstitution')&&institutions.every(r=>['是','否'].includes(r.first_institution_value)),snapshot: clean}};
     }
     const index = command.author_index;
     if (!Number.isSafeInteger(index) || index < 0 || index >= clean.form.metadata.author.length || typeof command.value !== 'boolean')
       fail('REVIEW_REQUIRED', '请明确选择目标作者和核实后的角色值。');
-    const author = editor.ruleForm.metadata.author[index];
-    if (!eligible(author) || author.id !== command.author_id || author.fullname !== command.fullname)
+    const reorder=['author_order','institution_order'].includes(command.operation);
+    const author = reorder?editor.ruleForm.metadata.author.find(a=>a.id===command.author_id):editor.ruleForm.metadata.author[index];
+    if (!author || !eligible(author) || author.id !== command.author_id || author.fullname !== command.fullname)
       fail('IDENTITY_CONFLICT', '选中作者与核对后的学者身份不一致。');
     const field = command.key === 'corresponding_author' ? 'correspondent' : command.key === 'first_author' ? 'commonFirst' : '';
-    if (!field) fail('PAGE_UNSUPPORTED', '此原因尚需适配实际顺序控件，不能直接改隐藏字段。');
+    if ((!reorder&&!field)||(reorder&&!((command.operation==='author_order'&&command.key==='first_author')||(command.operation==='institution_order'&&command.key==='first_institution'))))
+      fail('PAGE_UNSUPPORTED', '修改方式与当前核对原因不一致。');
     const expected = command.expected_snapshot;
     if (!expected || expected.form?.id !== command.item_id || !Array.isArray(expected.form?.metadata?.author) ||
         expected.form.metadata.author[index]?.id !== command.author_id || expected.form.metadata.author[index]?.fullname !== command.fullname)
       fail('IDENTITY_CONFLICT', '缺少目标作者的完整编辑前快照。');
-    const wanted = copy(expected.form); wanted.metadata.author[index][field] = command.value;
+    const wanted = reorder?orderedForm(expected.form,command.operation,command.order):copy(expected.form);
+    if(reorder){
+      if(!equal(wanted,command.expected_form))fail('TASK_CHANGED','完整顺序与预期表单不一致。');
+      const selected=wanted.metadata.author.find(a=>a.id===command.author_id);
+      const actual=command.operation==='author_order'?(selected.order===1||selected.ownFirst===true||selected.commonFirst===true):
+        typeof detail.getKmsTopInstitution==='function'?detail.getKmsTopInstitution(wanted)==='是':null;
+      if(actual===null||actual!==command.value)fail('REVIEW_REQUIRED','原文核实的 SA 值与新顺序不一致，其他角色标记保持原值。');
+    }else wanted.metadata.author[index][field] = command.value;
+    const resultData=(before,after)=>({verified:true,item_id:command.item_id,staff_id:command.staff_id,author_id:command.author_id,key:command.key,value:command.value,
+      ...(reorder?{operation:command.operation}:{}),before,after});
     if (command.action === 'metadata_check') {
       // A read-only recovery may reload a program-owned pending form, but never
       // a user-modified draft; an in-flight save is not retried or cancelled.
@@ -156,17 +201,22 @@ async function runMetadataCommand(command) {
       const after = snapshot();
       if (failed || !equal(after.fields, expected.fields) || !sameContent(after.form, wanted)) fail('REMOTE_RESULT_UNKNOWN', '平台没有回读到本次完整修改结果；不能重复提交。');
       owner.__libraryClean = after; delete owner.__libraryExpected;
-      return {ok: true, data: {verified: true, item_id: command.item_id, staff_id: command.staff_id, author_id: command.author_id, key: command.key, value: command.value, before: expected.form, after: after.form}};
+      return {ok: true, data: resultData(expected.form,after.form)};
     }
     if (command.confirmed !== true || !equal(clean, expected) || !equal(clean, owner.__libraryClean)) fail('TASK_CHANGED', '完整表单在核对后变化或缺少本条确认，请重新读取。');
-    if (!command.value && ((field === 'correspondent' && (author.ownCorrespondent === true || author.commonCorrespondent === true)) ||
+    if (!reorder && !command.value && ((field === 'correspondent' && (author.ownCorrespondent === true || author.commonCorrespondent === true)) ||
         (field === 'commonFirst' && (author.order === 1 || author.ownFirst === true))))
       fail('REVIEW_REQUIRED', '角色由其他标记或署名顺序确定，当前复选框不能完成这项修正。');
-    const checkbox = control(author, index, field);
-    if (author[field] === command.value) return {ok: true, data: {verified: true, already_present: true, item_id: command.item_id, staff_id: command.staff_id, author_id: author.id, key: command.key, value: command.value, before: clean.form, after: clean.form}};
-    checkbox.$vnode.data.model.callback(command.value);
+    const checkbox = reorder?null:control(author, index, field);
+    if(!reorder&&author[field] === command.value) return {ok: true, data: {...resultData(clean.form,clean.form),already_present:true}};
+    const applyOrder=form=>{const key=command.operation==='author_order'?'author':'authorInstitution';editor.ruleForm.metadata[key]=copy(form.metadata[key]);
+      if(command.operation==='institution_order')editor.ruleForm.metadata.author=copy(form.metadata.author);};
+    if(reorder){
+      if(!orderAvailable(clean.form,command.operation==='author_order'?'author':'authorInstitution'))fail('PAGE_UNSUPPORTED','原编辑表单没有完整可编辑作者或单位列表。');
+      applyOrder(wanted);
+    }else checkbox.$vnode.data.model.callback(command.value);
     await editor.$nextTick(); guard();
-    if (!equal(snapshot(), {form: wanted, fields: expected.fields}) || author[field] !== command.value) fail('TASK_CHANGED', '角色更新带来其他表单变化，请人工核对。');
+    if (!equal(snapshot(), {form: wanted, fields: expected.fields}) || (!reorder&&author[field] !== command.value)) fail('TASK_CHANGED', '修改带来其他表单变化，请人工核对。');
     const button = one([...editor.$el.querySelectorAll('button')].filter(b => visible(b) && !b.disabled && b.textContent.trim() === '提交'), '条目提交按钮');
     if (!visible(button) || editor.loading) fail('PAGE_TIMEOUT', '条目仍在加载。');
     const original = editor.submitData;
@@ -187,7 +237,7 @@ async function runMetadataCommand(command) {
     const editingFields = editor.modelFieldList;
     const result = editor.onSubmit();
     if (!started) {
-      checkbox.$vnode.data.model.callback(expected.form.metadata.author[index][field]);
+      if(reorder)applyOrder(expected.form);else checkbox.$vnode.data.model.callback(expected.form.metadata.author[index][field]);
       await editor.$nextTick(); delete owner.__libraryExpected;
       fail('INCOMPLETE_METADATA', result === false ? '平台表单校验未通过，没有提交写入。' : '提交方法没有调用已确认的保存入口。');
     }
@@ -195,7 +245,7 @@ async function runMetadataCommand(command) {
     const after = snapshot();
     if (!equal(after.fields, expected.fields) || !sameContent(after.form, wanted)) fail('REMOTE_RESULT_UNKNOWN', '角色或其他元数据回读不一致，先核验实际结果。');
     owner.__libraryClean = after; delete owner.__libraryExpected;
-    return {ok: true, data: {verified: true, item_id: command.item_id, staff_id: command.staff_id, author_id: author.id, key: command.key, value: command.value, before: clean.form, after: after.form}};
+    return {ok: true, data: resultData(clean.form,after.form)};
   } catch (error) {
     return {ok: false, code: error.code || 'PAGE_UNSUPPORTED', submitted, error: error.message};
   } finally {restoreSubmit?.();}
