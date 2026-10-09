@@ -5,6 +5,7 @@ pub mod legacy;
 pub mod library;
 pub mod metadata;
 pub mod model;
+pub mod queue;
 pub mod sa;
 pub mod store;
 pub mod templates;
@@ -17,6 +18,8 @@ mod issue_tests;
 mod library_tests;
 #[cfg(test)]
 mod metadata_tests;
+#[cfg(test)]
+mod queue_tests;
 #[cfg(test)]
 mod sa_tests;
 #[cfg(test)]

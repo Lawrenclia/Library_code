@@ -18,9 +18,10 @@ impl Store {
         db.execute_batch("CREATE TABLE IF NOT EXISTS papers(id TEXT PRIMARY KEY,updated INTEGER NOT NULL,data TEXT NOT NULL);")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS legacy_migrations(fingerprint TEXT PRIMARY KEY,data TEXT NOT NULL,created INTEGER NOT NULL);")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS pending_inputs(task_id TEXT PRIMARY KEY,data TEXT NOT NULL);CREATE TABLE IF NOT EXISTS task_versions(id TEXT PRIMARY KEY,task_id TEXT NOT NULL,data TEXT NOT NULL,created INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS input_history(id TEXT PRIMARY KEY,task_id TEXT NOT NULL,data TEXT NOT NULL,created INTEGER NOT NULL);")?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS download_queues(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,created INTEGER NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS one_pending_download_queue ON download_queues((1)) WHERE status IN ('running','paused','blocked','interrupted');")?;
         Ok(s)
     }
-    fn connect(&self) -> Result<Connection> {
+    pub(crate) fn connect(&self) -> Result<Connection> {
         let db = Connection::open(self.root.join("workspace.sqlite3"))?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
         db.execute_batch("PRAGMA synchronous=FULL;")?;
@@ -48,7 +49,7 @@ impl Store {
         *task = next;
         Ok(())
     }
-    fn write_task(tx: &Transaction<'_>, task: &Task, kind: &str) -> Result<Task> {
+    pub(crate) fn write_task(tx: &Transaction<'_>, task: &Task, kind: &str) -> Result<Task> {
         let rev = task.revision;
         let mut next = task.clone();
         next.revision += 1;
@@ -738,6 +739,7 @@ impl Store {
                 self.save(&mut t, "recovered")?;
             }
         }
+        self.recover_download_queue()?;
         Ok(())
     }
     pub fn events(&self, id: &str) -> Result<Vec<Value>> {

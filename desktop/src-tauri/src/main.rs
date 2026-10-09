@@ -3,6 +3,8 @@ mod ai;
 mod browser;
 mod engine;
 #[cfg(feature = "smoke-test")]
+mod queue_smoke;
+#[cfg(feature = "smoke-test")]
 mod restart_smoke;
 #[cfg(feature = "smoke-test")]
 mod smoke;
@@ -149,9 +151,37 @@ async fn run_queue(
     r
 }
 #[tauri::command]
-fn pause_queue(window: WebviewWindow, state: State<Engine>) -> Result<()> {
+fn pause_queue(window: WebviewWindow, app: AppHandle, state: State<Engine>) -> Result<()> {
     local(&window)?;
+    state.store.request_download_pause()?;
     state.pause.store(true, Ordering::SeqCst);
+    state.changed(&app);
+    Ok(())
+}
+#[tauri::command]
+async fn resume_queue(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, Engine>,
+    id: String,
+) -> Result<()> {
+    local(&window)?;
+    let _lease = state.acquire()?;
+    let result = state.resume_queue(&app, &id).await;
+    state.changed(&app);
+    result
+}
+#[tauri::command]
+fn cancel_queue(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<Engine>,
+    id: String,
+) -> Result<()> {
+    local(&window)?;
+    let _lease = state.acquire()?;
+    state.store.cancel_download_queue(&id)?;
+    state.changed(&app);
     Ok(())
 }
 #[tauri::command]
@@ -222,7 +252,8 @@ async fn export_report(window: WebviewWindow, state: State<'_, Engine>) -> Resul
     let Some(path) = path else {
         return Ok(json!({"cancelled":true}));
     };
-    files::export_report(&state.store.tasks()?, path.path())?;
+    let (tasks, queues) = state.store.report_snapshot()?;
+    files::export_report_with_queues(&tasks, &queues, path.path())?;
     Ok(json!({"path":path.path().to_string_lossy()}))
 }
 #[tauri::command]
@@ -397,6 +428,8 @@ fn main() {
             open_browser,
             run_queue,
             pause_queue,
+            resume_queue,
+            cancel_queue,
             review_task,
             run_step,
             adopt_file,

@@ -109,6 +109,10 @@ const {
   refresh,
   run,
   queue,
+  queuePending,
+  queueStatusNames,
+  resumeQueue,
+  cancelQueue,
   step,
   saveReview,
   issueChecklist,
@@ -351,7 +355,10 @@ function clearFilters() {
             @keydown.esc="search = ''"
           />
         </div>
-        <Button size="sm" :disabled="locked || !owner" @click="queue(false)"
+        <Button
+          size="sm"
+          :disabled="locked || !owner || queuePending"
+          @click="queue(false)"
           ><Download />检索 / 下载 WOS</Button
         ><Button
           v-if="workspace.running || pending"
@@ -365,11 +372,99 @@ function clearFilters() {
           v-else
           size="sm"
           variant="outline"
-          :disabled="!owner"
+          :disabled="locked || !owner || queuePending"
           @click="queue(true)"
           >检索跳过项</Button
         >
       </div>
+      <section
+        v-if="workspace.download_queue"
+        aria-label="下载队列进度"
+        class="mb-4 rounded-xl border bg-card p-3 text-xs"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">{{
+              queueStatusNames[workspace.download_queue.status]
+            }}</Badge>
+            <span
+              >{{ workspace.download_queue.owner }} ·
+              {{
+                workspace.download_queue.retry_skipped ? "跳过论文" : "待补论文"
+              }}</span
+            >
+            <span class="text-muted-foreground"
+              >已记录 {{ workspace.download_queue.cursor }} /
+              {{ workspace.download_queue.targets.length }} 篇 · 剩余
+              {{
+                workspace.download_queue.targets.length -
+                workspace.download_queue.cursor
+              }}
+              篇</span
+            >
+          </div>
+          <div
+            v-if="queuePending && workspace.download_queue.status !== 'running'"
+            class="flex gap-2"
+          >
+            <Button size="sm" :disabled="locked" @click="resumeQueue"
+              >继续原队列</Button
+            >
+            <Button
+              size="sm"
+              variant="outline"
+              :disabled="locked"
+              @click="cancelQueue"
+              >结束原范围</Button
+            >
+          </div>
+        </div>
+        <Progress
+          class="mt-3 h-1.5"
+          :model-value="
+            workspace.download_queue.targets.length
+              ? (workspace.download_queue.cursor /
+                  workspace.download_queue.targets.length) *
+                100
+              : 0
+          "
+        />
+        <p
+          v-if="
+            workspace.download_queue.pause_requested &&
+            workspace.download_queue.status === 'running'
+          "
+          class="mt-2 text-muted-foreground"
+        >
+          已请求暂停，当前步骤结束后保存进度。
+        </p>
+        <p
+          v-if="workspace.download_queue.last_error"
+          class="mt-2 text-amber-700 dark:text-amber-400"
+        >
+          {{ workspace.download_queue.last_error.message }}
+        </p>
+        <details v-if="workspace.download_queue.outcomes.length" class="mt-2">
+          <summary class="cursor-pointer text-muted-foreground">
+            查看本轮逐篇结果
+          </summary>
+          <ul class="mt-2 max-h-44 space-y-1 overflow-auto">
+            <li
+              v-for="result in workspace.download_queue.outcomes"
+              :key="result.id"
+            >
+              SA {{ result.id }} ·
+              {{
+                result.status === "downloaded"
+                  ? "文件已保存"
+                  : result.status === "not_executed"
+                    ? "任务变化，未执行"
+                    : "待核验"
+              }}<span v-if="result.error"> · {{ result.error.message }}</span>
+            </li>
+          </ul>
+        </details>
+      </section>
       <div class="mb-4 flex items-center gap-4 border-b">
         <button
           v-for="item in filters"
@@ -1843,9 +1938,9 @@ function clearFilters() {
     ><DialogContent class="max-w-md"
       ><DialogHeader
         ><DialogTitle class="flex items-center gap-2"
-          ><ShieldCheck
-            class="size-5 text-primary"
-          />核对本条平台操作</DialogTitle
+          ><ShieldCheck class="size-5 text-primary" />{{
+            confirmation?.title
+          }}</DialogTitle
         ><DialogDescription
           class="pt-3 whitespace-pre-wrap text-xs leading-7"
           >{{ confirmation?.description }}</DialogDescription

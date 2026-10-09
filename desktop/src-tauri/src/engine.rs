@@ -54,6 +54,10 @@ impl Engine {
         let _ = app.emit_to("main", "workspace-changed", json!({"time":now()}));
     }
     pub fn snapshot(&self, app: &AppHandle) -> Result<Value> {
+        let download_queue = self.store.latest_download_queue()?;
+        let queue_paused = download_queue
+            .as_ref()
+            .is_some_and(|q| q.status.unfinished() && q.status != queue::QueueStatus::Running);
         let mut tasks = serde_json::to_value(self.store.tasks()?)?;
         for task in tasks.as_array_mut().unwrap() {
             let attempts = self.store.unresolved(task["id"].as_str().unwrap_or(""))?;
@@ -66,7 +70,7 @@ impl Engine {
                 serde_json::to_value(self.store.pending_input(task["id"].as_str().unwrap())?)?;
         }
         Ok(
-            json!({"tasks":tasks,"root":self.store.root.to_string_lossy(),"running":self.active.load(Ordering::SeqCst),"paused":self.pause.load(Ordering::SeqCst),"browsers":self.browser.states(app),"policy":PUSH_POLICY}),
+            json!({"tasks":tasks,"root":self.store.root.to_string_lossy(),"running":self.active.load(Ordering::SeqCst),"paused":self.pause.load(Ordering::SeqCst)||queue_paused,"download_queue":download_queue,"browsers":self.browser.states(app),"policy":PUSH_POLICY}),
         )
     }
     pub fn attach(
@@ -211,50 +215,102 @@ impl Engine {
         Ok(())
     }
     pub async fn queue(&self, app: &AppHandle, owner: &str, retry_skipped: bool) -> Result<()> {
-        if owner.is_empty() {
-            return Err(Failure::new("INPUT_INVALID", "请选择负责人。"));
+        let queue = self.store.start_download_queue(owner, retry_skipped)?;
+        self.execute_download_queue(app, &queue.id).await
+    }
+    pub async fn resume_queue(&self, app: &AppHandle, id: &str) -> Result<()> {
+        self.store.resume_download_queue(id)?;
+        self.execute_download_queue(app, id).await
+    }
+    async fn execute_download_queue(&self, app: &AppHandle, id: &str) -> Result<()> {
+        self.changed(app);
+        let result = self.download_queue_loop(app, id).await;
+        if let Err(error) = &result {
+            self.pause.store(true, Ordering::SeqCst);
+            // If storage itself failed this may also fail. The persisted running
+            // queue is still recovered as interrupted by the next app startup.
+            let _ = self.store.block_download_queue(id, error.clone(), None);
         }
-        let targets: Vec<_> = self
-            .store
-            .tasks()?
-            .into_iter()
-            .filter(|t| {
-                t.record.owner == owner
-                    && t.record.matches == 0
-                    && !t.record.done
-                    && matches!(
-                        t.stage,
-                        Stage::Pending
-                            | Stage::Searching
-                            | Stage::Downloading
-                            | Stage::AwaitingReview
-                    )
-                    && t.record.skipped == retry_skipped
-                    && matches!(t.route, Route::ZeroReview | Route::Missing)
-            })
-            .map(|t| t.id)
-            .collect();
-        for id in targets {
-            if self.pause.load(Ordering::SeqCst) {
+        self.changed(app);
+        result
+    }
+    async fn download_queue_loop(&self, app: &AppHandle, queue_id: &str) -> Result<()> {
+        loop {
+            let queue = self.store.download_queue(queue_id)?;
+            if queue.status != queue::QueueStatus::Running {
                 break;
             }
-            if let Err(e) = self.download_one(app, &id).await {
-                let mut t = self.store.task(&id)?;
-                t.running = false;
-                t.last_error = Some(e.clone());
-                t.stage = Stage::AwaitingReview;
-                t.evidence.push(Evidence {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    kind: "search_result".into(),
-                    source: "WOS".into(),
-                    text: e.message.clone(),
-                    created: now(),
-                });
-                self.store.save(&mut t, "search_failed")?;
+            if self.pause.load(Ordering::SeqCst) || queue.pause_requested {
+                self.store.pause_download_queue(queue_id)?;
+                break;
+            }
+            let target = queue
+                .targets
+                .get(queue.cursor)
+                .ok_or_else(|| Failure::new("QUEUE_CHANGED", "队列位置与原范围不一致。"))?;
+            let id = &target.id;
+            let t = self.store.task(id)?;
+            let available = target.matches(&t.record)
+                && !t.record.done
+                && t.record.matches == 0
+                && t.record.owner == queue.owner
+                && matches!(t.route, Route::ZeroReview | Route::Missing)
+                && (matches!(
+                    t.stage,
+                    Stage::Pending | Stage::Searching | Stage::Downloading | Stage::AwaitingReview
+                ) || (matches!(t.stage, Stage::Downloaded | Stage::Ready)
+                    && t.artifact.is_some()))
+                && self.store.pending_input(id)?.is_none()
+                && self.store.unresolved(id)?.is_empty();
+            if !available {
+                self.store.finish_download_target(queue_id, id, "not_executed", Some(Failure::new(
+                    "QUEUE_TARGET_CHANGED", "原队列的任务输入、跳过标记、业务阶段或待确认操作已变化；未检索或覆盖当前任务，请核对。")), None)?;
                 self.changed(app);
-                if e.channel() {
-                    self.pause.store(true, Ordering::SeqCst);
-                    break;
+                continue;
+            }
+            match self.download_one(app, id).await {
+                Ok(()) => {
+                    // Pause during search preserves this target for continuation.
+                    // A completed download is checkpointed before moving on.
+                    if self.pause.load(Ordering::SeqCst) && self.store.task(id)?.artifact.is_none()
+                    {
+                        self.store.pause_download_queue(queue_id)?;
+                        break;
+                    }
+                    self.store
+                        .finish_download_target(queue_id, id, "downloaded", None, None)?;
+                }
+                Err(error) => {
+                    let mut t = self.store.task(id)?;
+                    t.running = false;
+                    t.last_error = Some(error.clone());
+                    t.stage = Stage::AwaitingReview;
+                    t.evidence.push(Evidence {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        kind: "search_result".into(),
+                        source: "WOS".into(),
+                        text: json!({"error":error,"queue_id":queue_id,
+                            "input_fingerprint":target.fingerprint,"target":t.record})
+                        .to_string(),
+                        created: now(),
+                    });
+                    if error.channel()
+                        || matches!(error.code.as_str(), "REMOTE_RESULT_UNKNOWN" | "BUSY")
+                    {
+                        self.store
+                            .block_download_queue(queue_id, error, Some(&mut t))?;
+                        self.pause.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    // Task failure and cursor advance commit together. A restart
+                    // never re-runs already recorded zero/ambiguous outcomes.
+                    self.store.finish_download_target(
+                        queue_id,
+                        id,
+                        "review",
+                        Some(error),
+                        Some(&mut t),
+                    )?;
                 }
             }
             self.changed(app);

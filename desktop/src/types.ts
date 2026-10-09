@@ -176,8 +176,31 @@ export interface Workspace {
   root: string;
   running: boolean;
   paused: boolean;
+  download_queue?: DownloadQueue | null;
   browsers: Record<string, { open: boolean; usable: boolean }>;
   policy: string;
+}
+export interface DownloadQueue {
+  id: string;
+  owner: string;
+  retry_skipped: boolean;
+  status:
+    | "running"
+    | "paused"
+    | "blocked"
+    | "interrupted"
+    | "completed"
+    | "cancelled";
+  cursor: number;
+  targets: { id: string; fingerprint: string; skipped: boolean }[];
+  outcomes: {
+    id: string;
+    status: string;
+    error: { code: string; message: string } | null;
+    finished: number;
+  }[];
+  pause_requested: boolean;
+  last_error: { code: string; message: string } | null;
 }
 export interface Template {
   id: string;

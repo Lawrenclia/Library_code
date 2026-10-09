@@ -414,6 +414,13 @@ pub fn archive(root: &Path, raw: &[u8]) -> Result<std::path::PathBuf> {
     Ok(path)
 }
 pub fn export_report(tasks: &[Task], path: &Path) -> Result<()> {
+    export_report_with_queues(tasks, &[], path)
+}
+pub fn export_report_with_queues(
+    tasks: &[Task],
+    queues: &[crate::queue::DownloadQueue],
+    path: &Path,
+) -> Result<()> {
     use rust_xlsxwriter::Workbook;
     let mut book = Workbook::new();
     let sheet = book.add_worksheet();
@@ -570,6 +577,98 @@ pub fn export_report(tasks: &[Task], path: &Path) -> Result<()> {
         }
     }
     fields.set_freeze_panes(1, 0).map_err(Failure::storage)?;
+    let history = book.add_worksheet();
+    history.set_name("下载队列结果").map_err(Failure::storage)?;
+    for (col, label) in [
+        "队列 ID",
+        "原负责人",
+        "原范围",
+        "队列状态",
+        "原顺序",
+        "SA ID",
+        "原题名",
+        "原输入版本哈希",
+        "原记录指纹",
+        "逐篇结果",
+        "错误代码",
+        "记录完成时间",
+        "队列建立时间",
+        "队列更新时间",
+        "完整记录片段",
+        "片段序号",
+        "完整记录哈希",
+    ]
+    .iter()
+    .enumerate()
+    {
+        history
+            .write_string(0, col as u16, *label)
+            .map_err(Failure::storage)?;
+    }
+    let mut row = 1;
+    for queue in queues {
+        for (index, target) in queue.targets.iter().enumerate() {
+            let outcome = queue.outcomes.iter().find(|o| o.id == target.id);
+            let error = outcome.and_then(|o| o.error.as_ref()).or_else(|| {
+                if index == queue.cursor {
+                    queue.last_error.as_ref()
+                } else {
+                    None
+                }
+            });
+            let complete = serde_json::to_string(
+                &serde_json::json!({"target":target,"outcome":outcome,"current_error":error}),
+            )?;
+            let chars = complete.chars().collect::<Vec<_>>();
+            for (part, chunk) in chars.chunks(15000).enumerate() {
+                let values = [
+                    queue.id.clone(),
+                    queue.owner.clone(),
+                    if queue.retry_skipped {
+                        "跳过论文"
+                    } else {
+                        "待补论文"
+                    }
+                    .into(),
+                    serde_json::to_value(&queue.status)?
+                        .as_str()
+                        .unwrap()
+                        .into(),
+                    (index + 1).to_string(),
+                    target.id.clone(),
+                    target
+                        .record
+                        .as_ref()
+                        .map(|r| r.title.clone())
+                        .unwrap_or_default(),
+                    target.input_hash.clone(),
+                    target.fingerprint.clone(),
+                    outcome
+                        .map(|o| o.status.as_str())
+                        .unwrap_or("not_executed")
+                        .into(),
+                    error.map(|e| e.code.clone()).unwrap_or_default(),
+                    outcome.map(|o| o.finished.to_string()).unwrap_or_default(),
+                    queue.created.to_string(),
+                    queue.updated.to_string(),
+                    chunk.iter().collect(),
+                    (part + 1).to_string(),
+                    hash(complete.as_bytes()),
+                ];
+                for (col, value) in values.iter().enumerate() {
+                    history
+                        .write_string(row, col as u16, value)
+                        .map_err(Failure::storage)?;
+                }
+                row += 1;
+            }
+        }
+    }
+    history.set_freeze_panes(1, 0).map_err(Failure::storage)?;
+    history.set_column_width(6, 50.).map_err(Failure::storage)?;
+    history
+        .set_column_width(14, 80.)
+        .map_err(Failure::storage)?;
     book.save(path).map_err(Failure::storage)?;
     Ok(())
 }
@@ -914,7 +1013,8 @@ mod tests {
         let path = dir.path().join("report.xlsx");
         export_report(&[t], &path).unwrap();
         let mut book = open_workbook_auto(path).unwrap();
-        assert_eq!(book.sheet_names().len(), 3);
+        assert_eq!(book.sheet_names().len(), 4);
+        assert!(book.sheet_names().iter().any(|name| name == "下载队列结果"));
         let sources = book.worksheet_range("原始来源依据").unwrap();
         assert_eq!(sources.get_value((1, 2)).unwrap().to_string(), "proof");
         let fields = book.worksheet_range("AI 字段来源").unwrap();

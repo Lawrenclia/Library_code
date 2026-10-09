@@ -566,6 +566,47 @@ export function useWorkbench() {
       "本轮队列已结束。逐条结果已保存；请查看待核验项和未执行任务。",
     );
   }
+  const queuePending = computed(
+    () =>
+      !!workspace.value.download_queue &&
+      !["completed", "cancelled"].includes(
+        workspace.value.download_queue.status,
+      ),
+  );
+  const queueStatusNames: Record<string, string> = {
+    running: "执行中",
+    paused: "已暂停",
+    blocked: "工作页待恢复",
+    interrupted: "重启后待继续",
+    completed: "已结束",
+    cancelled: "已结束原范围",
+  };
+  async function resumeQueue() {
+    const q = workspace.value.download_queue;
+    if (!q || !queuePending.value) return;
+    await run(
+      "resume_queue",
+      { id: q.id },
+      "原队列进度已保存，请查看逐篇结果和剩余项。",
+    );
+  }
+  async function cancelQueue() {
+    const q = workspace.value.download_queue;
+    if (
+      !q ||
+      !queuePending.value ||
+      !(await confirmAction(
+        `结束 ${q.owner} 的原下载范围？已保存的文件和结果会保留，剩余 ${q.targets.length - q.cursor} 项不再执行。`,
+        "结束原下载范围",
+      ))
+    )
+      return;
+    await run(
+      "cancel_queue",
+      { id: q.id },
+      "原下载范围已结束，已保存的文件和结果仍保留。可以选择新范围。",
+    );
+  }
   async function step(action: string, write = false) {
     const t = current.value;
     if (!t) return;
@@ -884,12 +925,13 @@ export function useWorkbench() {
 
   const confirmation = ref<{
     description: string;
+    title: string;
     resolve: (answer: boolean) => void;
   } | null>(null);
-  function confirmAction(description: string) {
+  function confirmAction(description: string, title = "核对本条平台操作") {
     confirmation.value?.resolve(false);
     return new Promise<boolean>(
-      (resolve) => (confirmation.value = { description, resolve }),
+      (resolve) => (confirmation.value = { description, title, resolve }),
     );
   }
   function settleConfirmation(answer: boolean) {
@@ -956,6 +998,10 @@ export function useWorkbench() {
     refresh,
     run,
     queue,
+    queuePending,
+    queueStatusNames,
+    resumeQueue,
+    cancelQueue,
     step,
     saveReview,
     issueChecklist,
