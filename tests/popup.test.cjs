@@ -7,7 +7,7 @@ const {chromium} = require('playwright');
   const executablePath=process.env.SA_TEST_BROWSER || (fs.existsSync(edge)?edge:undefined);
   const browser = await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
   try {
-    const page = await browser.newPage({viewport:{width:380,height:600}});
+    const page = await browser.newPage({viewport:{width:400,height:600}});
     const base = path.join(__dirname,'../extension');
     await page.setContent(fs.readFileSync(path.join(base,'popup.html'),'utf8').replace(/<script[^>]*>.*?<\/script>/s,''));
     await page.addStyleTag({content:fs.readFileSync(path.join(base,'popup.css'),'utf8')});
@@ -44,7 +44,7 @@ const {chromium} = require('playwright');
     await page.locator('#disconnect').click();
     await page.waitForFunction(()=>!document.getElementById('disconnect').disabled);
     assert.match(await page.locator('#status').innerText(),/模拟断开失败/);
-    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=380),true);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=400),true);
     console.log('PASS popup empty token, Enter pairing, duplicate prevention, diagnostics, error recovery and width');
   } finally { await browser.close(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

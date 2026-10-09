@@ -212,6 +212,12 @@ class FlowTests(unittest.TestCase):
         self.flow.prepare(record(), current_wos=True)
         self.assertNotIn("wos_search", self.calls)
 
+    def test_single_search_has_same_budget_as_batch_search(self):
+        self.flow.prepare(record())
+        calls = {call.args[0]: call.kwargs['timeout'] for call in self.bridge.call.call_args_list}
+        self.assertEqual(calls['wos_search'], 120)
+        self.assertEqual(calls['wos_export'], 75)
+
 
 if __name__ == "__main__":
     unittest.main()

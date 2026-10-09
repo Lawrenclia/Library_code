@@ -28,6 +28,8 @@ class ImportPlan:
     owner: str
     items: tuple
     file_errors: tuple = ()
+    scope: str = "pending"
+    excluded: tuple = ()
 
 
 @dataclass
@@ -45,12 +47,25 @@ def require_owner(owner):
         raise SafetyStop("当前自动导入仅开放谭勋策负责的任务，不操作其他负责人的记录。")
 
 
-def build_plan(roster, owner, limit, inbox, store):
+def require_scope(scope):
+    if scope not in ("pending", "skipped"):
+        raise SafetyStop("请选择待补录或已跳过的导入范围。")
+
+
+def in_scope(record, owner, scope):
+    return (record.owner == owner and not record.done and record.matches == 0
+            and record.skipped == (scope == "skipped"))
+
+
+def build_plan(roster, owner, limit, inbox, store, *, scope="pending", download_store=None):
     require_owner(owner)
+    require_scope(scope)
     if type(limit) is not int or not 1 <= limit <= 100:
         raise SafetyStop("本轮条数须为 1–100 的整数。")
     roster.assert_unchanged()
-    records = [r for r in roster.records if r.owner == owner and not r.done and not r.skipped and r.matches == 0][:limit]
+    # Scan the whole selected scope before applying the execution limit. Missing
+    # exports and old pushed tasks must not permanently hide later usable files.
+    records = [r for r in roster.records if in_scope(r, owner, scope)]
     files, errors = {}, []
     # Never recursively traverse Downloads or collect unrelated files.
     for path in sorted(Path(inbox).glob("*.txt")):
@@ -69,7 +84,10 @@ def build_plan(roster, owner, limit, inbox, store):
                 candidate = parse_wos(store.bytes(state))
                 identity(record, candidate)
                 if not state.get("identity_confirmed"):
-                    raise SafetyStop("存档文献身份待人工核验，请使用单条导入。")
+                    items.append(ImportItem(record, "deferred", "存档文献身份待人工核验，请核验所选论文。",
+                                            str(store.root / (candidate["sha256"] + ".txt")),
+                                            candidate["sha256"], candidate))
+                    continue
                 phase = state.get("phase")
                 if phase == "upload_intent":
                     raise SafetyStop("上次上传结果不明，请核对上传窗口；不会再次上传。")
@@ -82,20 +100,45 @@ def build_plan(roster, owner, limit, inbox, store):
                 label = "ready" if phase == "exported" else "resume"
             else:
                 # Prefer exact supplied identifiers; title similarity is never sufficient.
+                candidates = dict(files)
+                # Weak downloads deliberately stay outside the auto-adopted inbox.
+                # Expose only this exact SA task's verified archive for human review;
+                # do not search unrelated archives by fuzzy title or reuse its trust.
+                archived_sha = ""
+                archive_error = None
+                if download_store is not None:
+                    try:
+                        downloaded = download_store.get(record)
+                        if downloaded:
+                            archived = parse_wos(download_store.bytes(downloaded))
+                            archived_sha = archived["sha256"]
+                            candidates.setdefault(archived["sha256"],
+                                                  (download_store.root / (archived["sha256"] + ".txt"), archived))
+                    except (SafetyStop, OSError) as exc:
+                        # A stale download is not a prior production write. Do not
+                        # trust it, but independently validated inbox files remain
+                        # usable. ImportStore state above still fails closed.
+                        archive_error = str(exc)
+                        errors.append(f"下载存档 {record.sa_id} 未采用：{archive_error}")
                 matches = []
-                for path, candidate in files.values():
-                    if ((wos(record.wos) and wos(record.wos) == candidate["wos"]) or
+                for path, candidate in candidates.values():
+                    if (candidate["sha256"] == archived_sha or
+                        (wos(record.wos) and wos(record.wos) == candidate["wos"]) or
                         (doi(record.doi) and doi(record.doi) == candidate["doi"]) or
                         norm(record.title) == norm(candidate["title"])):
                         matches.append((path, candidate))
                 if not matches:
+                    if archive_error:
+                        raise SafetyStop("下载存档不可用，请重新选取原始 TXT：" + archive_error)
                     raise SafetyStop("没有对应的单篇 WOS TXT；先下载元数据或使用单条导入。")
                 # Distinct byte exports with the same UT may carry different metadata.
                 if len(matches) != 1:
                     raise SafetyStop("存在多个不同的候选文件，请人工选定单条 TXT。")
                 path, candidate = matches[0]
                 if not identity(record, candidate):
-                    raise SafetyStop("缺少精确编号或题名发生变化，需在单条流程确认身份。")
+                    items.append(ImportItem(record, "deferred", "缺少精确编号或题名发生变化，需核验所选论文身份。",
+                                            str(path), candidate["sha256"], candidate))
+                    continue
                 label = "ready"
             if store.other_writes(record, candidate):
                 raise SafetyStop("同一论文已有其他名单的导入记录，请关联已有条目，禁止重复导入。")
@@ -108,12 +151,27 @@ def build_plan(roster, owner, limit, inbox, store):
         except (SafetyStop, OSError) as exc:
             items.append(ImportItem(record, "deferred", str(exc)))
     roster.assert_unchanged()
-    return ImportPlan(roster.sha256, owner, tuple(items), tuple(errors))
+    selected, excluded = [], []
+    # Verify uncertain prior submissions before starting new uploads. Resuming
+    # these entries reads their existing batch rather than repeating a write.
+    eligible = sorted((item for item in items if item.status in ("ready", "resume")),
+                      key=lambda item: item.status != "resume")
+    selected_ids = {item.record.sa_id for item in eligible[:limit]}
+    selected = [item for item in eligible if item.record.sa_id in selected_ids]
+    for item in items:
+        if item.record.sa_id in selected_ids:
+            continue
+        if item.status in ("ready", "resume"):
+            item = ImportItem(item.record, "queued", "文件已通过预检；达到本轮条数上限，下轮继续处理。",
+                              item.path, item.sha256, item.candidate)
+        excluded.append(item)
+    return ImportPlan(roster.sha256, owner, tuple(selected), tuple(errors), scope, tuple(excluded))
 
 
 def run_import_plan(plan, roster, bridge, store, *, reviewed=False, stop=lambda: False,
                     progress=lambda text: None, audit=lambda action, result, sa_id: None):
     require_owner(plan.owner)
+    require_scope(plan.scope)
     if reviewed is not True:
         raise SafetyStop("请先核验本轮文献身份及本库缺失，并确认导入与推送设置。")
     roster.assert_unchanged()
@@ -122,8 +180,8 @@ def run_import_plan(plan, roster, bridge, store, *, reviewed=False, stop=lambda:
     current = {r.sa_id: r for r in roster.records}
     ids = [item.record.sa_id for item in plan.items]
     if len(ids) != len(set(ids)) or len(ids) > 100 or any(
-        item.record != current.get(item.record.sa_id) or item.record.owner != OWNER or item.record.done or
-        item.record.skipped or item.record.matches != 0 for item in plan.items
+        item.record != current.get(item.record.sa_id) or not in_scope(item.record, plan.owner, plan.scope) or
+        item.status not in ("ready", "resume") for item in plan.items
     ):
         raise SafetyStop("导入计划包含范围外、重复或已变化的记录，请重新预检。")
     result = ImportResult(roster)
@@ -146,7 +204,7 @@ def run_import_plan(plan, roster, bridge, store, *, reviewed=False, stop=lambda:
             break
         record = item.record
         progress(f"WOS 导入 {index}/{len(plan.items)} · {record.sa_id}")
-        # Even deferred files are checked for already-processed SA tasks first.
+        # Fresh SA state wins over local planning, before any import mutation.
         try:
             unchanged()
             fresh = bridge.call("search", {"sa_id": record.sa_id})
@@ -160,9 +218,6 @@ def run_import_plan(plan, roster, bridge, store, *, reviewed=False, stop=lambda:
             record_outcome(item, "halted", str(exc) if isinstance(exc, SafetyStop) else "连接或名单读写异常，请检查后继续。")
             result.halted = True
             break
-        if item.status in ("deferred", "pushed"):
-            record_outcome(item, item.status, item.message)
-            continue
         try:
             if classify(record, fresh).route != "wos":
                 raise SafetyStop("后台不再是未处理零匹配任务；未执行导入。")

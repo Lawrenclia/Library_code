@@ -1,10 +1,15 @@
-/* User-clicked read-only diagnosis. Never reads query input values, cookies, storage,
- * full HTML, or arbitrary URLs, and never transmits diagnostics to a server. */
-function inspectWorkPage() {
+/* Shared read-only diagnosis/result probe. Never reads input values, cookies or
+ * storage. Manual diagnosis exposes counts only. The authenticated dispatcher
+ * may receive one strictly validated DOM record URL for navigation, never HTML. */
+function inspectWorkPage(command) {
+  const probing=command?.action==='wos_read_results';
+  const fail=message=>probing?{ok:false,error:'[WOS 已暂停] '+message}:{error:message};
   const u=new URL(location.href);
   const wos=["https://www.webofscience.com","https://webofscience.clarivate.cn"].includes(u.origin) && u.pathname.startsWith("/wos/");
   const admin=["http:","https:"].includes(u.protocol) && u.hostname==="admin.ir.lib.sjtu.edu.cn";
-  if((!wos && !admin) || u.username || u.password)return {error:"非工作网站"};
+  if((!wos && !admin) || u.username || u.password)return fail('非工作网站');
+  if(probing&&(!wos||!u.pathname.startsWith('/wos/woscc/')))return fail('请在 WOS 核心合集的文献页面操作');
+  if(probing&&(!Number.isFinite(command.expires)||Date.now()>=command.expires-12000))return fail('WOS 只读检查已超时，未重复检索');
   const visible=el=>el.getClientRects().length>0&&getComputedStyle(el).visibility!=="hidden";
   const text=String(document.body?.innerText||"");
   const normal=s=>String(s||"").replace(/\s+/g," ").trim().slice(0,120);
@@ -40,22 +45,99 @@ function inspectWorkPage() {
     in_navigation:!!el.closest('nav,header,footer,aside,[role="navigation"],[role="banner"]'),
     in_form:!!el.closest('form'),form_associated:!!el.form,
     disabled:!!el.disabled||el.getAttribute('aria-disabled')==='true'}));
-  const recordLinks=[...document.querySelectorAll('a[href]')].filter(visible).filter(anchor=>{
-    try {const link=new URL(anchor.href,location.href);return link.origin===u.origin&&
-      !/%(?:2f|5c)/i.test(link.pathname)&&
-      /^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodeURIComponent(link.pathname));}
-    catch{return false;}
-  });
-  const noResult=/(?:no (?:results?|records?|documents?) (?:were )?found|your search (?:did not (?:return|find) any|returned no) results?|您的?(?:检索|搜索|檢索|搜尋)(?:未找到|没有找到|沒有找到|未檢索到)(?:任何)?(?:结果|結果)|未找到(?:任何)?(?:结果|結果)|没有(?:检索|搜索)结果|沒有(?:檢索|搜尋)結果)/i.test(text);
-  const busy=[...document.querySelectorAll('[aria-busy="true"],[role="progressbar"],mat-spinner,mat-progress-bar,.mat-mdc-progress-spinner')].some(visible);
-  return {site:u.hostname,path:u.pathname,route:u.hash.split("?")[0],
+  // Production navigation and user diagnosis now use this exact same reader,
+  // not two copies that can disagree after page or extension changes.
+  const renderedLink=el=>{
+    if(el.closest('[hidden],[inert],[aria-hidden="true"]'))return false;
+    const style=getComputedStyle(el);
+    if(style.display==='none'||style.visibility==='hidden'||style.visibility==='collapse')return false;
+    if(el.getClientRects().length)return true;
+    return style.display==='contents'&&[...el.querySelectorAll('*')].some(child=>
+      !child.closest('[hidden],[inert],[aria-hidden="true"]')&&visible(child));
+  };
+  const recordLinks=new Set(),encodedLinks=new Set(),contentsLinks=new Set(),routerLinks=new Set();
+  const linkControls=document.querySelectorAll('a[href],a[routerlink],a[ng-reflect-router-link],[role="link"][routerlink],[role="link"][ng-reflect-router-link]');
+  for(const anchor of linkControls){
+    if(!renderedLink(anchor))continue;
+    for(const attr of ['href','routerlink','ng-reflect-router-link']){
+      const value=anchor.getAttribute(attr);
+      if(!value)continue;
+      try{
+        const link=new URL(value,location.href);
+        if(link.origin!==u.origin||link.username||link.password||/%(?:2f|5c)/i.test(link.pathname))continue;
+        const path=decodeURIComponent(link.pathname);
+        if(!/^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(path))continue;
+        const key=path.replace(/\/$/,'');
+        recordLinks.add(key);
+        if(/%3a/i.test(link.pathname))encodedLinks.add(key);
+        if(!anchor.getClientRects().length)contentsLinks.add(key);
+        if(attr!=='href')routerLinks.add(key);
+      }catch{}
+    }
+  }
+  const summary=/^\/wos\/woscc\/summary\//.test(u.pathname),totals=new Set();
+  if(wos&&summary){
+    const unit='(?:results?|records?|documents?|(?:条|個|个|篇)?\\s*(?:结果|結果|记录|紀錄|文献|文獻))';
+    const number='(?:\\d{1,3}(?:[,.]\\d{3})+|\\d{1,6})';
+    const exact=new RegExp('^('+number+')\\s*'+unit+'$','i');
+    const add=match=>{if(match)totals.add(Number(match[1].replace(/[,.]/g,'')));};
+    for(const el of [...document.querySelectorAll('h1,h2,h3,[role="heading"],[role="tab"]')].filter(renderedLink)){
+      if(!el.closest('article,form,a[href*="full-record"],[hidden],[inert],[aria-hidden="true"]'))add(normal(String(el.innerText||'').normalize('NFKC')).match(exact));
+    }
+    if(!totals.size&&document.body){
+      const unitOnly=new RegExp('^'+unit+'$','i');
+      const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+      for(let node=walker.nextNode();node;node=walker.nextNode()){
+        const label=normal(String(node.nodeValue||'').normalize('NFKC'));
+        if(!exact.test(label)&&!unitOnly.test(label))continue;
+        let el=node.parentElement;
+        for(let depth=0;el&&depth<3;depth++,el=el.parentElement){
+          if(el.closest('article,form,a,[role="link"],nav,aside,[hidden],[inert],[aria-hidden="true"]'))break;
+          if(renderedLink(el))add(normal(String(el.innerText||'').normalize('NFKC')).match(exact));
+        }
+      }
+    }
+  }
+  const noResult=/(?:your\s+search\s+found\s+no\s+results|no\s+(?:results?|records?|documents?)\s+(?:were\s+)?found|your\s+search\s+(?:did\s+not\s+(?:return|find)\s+any|returned\s+no)\s+results?|您的?\s*(?:检索|搜索|檢索|搜尋)\s*(?:未找到|没有找到|沒有找到|未檢索到)\s*(?:任何)?\s*(?:结果|結果)|未找到\s*(?:任何)?\s*(?:结果|結果)|没有\s*(?:检索|搜索)\s*结果|沒有\s*(?:檢索|搜尋)\s*結果)/i.test(text);
+  const busy=[...document.querySelectorAll('[aria-busy="true"],[role="progressbar"],mat-spinner,mat-progress-bar,.mat-mdc-progress-spinner')]
+    .some(el=>visible(el)&&!el.closest('[hidden],[inert],[aria-hidden="true"]'));
+  let recordRoute=false;
+  try{recordRoute=!/%(?:2f|5c)/i.test(u.pathname)&&/^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(decodeURIComponent(u.pathname));}catch{}
+  const data={site:u.hostname,path:u.pathname,route:u.hash.split("?")[0],
     wos_error:/Oops,?\s*something went wrong!?/i.test(text),
-    summary_route:/\/wos\/woscc\/summary\//.test(u.pathname),zero_result:noResult,busy,
-    canonical_record_link_count:recordLinks.length,
-    encoded_record_link_count:recordLinks.filter(anchor=>/%3a/i.test(new URL(anchor.href,location.href).pathname)).length,
+    summary_route:summary,record_route:recordRoute,
+    zero_result:noResult||(summary&&totals.size===1&&totals.has(0)&&!recordLinks.size&&!busy),busy,
+    result_total:totals.size===1?[...totals][0]:null,result_total_conflict:totals.size>1,
+    canonical_record_link_count:recordLinks.size,encoded_record_link_count:encodedLinks.size,
+    contents_record_link_count:contentsLinks.size,router_record_link_count:routerLinks.size,
     smart_search:/Smart Search|智能检索|智能搜索/i.test(text),
     fielded_search:/Fielded Search|字段检索|字段搜索/i.test(text),
     wos_import_button:/WOS\s*数据导入\s*[（(]\s*Txt\s*[）)]/i.test(text),
     controls,buttons,navigation,visible_button_count:buttonElements.length};
+  if(!probing)return data;
+  if(data.wos_error)return fail('WOS 网站报错：Oops, something went wrong! 请先恢复机构访问或检索页面');
+  if([...document.querySelectorAll('iframe[src*="captcha"],input[type="password"],#challenge-form')].some(visible))
+    return fail('登录或验证码需要人工处理');
+  if([...document.querySelectorAll('[role="dialog"],mat-dialog-container')].some(visible))
+    return fail('WOS 有弹窗，请人工处理');
+  const diagnostic={summary_route:summary,record_route:recordRoute,busy,
+    result_total:data.result_total,result_total_conflict:data.result_total_conflict,
+    canonical_record_link_count:recordLinks.size};
+  const result=(state,more={})=>({ok:true,data:{state,diagnostic,...more}});
+  if(recordRoute){
+    const ut=decodeURIComponent(u.pathname).match(/WOS:\d{15}/)[0];
+    if(command.wos&&command.wos!==ut)return fail('WOS 页面入藏号与名单不一致');
+    const exports=[...document.querySelectorAll('button,[role="button"],a')].filter(el=>
+      visible(el)&&['Export','导出'].includes(cleanText(el)||normal(el.getAttribute('aria-label'))));
+    diagnostic.export_action_count=exports.length;
+    return busy||exports.length!==1?result('loading'):result('record',{record_url:u.origin+u.pathname});
+  }
+  if(noResult)return result('zero');
+  if(!summary||busy)return result('loading');
+  if([...totals].some(count=>count>1)||recordLinks.size>1)return result('multiple');
+  if(data.zero_result)return result('zero');
+  if(!data.result_total_conflict&&data.result_total===1&&recordLinks.size===1)
+    return result('single',{navigate_url:u.origin+[...recordLinks][0]});
+  return result('loading');
 }
 if(typeof module!=="undefined")module.exports={inspectWorkPage};

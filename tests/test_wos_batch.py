@@ -8,7 +8,7 @@ from automation import ImportStore
 from core import Record, SafetyStop
 from submission_prepare import matches_paper
 from tests.test_automation import sample
-from wos_batch import (all_targets, disconnected_outcome, export, plan, roster_rows,
+from wos_batch import (all_targets, disconnected_outcome, export, plan, preflight, roster_rows,
                        safe_name, skipped_roster_rows, skipped_targets, wos_targets)
 
 
@@ -138,6 +138,34 @@ class PlanTests(unittest.TestCase):
             plan(FakeRoster())
 
 
+class PreflightTests(unittest.TestCase):
+    def test_running_capabilities_are_checked_before_search(self):
+        bridge=Mock(call=Mock(return_value={'extension_version':'0.3.27','wos_download_protocol':1,
+                    'result_reader':'shared-diagnostic','read_results_world':'ISOLATED'}))
+        self.assertEqual(preflight(bridge),{'extension_version':'0.3.27'})
+        bridge.call.assert_called_once_with('wos_diagnose',{},timeout=15)
+
+    def test_old_or_incompatible_extension_fails_without_a_search(self):
+        results=({}, {'extension_version':'0.3.26','wos_download_protocol':1,
+                      'result_reader':'other','read_results_world':'ISOLATED'},
+                 {'extension_version':'0.3.27','wos_download_protocol':True,
+                  'result_reader':'shared-diagnostic','read_results_world':'ISOLATED'})
+        for result in results:
+            bridge=Mock(call=Mock(return_value=result))
+            with self.assertRaisesRegex(SafetyStop,'重载'):
+                preflight(bridge)
+            self.assertEqual(bridge.call.call_count,1)
+        bridge=Mock(call=Mock(side_effect=SafetyStop('[扩展 0.3.25] 未知 WOS 调度命令')))
+        with self.assertRaisesRegex(SafetyStop,'仍是旧版本'):
+            preflight(bridge)
+        self.assertEqual(bridge.call.call_count,1)
+
+    def test_genuine_connection_failure_is_not_hidden_as_a_version_problem(self):
+        bridge=Mock(call=Mock(side_effect=SafetyStop('浏览器未连接')))
+        with self.assertRaisesRegex(SafetyStop,'浏览器未连接'):
+            preflight(bridge)
+
+
 class ExportTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -222,6 +250,29 @@ class ExportTests(unittest.TestCase):
         self.assertGreater(calls, 0)
         export(targets, bridge, store, self.inbox)
         self.assertEqual(bridge.call.call_count, calls)
+
+    def test_progress_reports_each_stage_before_waiting_for_the_browser(self):
+        updates=[]
+        bridge=self.bridge_for(sample())
+        original=bridge.call.side_effect
+        def call(action,payload,timeout=75):
+            self.assertIn('第 1/1 篇',updates[-1])
+            self.assertIn('原表第 2 行',updates[-1])
+            self.assertIn('检索并核验' if action=='wos_search' else '导出完整记录',updates[-1])
+            self.assertIn(f'{timeout} 秒',updates[-1])
+            return original(action,payload,timeout)
+        bridge.call.side_effect=call
+        store=ImportStore(self.root/'downloads')
+        result=export(self.selected(),bridge,store,self.inbox,progress=updates.append)
+        self.assertEqual(len(result['exported']),1)
+        self.assertTrue(any('核验下载文件' in update for update in updates))
+        self.assertIn('TXT 已保存',updates[-1])
+        calls=bridge.call.call_count
+        updates.clear()
+        export(self.selected(),bridge,store,self.inbox,progress=updates.append)
+        self.assertEqual(bridge.call.call_count,calls)
+        self.assertTrue(any('复用已保存' in update for update in updates))
+        self.assertFalse(any('本步最多' in update for update in updates))
 
     def test_download_does_not_require_sjtu_affiliation_or_call_import(self):
         bridge=self.bridge_for(sample(C1='Another University'))

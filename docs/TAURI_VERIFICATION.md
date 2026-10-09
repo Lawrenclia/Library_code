@@ -2,6 +2,8 @@
 
 更新：2026-10-09。规范依据原始 PPT 与 [TAURI_REBUILD_GOAL.md](TAURI_REBUILD_GOAL.md)。本记录区分已验证代码、隔离模拟和真实平台；模拟页面通过不代表真实机构会话验收通过。
 
+发布前合入 Lawrenclia/Library_code 主分支的 5 个 WOS 修复提交。合并后 Python 全部 379 项测试通过，WOS 检索控件 42 项和结果 DOM 62 项通过；实际扩展下载在两个 WOS 域名的隔离页面验证。正式桌面安装包重新构建成功，原生完整导入及独立进程重启测试重新通过，最新证据目录见下文。内置浏览器不依赖扩展的配对协议；外置浏览器继续检查实际扩展版本和只读结果接口。
+
 ## 当前版本
 
 Vue 前端采用 MIT 许可的 shadcn-vue 官方组件，组件下载来源、哈希与许可证保存在 `desktop/licenses`。已有任务、核验、来源、平台操作、AI、模板与设置页面统一进入桌面工作台；侧栏、卡片、表格、标签页和确认窗口使用实际组件。
@@ -39,9 +41,9 @@ Vue 前端采用 MIT 许可的 shadcn-vue 官方组件，组件下载来源、�
 | 旧扩展链路 | `tests/extension.test.cjs` 20 个隔离场景通过；测试管道显式 UTF-8，注入丢失的轮询/确认响应后页面仍只执行一次；合成 WOS TXT、一次上传/导入/推送与回读通过，不访问真实平台 |
 | 安装包 | NSIS 成功生成；安装资源包含 shadcn-vue MIT 许可与开源来源说明 |
 
-最新原生证据位于 `runtime/tauri-smoke/5b5648cd-7954-49b5-8f2a-8cf999a52cde/native-smoke.json`，同目录保留原始下载、归档、SQLite、`native-report.xlsx` 与 `native-import-receipts.json`（原生页面收到的上传、导入表单及推送设置，各一次）。这些为本地合成论文，不是实际业务论文。测试专用回环来源覆盖只在 `smoke-test` 编译功能中启用，生产版本没有此入口。本库检索的合成证据另存 `fixture_source`，明确其本地测试来源。
+最新原生证据位于 `runtime/tauri-smoke/1414ba8a-6da9-41aa-b083-82f750602252/native-smoke.json`，同目录保留原始下载、归档、SQLite、`native-report.xlsx` 与 `native-import-receipts.json`（原生页面收到的上传、导入表单及推送设置，各一次）。这些为本地合成论文，不是实际业务论文。测试专用回环来源覆盖只在 `smoke-test` 编译功能中启用，生产版本没有此入口。本库检索的合成证据另存 `fixture_source`，明确其本地测试来源。
 
-完整进程重启证据：`runtime/tauri-smoke/9cb4e57b-c21c-484e-b4b4-c982ce945a4c/restart-acceptance.json`，同目录的 `restart-boundary-submit.json`、`restart-boundary-push.json` 保存强制结束前的实际持久化意图及模拟服务器收到的表单，`restart-verify.json` 保存新进程批次回读后的工作台状态，`restart-report.xlsx` 保存完整来源。上传窗口丢失样本位于 `runtime/tauri-smoke/7c1351d7-ee89-4ce4-97b2-8463c81d3baf`，保留 `restart-boundary-upload.json` 和 `restart-upload-readback.json`。测试恢复时重新解析实际归档并对照原执行载荷的完整 Candidate/哈希；不会用后来改变的任务文件替代原提交。所有原生测试根目录固定在 `runtime/tauri-smoke` 下；恢复只接受 UUID，不接受外部目录路径，且这些入口仅在测试编译中存在。
+完整进程重启证据：`runtime/tauri-smoke/88d8b9c4-14c5-4cd1-8d4c-6ced56ef224c/restart-acceptance.json`，同目录的 `restart-boundary-submit.json`、`restart-boundary-push.json` 保存强制结束前的实际持久化意图及模拟服务器收到的表单，`restart-verify.json` 保存新进程批次回读后的工作台状态，`restart-report.xlsx` 保存完整来源。上传窗口丢失样本位于 `runtime/tauri-smoke/07304b74-8aa0-40c8-9c6f-caddf3921e03`，保留 `restart-boundary-upload.json` 和 `restart-upload-readback.json`。测试恢复时重新解析实际归档并对照原执行载荷的完整 Candidate/哈希；不会用后来改变的任务文件替代原提交。所有原生测试根目录固定在 `runtime/tauri-smoke` 下；恢复只接受 UUID，不接受外部目录路径，且这些入口仅在测试编译中存在。
 
 已用独立 Excel XML 读取器复核 `restart-report.xlsx`：4 份完整 `import_verified` 来源对应批次状态 1/1/2/2，其中 2 份保留强制结束前的原意图；完整文本哈希、原候选哈希、真实收到的上传字节和 SA 说明一致。验收记录中的 5 个应用进程 ID 各不相同，模拟服务器上传/导入/推送计数各为 1。
 

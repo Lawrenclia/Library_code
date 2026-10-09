@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import tkinter as tk
 import unittest
 from dataclasses import replace
@@ -110,6 +111,8 @@ class UnifiedTests(unittest.TestCase):
             job()
 
         with patch.object(self.app,'run',side_effect=run), \
+             patch('app.BASE',Path(self.tmp.name)), \
+             patch('wos_batch.preflight',return_value={'extension_version':'0.3.27'}), \
              patch('wos_batch.export',side_effect=download), \
              patch('wos_batch.default_store',side_effect=lambda: __import__('automation').ImportStore(Path(self.tmp.name)/'downloads')), \
              patch('wos_batch.default_inbox',return_value=Path(self.tmp.name)/'inbox'):
@@ -136,9 +139,162 @@ class UnifiedTests(unittest.TestCase):
         self.assertTrue(targets)
         self.assertTrue(all(record.owner==owner and record.skipped and not record.done
                             and record.matches==0 for record in targets))
-        self.assertIn('搜索跳过项',label)
+        self.assertIn('重试跳过论文',label)
         self.assertEqual(rows,sum(record.owner==owner and record.skipped and not record.done
                                   and record.matches==0 for record in self.app.roster.records))
+
+    def test_selected_download_keeps_exact_paper_owner_and_completion_guards(self):
+        base=replace(self.app.roster.records[0],matches=0,doi='10.1234/synthetic',done=False)
+        self.app.classifier.owner.set(base.owner)
+        before=file_hash(self.path)
+        for skipped in (False,True):
+            with self.subTest(skipped=skipped):
+                first=replace(base,skipped=skipped)
+                duplicate=replace(first,row=7,sa_id='same-paper-copy')
+                self.app.roster.records=[
+                    replace(first,row=3,sa_id='another-owner',owner='Other'),
+                    replace(first,row=4,sa_id='already-done',done=True),
+                    replace(first,row=5,sa_id='matched',matches=1),
+                    first,duplicate,
+                    replace(first,row=8,sa_id='different-paper',title='Different paper')]
+                item={'rows':[record.row for record in self.app.roster.records],
+                      'title':first.title,'doi':first.doi}
+                with patch.object(self.app,'_wos_export_ready',return_value={}) as ready, \
+                     patch.object(self.app,'_start_wos_export') as start:
+                    self.app.export_selected_wos_metadata(item)
+                ready.assert_called_once_with(base.owner)
+                self.assertEqual(start.call_count,1)
+                self.assertEqual(start.call_args.args[0],[first])
+                self.assertIn('试下载所选论文 TXT',start.call_args.args[1])
+                self.assertEqual(start.call_args.kwargs['rows'],2)
+                self.assertEqual(self.app.last_wos_scope,'skipped' if skipped else 'pending')
+                with patch.object(self.app,'_wos_export_ready',return_value={}), \
+                     patch.object(self.app,'_start_wos_export') as start, \
+                     patch('app.messagebox.showinfo'):
+                    self.app.export_selected_wos_metadata({**item,'title':'Stale title'})
+                start.assert_not_called()
+        self.assertEqual(file_hash(self.path),before)
+
+    def test_incompatible_extension_prevents_batch_search_and_file_operations(self):
+        from core import SafetyStop
+        record=self.app.roster.records[0]
+        jobs=[]
+        before=file_hash(self.path)
+        with patch.object(self.app,'run',side_effect=lambda job,*args,**kwargs:jobs.append(job)), \
+             patch('wos_batch.preflight',side_effect=SafetyStop('插件下载接口不兼容')), \
+             patch('wos_batch.export') as download, patch('wos_batch.default_store') as store:
+            self.app._start_wos_export([record],'fixture download')
+            with self.assertRaisesRegex(SafetyStop,'插件下载接口不兼容'):
+                jobs[0]()
+        download.assert_not_called()
+        store.assert_not_called()
+        self.assertEqual(file_hash(self.path),before)
+        self.app.classifier.set_exporting(False)
+
+    def test_worker_download_progress_reaches_its_page_and_finishes_cleanly(self):
+        from automation import ImportStore
+        record=self.app.roster.records[0]
+        jobs=[]
+        self.app.classifier.bar['value']=40
+        def hold(job,callback,status,**kwargs):
+            self.app.set_busy(True)
+            jobs.append((job,callback))
+        def download(*args,**kwargs):
+            kwargs['progress']('WOS TXT · 第 1/1 篇 · 检索并核验唯一文献')
+            return {'exported':[],'unconfirmed':[],'remaining':0,'not_exported':1,'session_failures':0}
+        values=[]
+        with patch.object(self.app,'run',side_effect=hold), \
+             patch('wos_batch.preflight',return_value={'extension_version':'0.3.27'}), \
+             patch('wos_batch.export',side_effect=download), \
+             patch('wos_batch.default_store',return_value=ImportStore(Path(self.tmp.name)/'downloads')), \
+             patch('wos_batch.default_inbox',return_value=Path(self.tmp.name)/'inbox'), \
+             patch('wos_reports.save_download_report',return_value=Path(self.tmp.name)/'report.md'), \
+             patch('app.messagebox.showinfo'):
+            self.app._start_wos_export([record],'fixture download')
+            job,callback=jobs[0]
+            worker=threading.Thread(target=lambda:values.append(job()))
+            worker.start()
+            worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+            self.app.classifier.poll()
+            self.assertIn('第 1/1 篇',self.app.classifier.status.get())
+            self.assertIn('检索并核验',self.app.classifier.status.get())
+            self.assertTrue(self.app.busy)
+            self.app.events.put((True,callback,values[0],'fixture download',record.sa_id))
+            self.root.after_cancel(self.app.pump_id)
+            self.app.pump()
+        self.app.classifier.poll()
+        self.assertIn('下载已结束',self.app.classifier.status.get())
+        self.assertIn('无可用记录 1 篇',self.app.classifier.status.get())
+        self.assertFalse(self.app.busy)
+        self.assertFalse(self.app.classifier.exporting)
+        self.assertEqual(float(self.app.classifier.bar['value']),40)
+
+    def test_download_worker_failure_stops_animation_and_keeps_error_on_download_page(self):
+        from core import SafetyStop
+        self.app.classifier.bar['value']=25
+        self.app.classifier.set_exporting(True)
+        self.app.set_busy(True)
+        generation=self.app.classifier.export_generation
+        self.app.classifier.queue.put(('download_progress',(generation,'旧进度',0)))
+        self.app.events.put((False,lambda value:None,SafetyStop('浏览器未连接'),
+                            'fixture download',''))
+        with patch('app.messagebox.showwarning'):
+            self.root.after_cancel(self.app.pump_id)
+            self.app.pump()
+        self.app.classifier.poll()
+        self.assertIn('下载已暂停',self.app.classifier.status.get())
+        self.assertIn('浏览器未连接',self.app.classifier.status.get())
+        self.assertFalse(self.app.busy)
+        self.assertFalse(self.app.classifier.exporting)
+        self.assertEqual(str(self.app.classifier.bar['mode']),'determinate')
+        self.assertEqual(float(self.app.classifier.bar['value']),25)
+
+    def test_download_report_and_skipped_file_handoff_reach_import_preview(self):
+        from openpyxl import load_workbook
+        from core import HEADERS
+        from automation import ImportStore, parse_wos
+        from tests.test_automation import sample
+        folder = Path(self.tmp.name)
+        book = load_workbook(self.path)
+        for key, value in {'owner': '谭勋策', 'title': 'Synthetic paper', 'doi': '10.1234/test',
+                           'wos': '', 'matches': 0, 'item_ids': ''}.items():
+            book.active.cell(2, 2 + list(HEADERS).index(key)).value = value
+        book.active.cell(2, 1).value = 2
+        book.save(self.path)
+        book.close()
+        self.app.loaded(read_roster(self.path))
+        record = self.app.roster.records[0]
+        self.app.automation_panel.runtime = folder / 'imports'
+        inbox = folder / 'inbox'
+        inbox.mkdir()
+        exported = inbox / 'paper.txt'
+        exported.write_bytes(sample())
+        result = {'total': 1, 'exported': [{'sa_id': record.sa_id, 'row': record.row, 'title': record.title,
+                  'file': str(exported), 'sha256': parse_wos(sample())['sha256']}], 'failed': {},
+                  'unconfirmed': [], 'inbox': str(inbox), 'attempted': 1, 'remaining': 0}
+        def sync(job, callback, status, **kwargs):
+            self.app.set_busy(True)
+            try:
+                value = job()
+            finally:
+                self.app.set_busy(False)
+            callback(value)
+        with patch.object(self.app, 'run', side_effect=sync), patch('app.BASE', folder), \
+             patch('wos_batch.preflight',return_value={'extension_version':'0.3.27'}), \
+             patch('app.messagebox.showinfo'), patch('wos_batch.export', return_value=result), \
+             patch('wos_batch.default_inbox', return_value=inbox), \
+             patch('wos_batch.default_store', return_value=ImportStore(folder / 'downloads')):
+            self.app._start_wos_export([record], 'synthetic download', rows=1)
+        panel = self.app.wos_import_panel
+        self.assertEqual(panel.plan.scope, 'skipped')
+        self.assertEqual(panel.plan.items[0].record.sa_id, record.sa_id)
+        self.assertEqual(panel.plan.items[0].status, 'ready')
+        self.assertTrue(Path(panel.download_report).is_file())
+        self.assertEqual(self.app.tabs.select(), str(self.app.wos_import_page))
+        self.assertTrue(self.app.roster.records[0].skipped)
+        self.assertFalse(self.app.roster.records[0].done)
+        self.assertIsNone(panel.store().get(record), 'preview must not create an import intent')
 
     def test_integrated_layout_controls_within_window(self):
         self.root.deiconify()

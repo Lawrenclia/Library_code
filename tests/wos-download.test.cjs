@@ -7,6 +7,7 @@ const path=require('node:path');
 const vm=require('node:vm');
 const {chromium}=require('playwright');
 const {runWOSCommand}=require('../extension/wos-adapter.js');
+const {inspectWorkPage}=require('../extension/page-diagnostics.js');
 
 (async()=>{
   const edge='C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
@@ -35,7 +36,7 @@ const {runWOSCommand}=require('../extension/wos-adapter.js');
   },scripting:{executeScript:async({func,args})=>[{result:await page.evaluate(func,args[0])}]},
   downloads:{onCreated:{addListener:fn=>listeners.add(fn),removeListener:fn=>listeners.delete(fn)},
     search:async({id})=>[downloads.get(id)]}};
-  const sandbox=vm.createContext({chrome,URL,Date,setTimeout,runWOSCommand});
+  const sandbox=vm.createContext({chrome,URL,Date,setTimeout,runWOSCommand,inspectWorkPage});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/workflow-background.js'),'utf8'),sandbox);
   const pair={tabId:1,wosTabId:1,mode:'wos'};
   const call=(action,extra={})=>sandbox.dispatchWorkflow({action,sa_id:'download-test',title:'Synthetic paper',

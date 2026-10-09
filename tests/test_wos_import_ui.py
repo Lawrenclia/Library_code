@@ -48,9 +48,14 @@ class ImportUITests(unittest.TestCase):
         self.app.bridge = self.bridge
         self.runner = patch.object(self.app, "run", side_effect=self.run_sync)
         self.runner.start()
+        from automation import ImportStore
+        self.downloads = ImportStore(self.folder / 'downloads')
+        self.download_store_patch = patch('wos_batch.default_store', return_value=self.downloads)
+        self.download_store_patch.start()
 
     def tearDown(self):
         self.runner.stop()
+        self.download_store_patch.stop()
         self.app.set_busy(False)
         self.root.update_idletasks()
         self.app.close()
@@ -79,7 +84,7 @@ class ImportUITests(unittest.TestCase):
         self.assertFalse(self.app.busy)
         self.assertFalse(self.panel.reviewed.get())
         self.panel.preview()
-        self.assertEqual(self.panel.plan.items[0].status, "pushed")
+        self.assertEqual(self.panel.plan.excluded[0].status, "pushed")
         self.assertEqual(sum(a == "import_submit" for a, _ in self.bridge.calls), 1)
 
     def test_no_consent_or_cancel_sends_no_commands(self):
@@ -122,3 +127,96 @@ class ImportUITests(unittest.TestCase):
         self.app.set_busy(False)
         self.assertFalse(self.panel.running)
         self.assertEqual(str(self.panel.stop_button["state"]), "disabled")
+
+    def test_download_handoff_preserves_skip_scope_without_browser_actions(self):
+        from wos_import_panel import SCOPES
+        with patch('wos_batch.default_inbox', return_value=self.inbox):
+            self.panel.receive_downloads('谭勋策', 'skipped')
+        self.assertEqual(self.app.owner.get(), '谭勋策')
+        self.assertEqual(SCOPES[self.panel.scope.get()], 'skipped')
+        self.assertEqual(self.panel.inbox.get(), str(self.inbox))
+        self.assertEqual(self.bridge.calls, [])
+        self.assertIsNone(self.panel.plan)
+
+    def test_scope_change_invalidates_plan_and_consent(self):
+        self.panel.preview()
+        self.panel.reviewed.set(True)
+        self.panel.scope.set('已跳过论文（备注为 2）')
+        self.assertIsNone(self.panel.plan)
+        self.assertFalse(self.panel.reviewed.get())
+        self.assertEqual(self.panel.entries, {})
+
+    def test_download_button_only_downloads_and_never_imports(self):
+        self.app.next_record()
+        original = self.bridge.call
+        def call(action, payload, timeout=75):
+            if action == 'status':
+                return original('search', payload, timeout)
+            if action == 'wos_search':
+                self.bridge.calls.append((action, payload['sa_id']))
+                return {}
+            if action == 'wos_export':
+                self.bridge.calls.append((action, payload['sa_id']))
+                return {'sa_id': payload['sa_id'], 'path': str(self.file)}
+            return original(action, payload, timeout)
+        self.bridge.call = call
+        self.app.automation_panel.start(current_wos=True)
+        actions = [a for a, _ in self.bridge.calls]
+        self.assertIn('wos_export', actions)
+        self.assertNotIn('wos_search', actions)
+        self.assertFalse(any(a.startswith('import_') for a in actions))
+        self.assertEqual(self.panel.store().get(self.app.current)['phase'], 'exported')
+
+    def test_strong_identity_still_requires_approval_to_import(self):
+        self.app.next_record()
+        from automation import WOSFlow
+        WOSFlow(self.bridge, self.panel.store()).prepare_file(self.app.current, self.file)
+        with patch('automation_panel.messagebox.askyesno', return_value=False) as confirm:
+            self.app.automation_panel.resume()
+        confirm.assert_called_once()
+        self.assertEqual([action for action, _ in self.bridge.calls], ['status', 'search'])
+
+    def test_single_import_after_approval_reaches_verified_push(self):
+        self.app.next_record()
+        from automation import WOSFlow
+        record = self.app.current
+        WOSFlow(self.bridge, self.panel.store()).prepare_file(record, self.file)
+        with patch('automation_panel.messagebox.askyesno', return_value=True) as confirm:
+            self.app.automation_panel.resume()
+        confirm.assert_called_once()
+        actions = [action for action, _ in self.bridge.calls]
+        self.assertEqual(actions[:2], ['status', 'search'])
+        for action in ('import_upload', 'import_submit', 'import_push'):
+            self.assertEqual(actions.count(action), 1)
+        self.assertEqual(self.panel.store().get(record)['phase'], 'pushed')
+        self.assertFalse(read_roster(self.path).records[0].done)
+
+    def test_single_review_without_selection_does_not_reuse_an_old_record(self):
+        self.app.next_record()
+        selected_tab = self.app.tabs.select()
+        with patch('wos_import_panel.messagebox.showinfo') as notice:
+            self.panel.open_single()
+        notice.assert_called_once()
+        self.assertEqual(self.app.tabs.select(), selected_tab)
+        self.assertEqual(self.bridge.calls, [])
+
+    def test_weak_archived_download_can_be_loaded_without_download_or_upload(self):
+        from automation import parse_wos
+        book = load_workbook(self.path)
+        book.active.cell(2, 2 + list(HEADERS).index('doi')).value = None
+        book.save(self.path)
+        book.close()
+        self.file.unlink()
+        self.app.loaded(read_roster(self.path))
+        record = self.app.roster.records[0]
+        self.downloads.archive(sample())
+        self.downloads.save(record, {'phase': 'downloaded', 'candidate': parse_wos(sample()), 'identity_confirmed': False})
+        self.panel.preview()
+        self.assertEqual(self.panel.plan.items, ())
+        self.assertEqual(self.panel.plan.excluded[0].status, 'deferred')
+        self.panel.tree.selection_set(record.sa_id)
+        self.panel.open_single()
+        state = self.panel.store().get(record)
+        self.assertEqual(state['phase'], 'exported')
+        self.assertFalse(state['identity_confirmed'])
+        self.assertEqual(self.bridge.calls, [])

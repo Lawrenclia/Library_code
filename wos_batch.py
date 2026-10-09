@@ -51,6 +51,25 @@ def disconnected_outcome(message):
     return any(marker in text for marker in DISCONNECTED_OUTCOMES)
 
 
+def preflight(bridge):
+    """Read extension capabilities before sending any Search or export click."""
+    try:
+        result=bridge.call('wos_diagnose',{},timeout=15)
+    except SafetyStop as exc:
+        if '未知 WOS 调度命令' in str(exc):
+            raise SafetyStop('当前运行的插件仍是旧版本。请在 Edge 扩展管理页重载到 0.3.27 或更新版本，'
+                             '刷新 WOS 页并重新连接；本轮未提交检索或下载。') from exc
+        raise
+    if (not isinstance(result,dict) or type(result.get('wos_download_protocol')) is not int
+            or result.get('wos_download_protocol')!=1
+            or result.get('result_reader')!='shared-diagnostic'
+            or result.get('read_results_world')!='ISOLATED'
+            or not re.fullmatch(r'\d+\.\d+\.\d+',str(result.get('extension_version','')))):
+        raise SafetyStop('插件下载接口不兼容。请重载 0.3.27 或更新版本、刷新 WOS 页并重新连接；'
+                         '本轮未提交检索或下载。')
+    return {'extension_version':result['extension_version']}
+
+
 def wos_targets(roster, classification, papers, owner=None):
     """Zero-match, unfinished records whose saved classification recommends WOS."""
     channel = {}
@@ -137,10 +156,11 @@ class WOSDownload:
     def __init__(self,bridge,store,unchanged,stop,audit):
         self.bridge,self.store,self.unchanged,self.stop,self.audit=bridge,store,unchanged,stop,audit
 
-    def prepare(self,record):
+    def prepare(self,record,progress=lambda text: None):
         self.unchanged()
         cached=self.store.get(record)
         if cached:
+            progress('复用已保存的 TXT；不重复检索或下载')
             return cached
         query={'sa_id':record.sa_id,'title':record.title,'doi':doi(record.doi),'wos':wos(record.wos)}
         result=None
@@ -148,12 +168,16 @@ class WOSDownload:
             if self.stop is not None and self.stop.is_set():
                 raise SafetyStop('已暂停下载。')
             self.unchanged()
-            result=self.bridge.call(action,query,timeout=120 if action == 'wos_search' else 75)
+            timeout=120 if action == 'wos_search' else 75
+            progress('检索并核验唯一文献（本步最多 120 秒，不重复检索）' if action == 'wos_search'
+                     else '导出完整记录并等待 TXT（本步最多 75 秒）')
+            result=self.bridge.call(action,query,timeout=timeout)
             if action == 'wos_search':
                 if not result.get('record_url'):
                     raise SafetyStop('检索未返回目标记录地址，未开始下载。请更新扩展后重新连接。')
                 query={**query,'expected_record_url':result['record_url']}
             self.audit(action,'已执行',record.sa_id)
+        progress('核验下载文件的题名、DOI 和 WOS 号')
         path=Path(result.get('path',''))
         if result.get('record_url') and result['record_url']!=query['expected_record_url']:
             raise SafetyStop('导出记录地址与检索目标不一致，未采纳下载文件。')
@@ -204,11 +228,12 @@ def export(targets, bridge, store, inbox,
         if stop is not None and stop.is_set():
             progress(f'WOS 导出已暂停：已成功 {len(exported)} 条。')
             break
-        progress(f'WOS 导出：已处理 {index}/{len(targets)}；原表第 {record.row} 行')
+        prefix=f'WOS TXT · 第 {index+1}/{len(targets)} 篇 · 原表第 {record.row} 行'
+        progress(prefix+' · 准备检索')
         attempted += 1
         try:
             # prepare() is idempotent: an already archived export is reused, not re-downloaded.
-            state = flow.prepare(record)
+            state = flow.prepare(record,progress=lambda text: progress(prefix+' · '+text))
             raw = store.bytes(state)
         except SafetyStop as exc:
             message = str(exc)
@@ -238,6 +263,7 @@ def export(targets, bridge, store, inbox,
         exported.append({'sa_id': record.sa_id, 'row': record.row, 'title': record.title,
                          'doi': record.doi, 'file': str(target), 'sha256': sha,
                          'source':state.get('source',{})})
+        progress(prefix+f' · TXT 已保存；本批已核验 {len(exported)} 篇')
         checkpoint()
     return checkpoint()
 

@@ -36,7 +36,7 @@ bind('pair', async () => {
   if (!token) { $('token').focus(); throw new Error('请先粘贴桌面助手提供的配对码。'); }
   await send('pair',{token});
   $('token').value = '';
-  $('status').textContent = '配对成功。WOS 下载请回桌面点击“下载 WOS 元数据”，并保持工作页打开。';
+  $('status').textContent = '配对成功。WOS 下载请回桌面点击“下载待补论文 TXT（WOS）”，并保持工作页打开。';
   await refreshStatus();
 });
 $('token').addEventListener('keydown', event => {
@@ -51,7 +51,7 @@ bind('refresh',refreshStatus);
 for (const [id,role] of [['wos','wosTabId'],['import','importTabId']]) {
   bind(id, async () => {
     await send('bind_workflow',{role});
-    $('status').textContent = '工作页已绑定。保持标签页打开，回桌面继续。';
+    $('status').textContent = role === 'wosTabId' ? '工作页已绑定，用于 WOS 检索。保持标签页打开，回桌面继续。' : '工作页已绑定，用于 TXT 入库。保持标签页打开，回桌面继续。';
     await refreshStatus();
   });
 }

@@ -5,6 +5,7 @@ import os
 from copy import deepcopy
 import queue
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
@@ -35,6 +36,8 @@ class App:
         self.submission_panel = None
         self.settings_panel = None
         self.wos_import_panel = None
+        self.last_wos_scope = "pending"
+        self.last_wos_owner = ""
         self.closing = False
         self.journal = journal or Journal(BASE / "runtime" / "progress.sqlite3")
         self.operation_log = operation_log or OperationLog(BASE / "log.txt")
@@ -103,7 +106,9 @@ class App:
                                    on_busy=self.set_busy,on_review=self.review_classified,
                                    on_export=self.export_wos_metadata,on_settings=self.open_settings,
                                    on_export_skipped=self.export_skipped_wos_metadata,
-                                   on_browser=self.open_internal_browser)
+                                   on_browser=self.open_internal_browser,
+                                   on_export_selected=self.export_selected_wos_metadata,
+                                   on_import=self.open_wos_import)
         from submission_panel import SubmissionPanel
         self.submission_page=ttk.Frame(self.tabs,padding=20)
         self.tabs.add(self.submission_page,text='零匹配提交准备')
@@ -116,6 +121,17 @@ class App:
         self.settings_panel.refresh()
         self.tabs.select(self.settings_page)
         self.settings_panel.entry.focus_set()
+
+    def open_wos_import(self):
+        if self.busy or not self.wos_import_panel:
+            return
+        owner = self.classifier.owner.get().strip() if self.classifier else self.owner.get().strip()
+        if not owner:
+            messagebox.showinfo("请选择负责人", "请选择负责人。", parent=self.root)
+            return
+        scope = self.last_wos_scope if self.last_wos_owner == owner else "pending"
+        self.wos_import_panel.receive_downloads(owner, scope)
+        self.tabs.select(self.wos_import_page)
 
     def refresh_workspace(self,_event=None):
         if self.classifier and str(self.tabs.select())==str(self.classification_page):
@@ -199,42 +215,85 @@ class App:
         """Search every zero-match record in the roster and export its WOS Full Record.
 
         Every WOS export is download-only. Upload, import and push write to the
-        production library and stay single-record with confirmation on the other page.
+        production library through the separately reviewed import queue.
         """
         owner=self.classifier.owner.get().strip() if self.classifier else ''
         if self._wos_export_ready(owner) is None:
             return
+        self.last_wos_owner, self.last_wos_scope = owner, "pending"
         from wos_batch import all_targets, roster_rows
         rows=len(roster_rows(self.roster,owner))
-        self._start_wos_export(all_targets(self.roster,owner),f'下载 WOS 元数据·{owner}',rows=rows)
+        self._start_wos_export(all_targets(self.roster,owner),f'下载待补论文 TXT（WOS）·{owner}',rows=rows)
 
     def export_skipped_wos_metadata(self):
         """Search only numeric-2 rows without changing their persistent skip marker."""
         owner=self.classifier.owner.get().strip() if self.classifier else ''
         if self._wos_export_ready(owner) is None:
             return
+        self.last_wos_owner, self.last_wos_scope = owner, "skipped"
         from wos_batch import skipped_roster_rows, skipped_targets
         rows=len(skipped_roster_rows(self.roster,owner))
-        self._start_wos_export(skipped_targets(self.roster,owner),f'搜索跳过项·{owner}',rows=rows)
+        self._start_wos_export(skipped_targets(self.roster,owner),f'重试跳过论文（WOS）·{owner}',rows=rows)
+
+    def export_selected_wos_metadata(self,item):
+        """Download one exact roster paper, independent of the batch scope."""
+        owner=self.classifier.owner.get().strip()
+        if self._wos_export_ready(owner) is None:
+            return
+        title=str(item.get('title') or '').strip()
+        doi=str(item.get('doi') or '').strip()
+        rows=[record for record in self.roster.records if record.owner==owner and not record.done
+              and record.matches==0 and record.row in item.get('rows',[])
+              and record.title.strip()==title and record.doi.strip()==doi]
+        if not rows:
+            messagebox.showinfo('此篇不能下载','所选论文没有对应的未完成、零匹配名单记录；请核对负责人并重读名单。',parent=self.root)
+            return
+        record=rows[0]
+        self.last_wos_owner,self.last_wos_scope=owner,'skipped' if record.skipped else 'pending'
+        self._start_wos_export([record],f'试下载所选论文 TXT·{owner}',rows=len(rows))
 
     def _start_wos_export(self, targets, label, rows=None):
         if not targets:
             messagebox.showinfo('没有待导出的记录',
-                '按当前范围没有可导出的记录（已导出的条目会直接复用本地存档）。',parent=self.root)
+                '当前负责人在所选范围内没有未完成的零匹配论文。\n'
+                '备注为 2 的论文请点“重试跳过论文（WOS）”。已有 TXT 可点“检查 TXT 并导入”。',parent=self.root)
             return
         from wos_batch import default_inbox, export as export_batch
         roster=self.roster
         bridge=self.wos_browser()
-        report=self.automation_panel.progress.put
+        self.classifier.set_exporting(True)
+        generation=self.classifier.export_generation
+        def report(message):
+            # Workers only enqueue; Tk variables are updated by the UI's polls.
+            # Keep the manual page informed, and also update the page that owns
+            # the download button instead of leaving it on a static AI percentage.
+            self.automation_panel.progress.put(message)
+            self.classifier.queue.put(('download_progress',(generation,message,time.monotonic())))
         total=len(targets)
         scope=(f'名单 {rows} 条记录，同一篇论文合并为 {total} 份文件' if rows and rows!=total
                else f'名单范围 {total} 条')
+        def audit(action, outcome, sa_id):
+            try:
+                self.operation_log.record(action, outcome, sa_id)
+            except Exception:
+                report('log.txt 保存失败；本轮完整结果仍将单独保存，请检查文件权限。')
         def job():
-            from wos_batch import default_store
+            from wos_batch import default_store, preflight
+            from internal_browser import InternalBrowser
+            if isinstance(bridge, InternalBrowser):
+                if not bridge.online:
+                    raise RuntimeError('内置浏览器尚未连接，请打开 WOS 工作页后继续。')
+                connection={'browser_backend':'internal'}
+                report(f'使用内置 WOS 浏览器；准备下载 {total} 篇')
+            else:
+                report('正在确认浏览器插件版本和下载接口（最多 15 秒）')
+                connection=preflight(bridge)
+                report(f'已连接插件 {connection["extension_version"]}；准备下载 {total} 篇')
             store=default_store()
             result=export_batch(targets,bridge,store,default_inbox(),
                                 stop=self.classifier.stop,unchanged=roster.assert_unchanged,
-                                progress=report)
+                                progress=report, audit=audit)
+            result.update(connection)
             # Provenance is recorded only for files that passed the existing strong
             # identity check and were actually copied into the intake directory.
             # Zero results, ambiguous results and archived weak matches stay blank.
@@ -258,6 +317,13 @@ class App:
                             result['classification_rebind_error']=str(exc)
                 except Exception as exc:
                     result['source_error']=str(exc)
+            try:
+                from wos_reports import save_download_report
+                result['report_path'] = str(save_download_report(
+                    result, targets[0].owner, 'skipped' if targets[0].skipped else 'pending',
+                    BASE / 'runtime' / 'wos-reports'))
+            except Exception:
+                result['report_error'] = '完整结果报告保存失败，请检查 runtime 目录的写入权限。'
             return result
         def done(result):
             detail=''
@@ -281,44 +347,35 @@ class App:
             if result.get('classification_rebind_error'):
                 detail+=('\n\n数据来源已写入；旧分类结果索引刷新失败，请重新打开分类页：'
                          +result['classification_rebind_error'])
-            if result.get('unconfirmed'):
-                shown=result['unconfirmed'][:5]
-                detail+=('\n\n身份未获强匹配（未放入待收目录，需人工核验）：\n'
-                         +'\n'.join(f'· 原表第 {v["row"]} 行：{v["title"][:40]}' for v in shown))
-                if len(result['unconfirmed'])>len(shown):
-                    detail+=f'\n…共 {len(result["unconfirmed"])} 条。'
-                detail+='\n请先核对 runtime/wos-downloads 中的原始文件，再用于提交准备。'
-            if result['failed']:
-                listed=[v for v in result['failed'].values() if v['per_record']]
-                broken=[v for v in result['failed'].values() if not v['per_record']]
-                if listed:
-                    detail+='\n\nWOS 没有可用记录（需人工核对正确题名）：\n'+'\n'.join(
-                        f'· 原表第 {v["row"]} 行：{v["error"]}' for v in listed[:8])
-                    if len(listed)>8:
-                        detail+=f'\n…共 {len(listed)} 条，其余见运行日志。'
-                if broken:
-                    detail+='\n\n页面或会话问题（不是某一篇的问题）：\n'+'\n'.join(
-                        f'· 原表第 {v["row"]} 行：{v["error"]}' for v in broken[:5])
-                    if len(broken)>5:
-                        detail+=f'\n…共 {len(broken)} 条。'
+            if result.get('report_path'):
+                self.wos_import_panel.download_report = result['report_path']
+                detail += '\n\n每篇的结果和文件位置已完整保存：\n' + result['report_path']
+            if result.get('exported'):
+                detail += '\n\n成功文件保存目录：\n' + str(default_inbox())
+            if result.get('report_error'):
+                detail += '\n\n' + result['report_error']
             if result.get('disconnected'):
                 detail+=(f'\n\n浏览器会话已不可继续（断连、回传超时或旧命令仍占用），整批已经停止；剩余 '
                          f'{result.get("remaining",0)} 条尚未执行。检查当前网页，重新连接并绑定 WOS 页后再继续。')
-            next_step = ('下一步：在“零匹配提交准备”页点“开始 / 继续准备”采纳这些文件；'
-                         '上传、导入与推送仍需在“自动化 / 认领”页逐条确认执行。'
-                         if result['exported'] else
-                         '本轮没有成功下载的文件。请先查看下面的失败原因；如提示检索入口问题，'
-                         '请在 WOS 页点击扩展“检查工作页”取得诊断，再处理下载。')
+            outcome='已暂停' if result.get('stopped') else '已结束'
+            self.classifier.status.set(
+                f'WOS 下载{outcome} · 已核验 TXT {len(result["exported"])} 篇 · '
+                f'待核验 {len(result.get("unconfirmed",[]))} 篇 · '
+                f'无可用记录 {result.get("not_exported",0)} 篇 · '
+                f'页面/会话问题 {result.get("session_failures",0)} 篇 · '
+                f'未执行 {result.get("remaining",0)} 篇')
             messagebox.showinfo(f'{label}结束',
-                f'{scope}，成功 {len(result["exported"])} 条，'
-                f'身份待核验 {len(result.get("unconfirmed",[]))} 条，'
-                f'WOS 无可用记录 {result.get("not_exported",0)} 条，'
-                f'页面/会话问题 {result.get("session_failures",0)} 条。\n\n'
-                f'成功文件保存位置（成功 0 条时本轮未新增文件）：\n{result["inbox"]}\n'
-                f'逐条结果报告：{result.get("report", "")}\n\n'
-                + next_step + '\n\n“WOS 无可用记录”包含检索无结果与无法确定唯一目标两种情况，'
-                '需要人工核对正确题名；程序不会随意选择第一篇。'+detail,parent=self.root)
-        self.classifier.set_exporting(True)
+                f'{scope}\n\n可核验入库 {len(result["exported"])} 篇 · 身份待核验 {len(result.get("unconfirmed",[]))} 篇\n'
+                f'WOS 无可用记录 {result.get("not_exported",0)} 篇 · 页面/会话问题 {result.get("session_failures",0)} 篇\n'
+                f'尚未执行 {result.get("remaining",0)} 篇\n\n'
+                '下一步：在“WOS 导入”检查 TXT，核实本库缺失后上传入库。\n'
+                '身份待核验项也会列出，可点“核验所选论文”。\n'
+                '下载不会入库，也不会把 Excel 标为完成。'+detail,parent=self.root)
+            from pilot import OWNER
+            if targets[0].owner == OWNER and (result.get('exported') or result.get('unconfirmed')):
+                self.wos_import_panel.receive_downloads(targets[0].owner, 'skipped' if targets[0].skipped else 'pending')
+                self.tabs.select(self.wos_import_page)
+                self.wos_import_panel.preview()
         self.run(job,done,f'正在{label}…共 {total} 条',log_action=label)
 
     def button(self, parent, text, command, **kwargs):
@@ -556,6 +613,7 @@ class App:
         try:
             while True:
                 success, callback, value, action, sa_id = self.events.get_nowait()
+                downloading=bool(self.classifier and self.classifier.exporting)
                 self.set_busy(False)
                 try:
                     if not success:
@@ -565,6 +623,8 @@ class App:
                     self.clear_browser_state()
                     self.reviewed.set(False)
                     self.status.set("已暂停，请按提示处理；不自动重试。")
+                    if downloading:
+                        self.classifier.status.set('WOS 下载已暂停：'+str(exc)+'；未自动重试。')
                     messagebox.showwarning("等待人工处理", str(exc), parent=self.root)
                     self.note_operation(action, "已暂停", sa_id)
                 else:

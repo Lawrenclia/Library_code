@@ -383,8 +383,10 @@ class UITests(unittest.TestCase):
             'instructions': 'SA补充-demo-001', 'batch': None}
         flow = Mock()
         with patch.object(panel, 'engine', return_value=flow), \
+             patch('automation_panel.messagebox.askyesno') as approval, \
              patch.object(self.app, 'run', side_effect=self.sync_run):
             panel.resume()
+        approval.assert_not_called()
         browser.call.assert_called_once_with('status', {'sa_id': 'demo-001'})
         flow.proceed.assert_not_called()
         self.assertTrue(read_roster(self.path).records[0].done)
