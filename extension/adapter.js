@@ -2,6 +2,9 @@
  * dataCompare component and its own UI methods; no tokens, axios, crypto, arbitrary
  * URLs, or generic API endpoints are exposed to the desktop process. */
 async function runSACommand(command) {
+  // executeScript's object argument transport can drop nested null properties.
+  // A JSON string preserves the complete original metadata and its field types.
+  if (typeof command === "string") command = JSON.parse(command);
   let submitted = false;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const stop = message => { throw new Error(message); };
@@ -297,6 +300,7 @@ async function runSACommand(command) {
     }
     if (["prepare_claim", "submit_claim", "verify_claim"].includes(command.action)) {
       const submitting = command.action === "submit_claim";
+      const verifying = command.action === "verify_claim";
       if (submitting && command.confirmed !== true) stop("缺少本条作者认领的人工确认");
       if (row.markStatus !== "待处理") stop("该记录已处理，不自动认领");
       const ids = String(row.itemId || "").replace(/^,/, "").split(",").filter(Boolean);
@@ -343,24 +347,56 @@ async function runSACommand(command) {
       });
       const authors = authorsSnapshot();
       if (new Set(authors.map(author => String(author.order))).size !== authors.length) stop("作者序号重复，不能自动认领");
-      if (command.action === "verify_claim") {
+      const verifyAuthors = (original, person, after) => {
+        const intended = original?.authors?.find(author => author.index === command.author_index);
+        if (!intended || !intended.id || original.item_id !== ids[0] || original.staff_id !== staffId || original.person?.wno !== staffId ||
+            !equal(original.person, person) || !Array.isArray(original.authors) || after.length !== original.authors.length)
+          stop("缺少上次认领的精确身份，或原学者身份发生变化");
+        for (const old of original.authors) {
+          const current = after.find(author => author.index === old.index);
+          if (!current) stop("原作者行缺失，不能确认认领结果");
+          if (old.index !== intended.index) {
+            if (!equal(old, current)) stop("其他作者或认领关系变化，保留结果待确认");
+          } else {
+            const normalized = {...current, scholarId: old.scholarId, relations: old.relations};
+            const other = relations => relations.filter(r => r.scholarId !== person.id);
+            if (current.id !== intended.id || current.scholarId !== person.id || !equal(normalized, old) ||
+                !equal(other(current.relations), other(old.relations)) ||
+                current.relations.filter(r => r.scholarId === person.id).some(r => r.status < 6))
+              stop("原作者 ID、署名或认领关系不一致，保留结果待确认");
+          }
+        }
+        if (after.filter(author => author.scholarId === person.id).length !== 1)
+          stop("学者认领了多个作者，不能确认本次结果");
+        if (!original.metadata || !equal(original.metadata.author?.map(a => ({id:a.id,fullname:a.fullname,order:a.order})),
+            claim.tableData.metadata.author.map(a => ({id:a.id,fullname:a.fullname,order:a.order}))))
+          stop("完整原始作者身份或顺序发生变化");
+        const actual = JSON.parse(JSON.stringify(claim.tableData.metadata));
+        const source = original.metadata.author[intended.index];
+        const current = actual.author[intended.index];
+        if (source.scholarId == null) {
+          if (Object.prototype.hasOwnProperty.call(source, 'scholarId')) current.scholarId = source.scholarId;
+          else delete current.scholarId;
+        } else current.scholarId = source.scholarId;
+        if (!equal(actual, original.metadata)) stop("出版信息、角色或单位等其他元数据变化，保留结果待确认");
+      };
+      if (verifying) {
         const original = command.prepared;
         const intended = original?.authors?.find(author => author.index === command.author_index);
-        if (!intended || original.item_id !== ids[0] || original.staff_id !== staffId || original.person?.wno !== staffId)
+        if (!intended || !intended.id || original.item_id !== ids[0] || original.staff_id !== staffId || original.person?.wno !== staffId)
           stop("缺少上次认领的精确目标，不能仅凭列表状态确认");
-        const confirmed = authors.filter(author => String(author.order) === String(intended.order) &&
+        const confirmed = authors.filter(author => author.id === intended.id && String(author.order) === String(intended.order) &&
           author.fullname === intended.fullname && author.scholarId === original.person.id);
         if (confirmed.length !== 1 || authors.filter(author => author.scholarId === original.person.id).length !== 1)
           stop("尚未回读到上次提交的作者与学者关系，保留结果待确认");
-        return {ok:true,data:{verified:true,claimed:true,staff_id:staffId,scholar_id:original.person.id,author:intended.fullname}};
       }
       if (claim.tableData.metadata.author.some(author => author.data)) stop("已有未提交的学者选择，请人工核对");
       const available = authors.filter(author => author.eligible && !author.scholarId);
-      if (!available.length) stop("没有可认领的作者行，请人工核验现有认领");
+      if (!available.length && !verifying) stop("没有可认领的作者行，请人工核验现有认领");
       // Selecting a row here only opens the search dialog. No scholar is bound
       // until the second, explicitly confirmed command revalidates everything.
-      const target = submitting ? authors.find(author => author.index === command.author_index) : available[0];
-      if (!target || !target.eligible || target.scholarId) stop("所选作者不可认领或已有认领，不能覆盖");
+      const target = submitting || verifying ? authors.find(author => author.index === command.author_index) : available[0];
+      if (!target || !target.id || !target.eligible || (!verifying && target.scholarId)) stop("所选作者不可认领或已有认领，不能覆盖");
       claim.handleSelect(target.index, claim.index, claim.tableData.metadata.author[target.index]);
       await vm.$nextTick();
       const modal = claim.$refs?.authorModal;
@@ -414,11 +450,22 @@ async function runSACommand(command) {
         .filter(name => typeof name === "string" && name.trim()).map(name => name.trim());
       const name = person.nameCn || person.nameEn;
       if (typeof name !== "string" || !name.trim()) stop("人员姓名为空");
-      if (authors.some(author => author.scholarId === person.id || author.relations.some(r => r.scholarId === person.id && r.status >= 6)))
+      if (!verifying && authors.some(author => author.scholarId === person.id || author.relations.some(r => r.scholarId === person.id && r.status >= 6)))
         stop("该人员已存在认领关系，请人工核验，不重复提交");
       if (JSON.stringify(authorsSnapshot()) !== JSON.stringify(authors)) stop("查找期间作者数据发生变化");
       const prepared = {item_id: ids[0], staff_id: staffId, sa_text: saText,
-        person: {id: person.id, wno: person.wno, name, names: [...new Set(names)]}, authors};
+        person: {id: person.id, wno: person.wno, name, names: [...new Set(names)]}, authors,
+        metadata: JSON.parse(JSON.stringify(claim.tableData.metadata))};
+      if (verifying) {
+        modal.dialogModalVisible = false;
+        await vm.$nextTick();
+        await waitForPickerClose();
+        const after = authorsSnapshot();
+        verifyAuthors(command.prepared, prepared.person, after);
+        claim.__saAssistant = command.sa_id;
+        return {ok:true,data:{verified:true,claimed:true,staff_id:staffId,scholar_id:person.id,
+          author:target.fullname,author_id:target.id,order:target.order,authors:after,metadata:prepared.metadata,person:prepared.person,item_id:ids[0]}};
+      }
       if (!submitting) {
         modal.dialogModalVisible = false;
         await vm.$nextTick();
@@ -455,11 +502,13 @@ async function runSACommand(command) {
       const confirmed = after.filter(author => author.order === target.order && author.fullname === target.fullname && author.scholarId === person.id);
       if (confirmed.length !== 1 || after.filter(author => author.scholarId === person.id).length !== 1)
         stop("认领结果未匹配目标作者与学者，需人工核验");
+      verifyAuthors(prepared, prepared.person, after);
       // Only a verified write may restore ownership, allowing a subsequent
       // read-only search to close this clean drawer. Uncertain writes stay open.
       claim.__saAssistant = command.sa_id;
       return {ok: true, data: {row: before, claimed: true, verified: true,
-        staff_id: staffId, scholar_id: person.id, author: target.fullname, order: target.order}};
+        staff_id: staffId, scholar_id: person.id, author: target.fullname, order: target.order,
+        author_id:target.id,authors:after,metadata:JSON.parse(JSON.stringify(claim.tableData.metadata)),person:prepared.person,item_id:ids[0]}};
     }
     if (["open_metadata", "open_claim"].includes(command.action)) {
       const ids = String(row.itemId || "").replace(/^,/, "").split(",").filter(Boolean);

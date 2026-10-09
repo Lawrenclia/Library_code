@@ -120,7 +120,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (workflowRole(command.action)) result = await dispatchWorkflow(command, pair);
         else {
           const outcomes = await chrome.scripting.executeScript({target: {tabId: pair.tabId},
-            world: "MAIN", func: runSACommand, args: [command]});
+            world: "MAIN", func: runSACommand, args: [JSON.stringify(command)]});
           result = outcomes[0]?.result || {ok: false, error: "页面没有返回执行结果"};
         }
       } catch (error) { result = {ok: false, error: error.message}; }

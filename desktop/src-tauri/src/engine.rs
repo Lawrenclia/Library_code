@@ -16,6 +16,17 @@ pub struct Engine {
     pub pause: Arc<AtomicBool>,
 }
 impl Engine {
+    fn record_claim(task: &mut Task, payload: &Value, result: &Value, live: &Value) -> Result<()> {
+        claim::assert_result(task, payload, result, live)?;
+        task.evidence.push(Evidence {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: "claim_verified".into(),
+            source: "机构库 SA、学者与完整原作者认领回读".into(),
+            text: json!({"payload":payload,"result":result,"sa_after":live}).to_string(),
+            created: now(),
+        });
+        Ok(())
+    }
     fn record_alias(task: &mut Task, payload: &Value, result: &Value, live: &Value) -> Result<()> {
         alias::assert_result(task, payload, result, live)?;
         task.evidence.push(Evidence {
@@ -951,6 +962,7 @@ impl Engine {
             let saved: Value = serde_json::from_str(attempts[0]["data"].as_str().unwrap_or("{}"))?;
             let payload = &saved["payload"];
             let d = self.read_sa(app, &mut t).await?;
+            let mut verification = d.clone();
             let next = match action {
                 "complete"
                     if d["row"]["markStatus"] == "已处理"
@@ -969,18 +981,16 @@ impl Engine {
                     serde_json::from_value(payload["previous_stage"].clone())?
                 }
                 "submit_claim" => {
+                    claim::assert_plan(&t, payload, &d)?;
                     let mut verify = payload.clone();
                     verify["expected"] = d["row"].clone();
                     let result = self
                         .browser
                         .execute(app, "sa", "verify_claim", verify, 65)
                         .await?;
-                    if result["verified"] != true {
-                        return Err(Failure::new(
-                            "REMOTE_RESULT_UNKNOWN",
-                            "尚未回读到认领成功。",
-                        ));
-                    }
+                    let after = self.read_sa(app, &mut t).await?;
+                    Self::record_claim(&mut t, payload, &result, &after)?;
+                    verification = json!({"payload":payload,"result":result,"sa_after":after});
                     Stage::Claimed
                 }
                 _ => {
@@ -999,13 +1009,19 @@ impl Engine {
             self.store.verify_attempt(
                 &mut t,
                 attempts[0]["id"].as_str().unwrap_or(""),
-                d.clone(),
+                verification,
                 "sa_operation_verified",
             )?;
             self.changed(app);
             return Ok(d);
         }
         if action == "open_metadata" || action == "open_claim" || action == "prepare_claim" {
+            if action == "prepare_claim" && matches!(t.stage, Stage::Unknown | Stage::Completed) {
+                return Err(Failure::new(
+                    "INVALID_TRANSITION",
+                    "先核验上次认领，或任务已完成。",
+                ));
+            }
             let d = self.read_sa(app, &mut t).await?;
             let mut payload = json!({"sa_id":id,"expected":d["row"]});
             if action == "prepare_claim" {
@@ -1030,6 +1046,8 @@ impl Engine {
             if action == "prepare_claim" {
                 // A name match is a candidate, not confirmation of the author row.
                 result["suggested_index"] = serde_json::Value::Null;
+                result["input_hash"] = t.input_hash.clone().into();
+                result["record_fingerprint"] = t.record.fingerprint().into();
                 self.store
                     .set_setting(&format!("claim:{id}"), result.clone())?;
             }
@@ -1558,18 +1576,8 @@ impl Engine {
                 let index = extra["author_index"]
                     .as_u64()
                     .ok_or_else(|| Failure::new("REVIEW_REQUIRED", "请选择已核对的作者行。"))?;
-                if !prepared["prepared"]["authors"]
-                    .as_array()
-                    .map(|rows| {
-                        rows.iter().any(|a| {
-                            a["index"] == index && a["eligible"] == true && a["scholarId"] == ""
-                        })
-                    })
-                    .unwrap_or(false)
-                {
-                    return Err(Failure::new("REVIEW_REQUIRED", "所选作者不可认领。"));
-                }
-                let p = json!({"sa_id":id,"confirmed":true,"expected":prepared["row"],"sa_text":prepared["prepared"]["sa_text"],"staff_id":prepared["prepared"]["staff_id"],"roster_staff_id":t.record.staff_id,"author_index":index,"prepared":prepared["prepared"]});
+                let live = self.read_sa(app, &mut t).await?;
+                let p = claim::payload(&t, &live, &prepared, index)?;
                 ("sa", p, Stage::Claimed)
             }
             _ => return Err(Failure::new("INVALID_ACTION", "未知业务操作。")),
@@ -1688,6 +1696,26 @@ impl Engine {
                             "unknown",
                             d,
                             "result_unknown",
+                        )?;
+                        self.changed(app);
+                        return Err(error);
+                    }
+                }
+                if action == "submit_claim" {
+                    let checked = match self.read_sa(app, &mut t).await {
+                        Ok(live) => Self::record_claim(&mut t, &audit, &d, &live),
+                        Err(error) => Err(error),
+                    };
+                    if let Err(error) = checked {
+                        t.stage = Stage::Unknown;
+                        t.running = false;
+                        t.last_error = Some(error.clone());
+                        self.store.finish_attempt(
+                            &mut t,
+                            &attempt,
+                            "unknown",
+                            d,
+                            "claim_unconfirmed",
                         )?;
                         self.changed(app);
                         return Err(error);

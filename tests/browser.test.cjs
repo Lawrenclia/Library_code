@@ -586,6 +586,35 @@ else if (fs.existsSync(windowsEdge)) launchOptions.executablePath = windowsEdge;
     assert.equal(await page.evaluate(()=>writeCount),1);
     assert.equal(await page.evaluate(()=>synthetic.markStatus),'待处理');
   });
+  const recoverClaim=p=>execute(command('verify_claim',{expected:p.data.row,sa_text:p.data.prepared.sa_text,
+    staff_id:p.data.prepared.staff_id,roster_staff_id:'00001',prepared:p.data.prepared,author_index:0}));
+  test('read-only claim recovery returns original ID and complete metadata without submitting',async()=>{
+    const p=await prepare();await page.evaluate(()=>claimedUsers[1]='scholar-001');const result=await recoverClaim(p);
+    assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.data.author_id,'author-1');
+    assert.equal(result.data.authors.length,2);assert.equal(result.data.metadata.author[0].scholarId,'scholar-001');
+    assert.equal(await page.evaluate(()=>writeCount),0);
+    assert.equal((await execute(command('search'))).ok,true,'Verified clean recovery drawer can close for fresh SA read');
+  });
+  test('same order and name with replaced author ID cannot recover a claim',async()=>{
+    const p=await prepare();await page.evaluate(()=>{claimedUsers[1]='scholar-001';testConfig.authors=[{id:'replacement',order:1,fullname:'Demo',scholarId:null,institutionOrderNums:[]},{id:'author-2',order:2,fullname:'Coauthor',scholarId:null,institutionOrderNums:[]}];});
+    const r=await recoverClaim(p);assert.equal(r.ok,false);assert.match(r.error,/作者与学者关系/);assert.equal(await page.evaluate(()=>writeCount),0);
+  });
+  test('unrelated author and raw role metadata changes refuse recovery',async()=>{
+    for(const roleOnly of [false,true]){
+      await reset();await page.evaluate(()=>testConfig.authors=[{id:'author-1',order:1,fullname:'Demo',scholarId:null,institutionOrderNums:[],correspondent:false},{id:'author-2',order:2,fullname:'Coauthor',scholarId:null,institutionOrderNums:[]}]);
+      const p=await prepare();await page.evaluate(flag=>{claimedUsers[1]='scholar-001';if(flag)testConfig.authors[0].correspondent=true;else testConfig.authors[1].fullname='Changed';},roleOnly);
+      const r=await recoverClaim(p);assert.equal(r.ok,false);assert.match(r.error,roleOnly?/其他元数据变化/:/其他作者/);assert.equal(await page.evaluate(()=>writeCount),0);
+    }
+  });
+  test('claim recovery queries fresh full staff identity and refuses changed person name',async()=>{
+    const p=await prepare();await page.evaluate(()=>{claimedUsers[1]='scholar-001';testConfig.people=[{id:'scholar-001',wno:'00001',nameCn:'Changed',nameEn:'Tester',aliases:[{nameAlias:'Demo'}]}];});
+    const r=await recoverClaim(p);assert.equal(r.ok,false);assert.match(r.error,/学者身份发生变化/);assert.equal(await page.evaluate(()=>writeCount),0);
+  });
+  test('uncommitted original claim and a denied relation stay unconfirmed without resubmitting',async()=>{
+    const p=await prepare();assert.equal((await recoverClaim(p)).ok,false);
+    await reset();const original=await prepare();await page.evaluate(()=>{claimedUsers[1]='scholar-001';testConfig.relations={'1':[{scholarId:'scholar-001',status:2}]};});
+    assert.equal((await recoverClaim(original)).ok,false);assert.equal(await page.evaluate(()=>writeCount),0);
+  });
   test('claim tolerates its own closing selection-dialog animation',async()=>{
     await page.evaluate(()=>testConfig.peopleCloseDelay=220);
     const prepared=await prepare();

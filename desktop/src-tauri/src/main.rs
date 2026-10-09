@@ -4,6 +4,8 @@ mod ai;
 mod alias_smoke;
 mod browser;
 #[cfg(feature = "smoke-test")]
+mod claim_smoke;
+#[cfg(feature = "smoke-test")]
 mod download_smoke;
 mod engine;
 #[cfg(feature = "smoke-test")]

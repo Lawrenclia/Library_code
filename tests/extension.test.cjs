@@ -103,6 +103,8 @@ assert.ok(['https://www.webofscience.com','https://webofscience.clarivate.cn'].i
       sa_text:'测试员(00001)①',staff_id:'00001',roster_staff_id:'00001'});
     assert.equal(prepared.ok,true,JSON.stringify(prepared));
     assert.equal(prepared.data.prepared.person.wno,'00001');
+    assert.equal(Object.hasOwn(prepared.data.prepared.metadata.author[0],'scholarId'),true);
+    assert.equal(prepared.data.prepared.metadata.author[0].scholarId,null);
     assert.equal(await site.evaluate(()=>writeCount),0);
     console.log('PASS exact scholar lookup crosses the real extension without writing');
     const claimed=await invoke('submit_claim',{sa_id:'demo-001',expected:read.data.row,

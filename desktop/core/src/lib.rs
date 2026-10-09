@@ -1,5 +1,6 @@
 pub mod alias;
 pub mod catalog;
+pub mod claim;
 pub mod download;
 pub mod files;
 pub mod issues;
@@ -17,6 +18,8 @@ pub use model::*;
 pub use store::Store;
 #[cfg(test)]
 mod alias_tests;
+#[cfg(test)]
+mod claim_tests;
 #[cfg(test)]
 mod download_tests;
 #[cfg(test)]

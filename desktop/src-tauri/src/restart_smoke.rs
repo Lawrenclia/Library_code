@@ -8,7 +8,8 @@ use tauri::{AppHandle, Manager};
 
 const ID: &str = "restart-import";
 pub fn valid_phase(phase: &str) -> bool {
-    crate::alias_smoke::valid_phase(phase)
+    crate::claim_smoke::valid_phase(phase)
+        || crate::alias_smoke::valid_phase(phase)
         || crate::queue_smoke::valid_phase(phase)
         || crate::download_smoke::valid_phase(phase)
         || crate::metadata_smoke::valid_phase(phase)
@@ -173,6 +174,9 @@ async fn recover(app: &AppHandle, engine: &Engine, action: &str, expected: Stage
 pub async fn run(app: &AppHandle, phase: &str) -> Result<()> {
     let engine = app.state::<Engine>();
     let _lease = engine.acquire()?;
+    if crate::claim_smoke::valid_phase(phase) {
+        return crate::claim_smoke::run(app, &engine, phase).await;
+    }
     if crate::alias_smoke::valid_phase(phase) {
         return crate::alias_smoke::run(app, &engine, phase).await;
     }
