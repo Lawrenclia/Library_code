@@ -7,6 +7,27 @@ use std::path::{Path, PathBuf};
 pub struct Store {
     pub root: PathBuf,
 }
+fn validate_roster_records(records: &[Record]) -> Result<()> {
+    let mut ids = std::collections::BTreeMap::new();
+    for record in records {
+        if record.sa_id.trim().is_empty() {
+            return Err(Failure::new(
+                "INPUT_INVALID",
+                format!("原表第 {} 行缺少 SA ID，未导入名单。", record.row),
+            ));
+        }
+        if let Some(previous_row) = ids.insert(&record.sa_id, record.row) {
+            return Err(Failure::new(
+                "INPUT_INVALID",
+                format!(
+                    "重复 SA ID：{}，原表第 {}、{} 行；整批未导入。",
+                    record.sa_id, previous_row, record.row
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
 impl Store {
     pub fn new(root: impl AsRef<Path>) -> Result<Self> {
         let s = Self {
@@ -116,6 +137,9 @@ impl Store {
         hash: String,
         source_file: &str,
     ) -> Result<usize> {
+        // Every entry path (including legacy migration) must reject one ambiguous
+        // SA input before touching any persisted task, proposal or history.
+        validate_roster_records(&records)?;
         let mut db = self.connect()?;
         let tx = db.transaction()?;
         let count = records.len();
@@ -132,7 +156,11 @@ impl Store {
                     [&old.id],
                     |r| r.get(0),
                 )?;
-                if old.record.fingerprint() != record.fingerprint() || pending > 0 {
+                if old.record.fingerprint() != record.fingerprint()
+                    || old.record.mark != record.mark
+                    || old.record.done != record.done
+                    || pending > 0
+                {
                     let pending_data: Option<String> = tx
                         .query_row(
                             "SELECT data FROM pending_inputs WHERE task_id=?",
@@ -363,6 +391,7 @@ impl Store {
             .transpose()
     }
     pub fn apply_legacy(&self, plan: &crate::legacy::Plan) -> Result<Value> {
+        validate_roster_records(&plan.records)?;
         let mut db = self.connect()?;
         let tx = db.transaction()?;
         if tx.query_row(

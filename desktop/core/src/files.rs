@@ -123,13 +123,32 @@ pub fn read_roster(path: &Path) -> Result<(Vec<Record>, String)> {
         && labels.get(1).map(|s| s.as_str()) == Some("负责人")
     {
         Some(0)
-    } else {
+    } else if remark_cols.is_empty() {
         None
+    } else {
+        return Err(Failure::new(
+            "INPUT_INVALID",
+            "备注列不唯一，无法明确识别数字 1/2 的完成或跳过标记；请先核对表头。",
+        ));
     };
-    let source = labels.iter().position(|s| s == "数据来源");
-    let mut ids = HashSet::new();
+    let source_columns: Vec<_> = labels
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.as_str() == "数据来源")
+        .map(|(i, _)| i)
+        .collect();
+    if source_columns.len() > 1 {
+        return Err(Failure::new(
+            "INPUT_INVALID",
+            "重复数据来源表头，不能选择其中一列代替完整来源。",
+        ));
+    }
+    let source = source_columns.first().copied();
+    let mut ids = BTreeMap::new();
     let mut records = vec![];
+    let first_row = range.start().map(|p| p.0).unwrap_or(0);
     for (index, row) in range.rows().enumerate().skip(1) {
+        let row_number = first_row + index as u32 + 1;
         for column in [cols[1], cols[5], cols[7]] {
             let imprecise = match row.get(column) {
                 Some(Data::Float(v)) => !v.is_finite() || v.fract() != 0. || v.abs() >= 1e15,
@@ -141,8 +160,7 @@ pub fn read_roster(path: &Path) -> Result<(Vec<Record>, String)> {
                     "INPUT_INVALID",
                     format!(
                         "第 {} 行的 {} 为可能丢失精度的数字，请使用原始完整文本编号。",
-                        index + 1,
-                        labels[column]
+                        row_number, labels[column]
                     ),
                 ));
             }
@@ -159,25 +177,27 @@ pub fn read_roster(path: &Path) -> Result<(Vec<Record>, String)> {
             }
             return Err(Failure::new(
                 "INPUT_INVALID",
-                format!("第 {} 行缺少 SA ID。", index + 1),
+                format!("第 {row_number} 行缺少 SA ID。"),
             ));
         }
-        if !ids.insert(sa_id.clone()) {
+        if let Some(previous_row) = ids.insert(sa_id.clone(), row_number) {
             return Err(Failure::new(
                 "INPUT_INVALID",
-                format!("重复 SA ID：{sa_id}"),
+                format!(
+                    "重复 SA ID：{sa_id}，原表第 {previous_row}、{row_number} 行；未选择其中一条。"
+                ),
             ));
         }
         let matches = get(cols[6]).parse::<u32>().map_err(|_| {
             Failure::new(
                 "INPUT_INVALID",
-                format!("第 {} 行匹配数不是整数。", index + 1),
+                format!("第 {row_number} 行匹配数不是整数。"),
             )
         })?;
         if get(cols[0]).is_empty() || get(cols[2]).is_empty() {
             return Err(Failure::new(
                 "INPUT_INVALID",
-                format!("第 {} 行负责人或题名缺失。", index + 1),
+                format!("第 {row_number} 行负责人或题名缺失。"),
             ));
         }
         let workflow = remark.and_then(|i| row.get(i));
@@ -187,7 +207,7 @@ pub fn read_roster(path: &Path) -> Result<(Vec<Record>, String)> {
             _ => None,
         };
         records.push(Record {
-            row: (index + 1) as u32,
+            row: row_number,
             owner: get(cols[0]),
             sa_id,
             title: get(cols[2]),

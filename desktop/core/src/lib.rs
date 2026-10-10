@@ -60,6 +60,8 @@ mod metadata_tests;
 #[cfg(test)]
 mod queue_tests;
 #[cfg(test)]
+mod roster_tests;
+#[cfg(test)]
 mod sa_tests;
 #[cfg(test)]
 mod source_download_tests;
