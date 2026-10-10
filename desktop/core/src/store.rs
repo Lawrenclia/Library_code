@@ -159,6 +159,8 @@ impl Store {
                 if old.record.fingerprint() != record.fingerprint()
                     || old.record.mark != record.mark
                     || old.record.done != record.done
+                    || (old.batch_recheck.is_some()
+                        && (old.input_hash != hash || json!(old.record) != json!(record)))
                     || pending > 0
                 {
                     let pending_data: Option<String> = tx

@@ -48,6 +48,12 @@ export interface Task {
   };
   evidence: Evidence[];
   wos_searches?: WosSearchTrace[];
+  batch_recheck?: {
+    id: string;
+    original_input_hash: string;
+    original_stage: string;
+    created: number;
+  } | null;
   last_error: Failure | null;
   review: Review | null;
   classification: Record<string, unknown> | null;

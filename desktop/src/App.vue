@@ -1858,6 +1858,7 @@ function frameworkBrowser(role: string, entry?: string) {
                     :disabled="
                       locked ||
                       current.route !== 'missing' ||
+                      !!current.batch_recheck ||
                       !libraryCheckReady ||
                       !['ready', 'downloaded'].includes(current.stage)
                     "
@@ -1866,7 +1867,11 @@ function frameworkBrowser(role: string, entry?: string) {
                   ><Button
                     variant="outline"
                     size="sm"
-                    :disabled="locked || current.stage !== 'uploaded'"
+                    :disabled="
+                      locked ||
+                      !!current.batch_recheck ||
+                      current.stage !== 'uploaded'
+                    "
                     @click="step('import_submit', true)"
                     >2. 提交导入</Button
                   ><Button
@@ -1878,10 +1883,24 @@ function frameworkBrowser(role: string, entry?: string) {
                   ><Button
                     variant="outline"
                     size="sm"
-                    :disabled="locked || current.stage !== 'imported'"
+                    :disabled="
+                      locked ||
+                      !!current.batch_recheck ||
+                      current.stage !== 'imported'
+                    "
                     @click="step('import_push', true)"
                     >3. 按 PPT 设置推送</Button
                   >
+                  <p
+                    v-if="current.batch_recheck"
+                    class="my-2 rounded border border-amber-200 bg-amber-50/60 p-3 text-xs leading-6 dark:border-amber-900 dark:bg-amber-950/20"
+                  >
+                    本版本保留旧批次作为回读线索（原阶段：{{
+                      stageNames[current.batch_recheck.original_stage] ||
+                      current.batch_recheck.original_stage
+                    }}）。请先回读上传 / 导入 /
+                    推送结果；未采用旧版本的成功阶段，也不会重新上传。
+                  </p>
                   <details>
                     <summary>查看 PPT 推送规则</summary>
                     <p class="mt-2 text-xs leading-6">{{ workspace.policy }}</p>

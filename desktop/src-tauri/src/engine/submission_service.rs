@@ -43,10 +43,23 @@ impl Engine {
             .transpose()?;
         let original = original_payload.as_ref().unwrap_or(&common);
         let original_raw = files::read_import_archive(&t, original)?;
+        let batch_recheck = if t.batch_recheck.is_some() {
+            if !attempts.is_empty() {
+                return Err(Failure::new(
+                    "REMOTE_RESULT_UNKNOWN",
+                    "同时有待确认平台操作和旧版本批次，请先核对原意图。",
+                ));
+            }
+            Some(library_core::versions::validate_batch_recheck(&t)?)
+        } else {
+            None
+        };
         if attempts
             .first()
             .is_some_and(|a| a["action"] == "import_upload")
-            || (attempts.is_empty() && t.stage == Stage::Uploaded)
+            || (attempts.is_empty()
+                && (t.stage == Stage::Uploaded
+                    || batch_recheck.as_ref().is_some_and(|r| r.expects_upload())))
         {
             let checkpoint = t.batch.clone();
             let mut cmd = if let Some(attempt) = attempts.first() {
@@ -82,7 +95,9 @@ impl Engine {
                 .execute(app, "import", "import_check", cmd.clone(), 65)
                 .await?;
             files::read_import_archive(&t, original)?;
-            if result["uploaded"] == true {
+            if let Some(saved) = &batch_recheck {
+                library_core::versions::adopt_batch_recheck(&mut t, saved, &result, &cmd)?;
+            } else if result["uploaded"] == true {
                 validate_upload_readback(&result, &cmd, raw.len())?;
                 if checkpoint.as_ref().is_some_and(|previous| {
                     previous["uploaded"] == true && previous["dataset_id"] != result["dataset_id"]
@@ -138,7 +153,10 @@ impl Engine {
         cmd["expect_pushed"] = (attempts
             .first()
             .map(|a| a["action"] == "import_push")
-            .unwrap_or(t.stage == Stage::Pushed))
+            .unwrap_or(
+                t.stage == Stage::Pushed
+                    || batch_recheck.as_ref().is_some_and(|r| r.requires_push()),
+            ))
         .into();
         let require_push = cmd["expect_pushed"] == true;
         let d = self
@@ -152,8 +170,12 @@ impl Engine {
             ));
         }
         files::read_import_archive(&t, original)?;
-        t.stage = validate_import_readback(&d, &cmd, require_push)?;
-        t.batch = Some(d["batch"].clone());
+        if let Some(saved) = &batch_recheck {
+            library_core::versions::adopt_batch_recheck(&mut t, saved, &d, &cmd)?;
+        } else {
+            t.stage = validate_import_readback(&d, &cmd, require_push)?;
+            t.batch = Some(d["batch"].clone());
+        }
         t.running = false;
         t.last_error = None;
         t.evidence.push(Evidence {

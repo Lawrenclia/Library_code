@@ -409,6 +409,8 @@ pub struct Task {
     pub classification: Option<Value>,
     pub platform_id: String,
     pub batch: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_recheck: Option<crate::versions::BatchRecheck>,
     pub sa_snapshot: Option<Value>,
     #[serde(default)]
     pub merges: Vec<MergeRecord>,
@@ -461,6 +463,7 @@ impl Task {
             classification: None,
             platform_id: String::new(),
             batch: None,
+            batch_recheck: None,
             sa_snapshot: None,
             merges: vec![],
             issue_plan: None,
@@ -469,6 +472,12 @@ impl Task {
         }
     }
     pub fn import_ready(&self) -> Result<()> {
+        if self.batch_recheck.is_some() {
+            return Err(Failure::new(
+                "REMOTE_RESULT_UNKNOWN",
+                "本版本保留旧批次检查点，请先回读原上传、导入或推送结果；不能直接创建或推进批次。",
+            ));
+        }
         let review = self
             .review
             .as_ref()

@@ -16,6 +16,121 @@ pub struct Proposal {
     pub previous_version_id: Option<String>,
     pub created: u64,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BatchRecheck {
+    pub id: String,
+    pub sa_id: String,
+    pub input_hash: String,
+    pub record: Record,
+    pub original_input_hash: String,
+    pub original_record: Record,
+    pub original_revision: i64,
+    pub original_stage: Stage,
+    pub candidate: Candidate,
+    pub checkpoint: Value,
+    pub created: u64,
+}
+impl BatchRecheck {
+    pub fn expects_upload(&self) -> bool {
+        self.original_stage == Stage::Uploaded
+    }
+    pub fn requires_push(&self) -> bool {
+        matches!(
+            self.original_stage,
+            Stage::Pushed | Stage::Claimed | Stage::Completed
+        )
+    }
+}
+pub fn validate_batch_recheck(task: &Task) -> Result<BatchRecheck> {
+    let saved = task
+        .batch_recheck
+        .as_ref()
+        .ok_or_else(|| Failure::new("REMOTE_RESULT_UNKNOWN", "缺少本版本的旧批次检查点。"))?;
+    if !matches!(
+        task.stage,
+        Stage::AwaitingReview | Stage::Downloaded | Stage::Ready
+    ) || saved.sa_id != task.id
+        || saved.original_record.sa_id != task.id
+        || saved.input_hash != task.input_hash
+        || json!(saved.record) != json!(task.record)
+        || task.batch.as_ref() != Some(&saved.checkpoint)
+        || task
+            .artifact
+            .as_ref()
+            .is_none_or(|a| json!(a.candidate) != json!(saved.candidate))
+    {
+        return Err(Failure::new(
+            "INPUT_CHANGED",
+            "旧批次检查点与当前名单、文件或任务阶段变化，未回读或推进。",
+        ));
+    }
+    files::read_metadata_candidate(task)?;
+    Ok(saved.clone())
+}
+/// A fresh full readback clears the marker; old stage/JSON alone never clears it.
+pub fn adopt_batch_recheck(
+    task: &mut Task,
+    expected: &BatchRecheck,
+    result: &Value,
+    payload: &Value,
+) -> Result<()> {
+    let current = validate_batch_recheck(task)?;
+    if json!(current) != json!(expected) {
+        return Err(Failure::new(
+            "INPUT_CHANGED",
+            "回读期间旧批次检查点变化，未采用结果。",
+        ));
+    }
+    let raw = files::read_import_archive(task, payload)?;
+    let stage = if result["uploaded"] == true {
+        if !current.expects_upload() {
+            return Err(Failure::new(
+                "REMOTE_RESULT_UNKNOWN",
+                "原检查点要求回读导入或推送，不能以临时上传回执代替。",
+            ));
+        }
+        validate_upload_readback(result, payload, raw.len())?;
+        if [
+            "sa_id",
+            "instructions",
+            "sha256",
+            "filename",
+            "size",
+            "server_name",
+            "dataset_id",
+            "dataset_label",
+        ]
+        .iter()
+        .any(|key| result[*key] != current.checkpoint[*key])
+        {
+            return Err(Failure::new(
+                "REMOTE_RESULT_UNKNOWN",
+                "回读文件、服务端上传对象或所属机构与旧检查点变化，未采用结果。",
+            ));
+        }
+        Stage::Uploaded
+    } else {
+        let mut bound = payload.clone();
+        if current.checkpoint["uploaded"] != true {
+            bound["batch"] = current.checkpoint.clone();
+            bound["batch_id"] = current.checkpoint["id"].clone();
+        }
+        validate_import_readback(result, &bound, current.requires_push())?
+    };
+    let audit = Evidence { id:uuid::Uuid::new_v4().to_string(), kind:"input_version_batch_rechecked".into(), source:"机构库 · 新名单版本的原批次只读核验".into(),
+        text:json!({"schema":"input_version_batch_rechecked_v1","sa_id":task.id,"input_hash":task.input_hash,"checkpoint":current,"payload":payload,"result":result,"stage":stage,"write_sent":false}).to_string(), created:now() };
+    task.stage = stage;
+    task.batch = Some(if result["uploaded"] == true {
+        result.clone()
+    } else {
+        result["batch"].clone()
+    });
+    task.batch_recheck = None;
+    task.running = false;
+    task.last_error = None;
+    task.evidence.push(audit);
+    Ok(())
+}
 pub fn validate_live(proposal: &Proposal, snapshot: &Value) -> Result<()> {
     let r = &proposal.record;
     let row = &snapshot["row"];
@@ -170,12 +285,40 @@ pub fn build_next(
             next.artifact = Some(artifact);
             next.batch = old.batch.clone();
             if !next.record.done && old.batch.is_some() {
-                next.stage = match proposal.previous_stage.as_ref().unwrap_or(&old.stage) {
-                    Stage::Pushed | Stage::Claimed => Stage::Pushed,
-                    Stage::Imported => Stage::Imported,
-                    Stage::Uploaded => Stage::Uploaded,
-                    _ => Stage::AwaitingReview,
+                let original_stage = if old.batch_recheck.is_some() {
+                    validate_batch_recheck(old)?.original_stage
+                } else if matches!(
+                    old.stage,
+                    Stage::Uploaded
+                        | Stage::Imported
+                        | Stage::Pushed
+                        | Stage::Claimed
+                        | Stage::Completed
+                ) {
+                    old.stage.clone()
+                } else {
+                    proposal
+                        .previous_stage
+                        .clone()
+                        .unwrap_or_else(|| old.stage.clone())
                 };
+                let recheck = BatchRecheck {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    sa_id: next.id.clone(),
+                    input_hash: next.input_hash.clone(),
+                    record: next.record.clone(),
+                    original_input_hash: old.input_hash.clone(),
+                    original_record: old.record.clone(),
+                    original_revision: old.revision,
+                    original_stage,
+                    candidate: next.artifact.as_ref().unwrap().candidate.clone(),
+                    checkpoint: old.batch.clone().unwrap(),
+                    created: now(),
+                };
+                next.evidence.push(Evidence { id:recheck.id.clone(), kind:"input_version_batch_pending".into(), source:"旧名单版本的原批次检查点，待独立平台回读".into(),
+                    text:json!({"schema":"input_version_batch_pending_v1","checkpoint":recheck,"platform_verified":false,"write_sent":false}).to_string(), created:now() });
+                next.batch_recheck = Some(recheck);
+                next.stage = Stage::AwaitingReview;
             }
         }
     }
@@ -218,6 +361,210 @@ mod tests {
             candidate: files::parse_wos(raw).unwrap(),
             identity_confirmed: true,
         }
+    }
+    fn full_upload(task: &Task) -> Value {
+        let a = task.artifact.as_ref().unwrap();
+        json!({"verified":true,"uploaded":true,"sa_id":task.id,"instructions":format!("SA补充-{}",task.id),
+            "sha256":a.candidate.sha256,"filename":format!("SA-WOS-{}.txt",task.id),"size":std::fs::metadata(&a.path).unwrap().len(),
+            "dataset_id":"sjtu","dataset_label":"上海交通大学","server_name":"original-object",
+            "response":{"success":true,"data":{"name":"original-object"}}})
+    }
+    fn batch_payload(task: &Task) -> Value {
+        let a = task.artifact.as_ref().unwrap();
+        json!({"sa_id":task.id,"instructions":format!("SA补充-{}",task.id),"candidate":a.candidate,"contentSha":a.candidate.sha256})
+    }
+    fn batch_result(task: &Task, status: u32) -> Value {
+        let c = &task.artifact.as_ref().unwrap().candidate;
+        json!({"verified":true,"batch":{"id":"batch-1","modelId":"model-1","source":"WOS","instructions":format!("SA补充-{}",task.id),"total":1,"fail":0,"actual":if status==2 {1} else {0},"status":status},
+            "items":[{"metadata":{"title":[c.title],"doi":[c.doi],"wosId":[c.wos]}}]})
+    }
+    fn pending_batch_version(stage: Stage) -> (tempfile::TempDir, Store, Task) {
+        let (dir, store) = setup();
+        let mut old = store.task("version-sa").unwrap();
+        old.artifact = Some(source_artifact(dir.path()));
+        old.batch = Some(if stage == Stage::Uploaded {
+            full_upload(&old)
+        } else {
+            batch_result(&old, if stage == Stage::Imported { 1 } else { 2 })["batch"].clone()
+        });
+        old.stage = stage;
+        store.save(&mut old, "fixture_original_batch").unwrap();
+        store.import(vec![incoming()], "new-hash".into()).unwrap();
+        let proposal = store.pending_input(&old.id).unwrap().unwrap();
+        let current = store.task(&old.id).unwrap();
+        let next = store
+            .accept_input(
+                &current,
+                &proposal,
+                &live(&proposal.record),
+                "source",
+                "proof",
+            )
+            .unwrap();
+        (dir, store, next)
+    }
+    #[test]
+    fn original_remote_stages_remain_pending_after_restart_and_do_not_grant_import_writes() {
+        for stage in [
+            Stage::Uploaded,
+            Stage::Imported,
+            Stage::Pushed,
+            Stage::Claimed,
+            Stage::Completed,
+        ] {
+            let (dir, _store, next) = pending_batch_version(stage.clone());
+            assert_eq!(next.stage, Stage::AwaitingReview);
+            let reopened = Store::new(dir.path()).unwrap();
+            reopened.recover().unwrap();
+            let task = reopened.task(&next.id).unwrap();
+            let saved = validate_batch_recheck(&task).unwrap();
+            assert_eq!(saved.original_stage, stage);
+            assert_eq!(saved.original_input_hash, "old-hash");
+            assert_eq!(saved.record.staff_id, "002");
+            assert_eq!(
+                task.import_ready().unwrap_err().code,
+                "REMOTE_RESULT_UNKNOWN"
+            );
+            assert!(task.review.is_none());
+            assert!(task.platform_id.is_empty());
+        }
+    }
+    #[test]
+    fn thin_results_wrong_batch_or_paper_and_push_downgrade_never_clear_checkpoint() {
+        let (_dir, _store, task) = pending_batch_version(Stage::Pushed);
+        let saved = validate_batch_recheck(&task).unwrap();
+        let mut wrong_batch = batch_result(&task, 2);
+        wrong_batch["batch"]["id"] = json!("other-batch");
+        let mut wrong_paper = batch_result(&task, 2);
+        wrong_paper["items"][0]["metadata"]["doi"] = json!(["10.9876/other"]);
+        for result in [
+            json!({"verified":true}),
+            batch_result(&task, 1),
+            wrong_batch,
+            wrong_paper,
+            full_upload(&task),
+        ] {
+            let mut pending = task.clone();
+            assert!(
+                adopt_batch_recheck(&mut pending, &saved, &result, &batch_payload(&task)).is_err()
+            );
+            assert_eq!(json!(pending), json!(task));
+        }
+    }
+    #[test]
+    fn complete_fresh_readbacks_restore_only_remote_stage_and_preserve_independent_sa_review() {
+        for stage in [Stage::Uploaded, Stage::Imported, Stage::Pushed] {
+            let (dir, store, mut task) = pending_batch_version(stage.clone());
+            let saved = validate_batch_recheck(&task).unwrap();
+            let result = if stage == Stage::Uploaded {
+                full_upload(&task)
+            } else {
+                batch_result(&task, if stage == Stage::Pushed { 2 } else { 1 })
+            };
+            let payload = batch_payload(&task);
+            adopt_batch_recheck(&mut task, &saved, &result, &payload).unwrap();
+            store.save(&mut task, "fixture_fresh_readback").unwrap();
+            let reopened = Store::new(dir.path()).unwrap();
+            let current = reopened.task(&task.id).unwrap();
+            assert_eq!(current.stage, stage);
+            assert!(current.batch_recheck.is_none());
+            assert!(!current.record.done);
+            assert!(current.review.is_none());
+            assert!(current.platform_id.is_empty());
+            let audit = current
+                .evidence
+                .iter()
+                .find(|e| e.kind == "input_version_batch_rechecked")
+                .unwrap();
+            let full: Value = serde_json::from_str(&audit.text).unwrap();
+            assert_eq!(full["checkpoint"]["original_input_hash"], "old-hash");
+            assert_eq!(full["result"], result);
+            assert_eq!(full["write_sent"], false);
+            assert!(!classification::sources(dir.path(), &current)
+                .unwrap()
+                .iter()
+                .any(|e| e.id == audit.id));
+            let mut repeated = current.clone();
+            assert!(adopt_batch_recheck(&mut repeated, &saved, &result, &payload).is_err());
+            assert_eq!(json!(repeated), json!(current));
+        }
+    }
+    #[test]
+    fn changed_scope_or_upload_object_keeps_pending_batch_and_full_task_unchanged() {
+        let (_dir, _store, task) = pending_batch_version(Stage::Uploaded);
+        let saved = validate_batch_recheck(&task).unwrap();
+        for key in ["server_name", "dataset_id"] {
+            let mut result = full_upload(&task);
+            result[key] = json!("other-object");
+            if key == "server_name" {
+                result["response"]["data"]["name"] = json!("other-object");
+            }
+            let mut pending = task.clone();
+            assert!(
+                adopt_batch_recheck(&mut pending, &saved, &result, &batch_payload(&task)).is_err()
+            );
+            assert_eq!(json!(pending), json!(task));
+        }
+        for key in ["input", "record", "batch", "candidate"] {
+            let mut changed = task.clone();
+            match key {
+                "input" => changed.input_hash = "other-input".into(),
+                "record" => changed.record.row += 1,
+                "batch" => changed.batch.as_mut().unwrap()["server_name"] = json!("other-object"),
+                _ => changed.artifact.as_mut().unwrap().candidate.year = "2099".into(),
+            }
+            assert_eq!(
+                validate_batch_recheck(&changed).unwrap_err().code,
+                "INPUT_CHANGED"
+            );
+        }
+    }
+    #[test]
+    fn another_input_snapshot_retains_original_push_requirement_instead_of_local_pending_stage() {
+        let (_dir, store, task) = pending_batch_version(Stage::Pushed);
+        let mut incoming = task.record.clone();
+        incoming.row = 8;
+        store
+            .import(vec![incoming.clone()], "third-hash".into())
+            .unwrap();
+        let proposal = store.pending_input(&task.id).unwrap().unwrap();
+        let current = store.task(&task.id).unwrap();
+        let next = store
+            .accept_input(
+                &current,
+                &proposal,
+                &live(&proposal.record),
+                "source",
+                "proof",
+            )
+            .unwrap();
+        assert_eq!(next.record.row, 8);
+        assert_eq!(next.input_hash, "third-hash");
+        let saved = validate_batch_recheck(&next).unwrap();
+        assert!(saved.requires_push());
+        assert_eq!(saved.original_stage, Stage::Pushed);
+        assert_eq!(saved.record.row, 8);
+        assert_eq!(next.stage, Stage::AwaitingReview);
+    }
+    #[test]
+    fn concurrent_task_revision_prevents_a_stale_readback_from_consuming_pending_checkpoint() {
+        let (dir, store, mut stale) = pending_batch_version(Stage::Pushed);
+        let saved = validate_batch_recheck(&stale).unwrap();
+        let payload = batch_payload(&stale);
+        let result = batch_result(&stale, 2);
+        let mut newer = stale.clone();
+        store.save(&mut newer, "fixture_concurrent_update").unwrap();
+        adopt_batch_recheck(&mut stale, &saved, &result, &payload).unwrap();
+        assert_eq!(
+            store
+                .save(&mut stale, "fixture_stale_readback")
+                .unwrap_err()
+                .code,
+            "TASK_CHANGED"
+        );
+        let reopened = Store::new(dir.path()).unwrap();
+        assert_eq!(json!(reopened.task(&newer.id).unwrap()), json!(newer));
+        assert!(reopened.task(&newer.id).unwrap().batch_recheck.is_some());
     }
     #[test]
     fn version_reuse_rejects_wrong_cached_fields_even_with_the_correct_file_hash() {
@@ -518,7 +865,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(next.record.staff_id, "002");
-        assert_eq!(next.stage, Stage::Pushed);
+        assert_eq!(next.stage, Stage::AwaitingReview);
+        assert!(next.batch_recheck.as_ref().unwrap().requires_push());
         assert_eq!(next.batch.as_ref().unwrap()["id"], "batch-1");
         assert!(next.review.is_none());
         assert!(next.classification.is_none());
