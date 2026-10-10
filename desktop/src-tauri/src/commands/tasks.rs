@@ -91,3 +91,22 @@ pub(crate) async fn run_step(
     state.changed(&app);
     r
 }
+
+#[tauri::command]
+pub(crate) fn record_search_scope(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<Engine>,
+    id: String,
+    revision: i64,
+    input_hash: String,
+    observation: library_core::search_scopes::Observation,
+) -> Result<Evidence> {
+    local(&window)?;
+    let _lease = state.acquire()?;
+    let result = state
+        .store
+        .record_search_scope(&id, revision, &input_hash, observation)?;
+    state.changed(&app);
+    Ok(result)
+}

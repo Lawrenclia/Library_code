@@ -54,6 +54,7 @@ fn main() {
             commands::tasks::resume_queue,
             commands::tasks::cancel_queue,
             commands::tasks::review_task,
+            commands::tasks::record_search_scope,
             commands::tasks::run_step,
             commands::materials::adopt_file,
             commands::sources::preview_source_file,

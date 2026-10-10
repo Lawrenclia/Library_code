@@ -594,6 +594,20 @@ export function useWorkbench() {
     )
       review.library_checked = value;
   });
+  watch(
+    () => review.route,
+    (route) => {
+      if (route === "not_found") {
+        review.platform_id = "";
+        review.identity_confirmed = false;
+        review.affiliation_confirmed = false;
+        review.library_checked = false;
+        review.issues_resolved = false;
+        if (!review.note.trim())
+          review.note = "未查询到该文献（实际检索范围见检索记录）";
+      }
+    },
+  );
   async function refresh() {
     workspace.value = await callDesktop<Workspace>("workspace");
   }

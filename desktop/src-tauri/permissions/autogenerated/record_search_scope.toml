@@ -1,0 +1,11 @@
+# Registered for generation during the next build; no build is run now.
+
+[[permission]]
+identifier = "allow-record-search-scope"
+description = "Enables the local record_search_scope command."
+commands.allow = ["record_search_scope"]
+
+[[permission]]
+identifier = "deny-record-search-scope"
+description = "Denies the local record_search_scope command."
+commands.deny = ["record_search_scope"]

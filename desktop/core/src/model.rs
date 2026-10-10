@@ -517,7 +517,20 @@ impl Task {
                 }
             }
             (0, Route::NonSjtu) if r.note.contains("非交大") => {}
-            (0, Route::NotFound) => {}
+            (0, Route::NotFound) => {
+                crate::search_scopes::assert_not_found(self)?;
+                if !r.note.contains("未查询到该文献")
+                    || !r.platform_id.is_empty()
+                    || r.identity_confirmed
+                    || r.affiliation_confirmed
+                    || r.issues_resolved
+                {
+                    return Err(Failure::new(
+                        "REVIEW_REQUIRED",
+                        "未查询到分支应备注‘未查询到该文献’，不确认文献身份、归属或已处理。",
+                    ));
+                }
+            }
             (0, Route::CorrectedExisting)
                 if r.library_checked && !r.platform_id.trim().is_empty() => {}
             (1, Route::Existing) => {}

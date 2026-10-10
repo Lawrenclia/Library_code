@@ -13,6 +13,7 @@
     "allow-run-queue",
     "allow-pause-queue",
     "allow-review-task",
+    "allow-record-search-scope",
     "allow-run-step",
     "allow-adopt-file",
     "allow-preview-source-file",

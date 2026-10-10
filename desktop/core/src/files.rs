@@ -893,6 +893,7 @@ pub fn export_report_with_materials(
     sources.set_freeze_panes(1, 0).map_err(Failure::storage)?;
     sources.set_column_width(6, 80.).map_err(Failure::storage)?;
     export_doi_lookup_report(&mut book, tasks)?;
+    crate::search_scopes::export_report(&mut book, tasks)?;
     let fields = book.add_worksheet();
     fields.set_name("AI 字段来源").map_err(Failure::storage)?;
     for (col, label) in [

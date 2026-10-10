@@ -14,6 +14,7 @@ export type DesktopCommand =
   | "resume_queue"
   | "cancel_queue"
   | "review_task"
+  | "record_search_scope"
   | "run_step"
   | "adopt_file"
   | "preview_source_file"

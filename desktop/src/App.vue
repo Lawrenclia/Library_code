@@ -30,6 +30,7 @@ import {
 import WorkbenchShell from "@/components/WorkbenchShell.vue";
 import WorkflowOverview from "@/components/WorkflowOverview.vue";
 import SourceImporter from "@/components/SourceImporter.vue";
+import SearchScopePanel from "@/components/SearchScopePanel.vue";
 import AiQueuePanel from "@/components/AiQueuePanel.vue";
 import MaterialBatchPanel from "@/components/MaterialBatchPanel.vue";
 import SubmissionMaterial from "@/components/SubmissionMaterial.vue";
@@ -1202,10 +1203,20 @@ function frameworkBrowser(role: string, entry?: string) {
                     尚无真实查询记录。打不开前端时，先在“查本库”窗口完成机构访问。
                   </p>
                 </section>
+                <SearchScopePanel
+                  v-if="review.route === 'not_found'"
+                  :key="current.id"
+                  :task="current"
+                  :locked="locked"
+                  :channels="workspace.framework?.channels || []"
+                  :run="run"
+                />
                 <label
                   v-if="
                     current.record.matches !== 0 ||
-                    !['missing', 'corrected_existing'].includes(review.route)
+                    !['missing', 'corrected_existing', 'not_found'].includes(
+                      review.route,
+                    )
                   "
                   class="field"
                   >平台唯一号<Input
@@ -1213,7 +1224,10 @@ function frameworkBrowser(role: string, entry?: string) {
                     class="mt-2 text-xs"
                     placeholder="本库已有、合并或推送后的条目 ID"
                 /></label>
-                <div class="space-y-3 rounded-lg border p-3">
+                <div
+                  v-if="review.route !== 'not_found'"
+                  class="space-y-3 rounded-lg border p-3"
+                >
                   <label class="check-row"
                     ><input
                       type="checkbox"
@@ -1258,7 +1272,11 @@ function frameworkBrowser(role: string, entry?: string) {
                     class="mt-2 min-h-20 text-xs leading-6"
                     placeholder="实际查到了什么，为什么作出这一判断" /></label
                 ><label class="field"
-                  >核验结论 / 平台备注<Textarea
+                  >{{
+                    review.route === "not_found"
+                      ? "本地结论（须含“未查询到该文献”）"
+                      : "核验结论 / 平台备注"
+                  }}<Textarea
                     v-model="review.note"
                     class="mt-2 min-h-16 text-xs leading-6"
                     placeholder="非交大、未查询到该文献、经核对是 / 不是通讯作者等" /></label
@@ -1325,6 +1343,13 @@ function frameworkBrowser(role: string, entry?: string) {
                   ><Upload />读取本地 WOS TXT</Button
                 >
                 <SourceImporter
+                  :task="current"
+                  :locked="locked"
+                  :channels="workspace.framework?.channels || []"
+                  :run="run"
+                />
+                <SearchScopePanel
+                  :key="current.id"
                   :task="current"
                   :locked="locked"
                   :channels="workspace.framework?.channels || []"

@@ -26,11 +26,40 @@ impl Engine {
                 "填写核验来源和具体依据。",
             ));
         }
+        let not_found = r.route == Route::NotFound;
+        if not_found {
+            if matches!(
+                t.stage,
+                Stage::Uploaded | Stage::Imported | Stage::Pushed | Stage::Claimed
+            ) {
+                return Err(Failure::new(
+                    "INVALID_TRANSITION",
+                    "已有上传、导入、推送或认领记录，须先核对原操作，不能改为未查询到。",
+                ));
+            }
+            library_core::search_scopes::assert_not_found(&t)?;
+            r.platform_id.clear();
+            r.identity_confirmed = false;
+            r.affiliation_confirmed = false;
+            r.issues_resolved = false;
+            r.library_checked = false;
+        }
         let e = Evidence {
             id: uuid::Uuid::new_v4().to_string(),
-            kind: "human_review".into(),
+            kind: if not_found {
+                "search_conclusion"
+            } else {
+                "human_review"
+            }
+            .into(),
             source,
-            text: proof,
+            text: if not_found {
+                json!({"schema":"not_found_review_v1","statement":proof,
+                    "search_scope_ids":library_core::search_scopes::current(&t).iter().map(|(id,_)|id.clone()).collect::<Vec<_>>(),
+                    "paper_absent":false,"platform_completed":false}).to_string()
+            } else {
+                proof
+            },
             created: now(),
         };
         r.evidence_id = e.id.clone();
