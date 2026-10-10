@@ -15,6 +15,7 @@ pub fn channels() -> Value {
         {"id":"ei","label":"EI 数据导入 (Csv/Excel)","formats":["csv","xlsx"],"automated":false},
         {"id":"vip","label":"VIP 数据导入 (Excel)","formats":["xlsx"],"automated":false},
         {"id":"incopat","label":"IncoPat 数据导入 (Excel)","formats":["xlsx"],"automated":false},
+        {"id":"scopus","label":"Scopus 原始来源 (CSV)","formats":["csv"],"automated":false},
         {"id":"other","label":"其他来源 / 平台模板","formats":["xlsx","txt","csv"],"automated":false}
     ]);
     for channel in channels.as_array_mut().unwrap() {
