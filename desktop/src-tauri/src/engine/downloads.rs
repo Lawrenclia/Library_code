@@ -103,26 +103,13 @@ impl Engine {
         {
             return Err(Failure::new("INPUT_CHANGED", "任务输入已变化，请先核对。"));
         }
-        if let Some(a) = t.artifact.as_ref() {
-            let raw = std::fs::read(&a.path)?;
-            if hash(&raw) != a.candidate.sha256 {
-                return Err(Failure::new("FILE_INVALID", "本地存档发生变化。"));
-            }
-            return Ok(());
-        }
+        // An actual native completion receipt owns recovery before any shared
+        // file shortcut. Its original scope/hash cannot be bypassed by reuse.
         if self.store.recover_native_download(id)? {
             self.changed(app);
             return Ok(());
         }
-        if let Some(a) = self.store.reusable_artifact(&t.record)? {
-            let raw = std::fs::read(&a.path)?;
-            if hash(&raw) != a.candidate.sha256 {
-                return Err(Failure::new(
-                    "FILE_INVALID",
-                    "共享来源归档已变化，不能复用。",
-                ));
-            }
-            self.attach(id, std::path::Path::new(&a.path), a.source, a.record_url)?;
+        if self.store.restore_wos_artifact(id, t.revision)? {
             self.changed(app);
             return Ok(());
         }

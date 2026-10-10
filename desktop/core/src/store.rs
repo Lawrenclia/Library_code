@@ -599,34 +599,7 @@ impl Store {
         )
     }
     pub fn reusable_artifact(&self, record: &Record) -> Result<Option<Artifact>> {
-        // Legacy desktop task JSON is also inspected so an existing workspace
-        // gains reuse without discarding its evidence or remote write history.
-        let mut artifacts: Vec<Artifact> = self
-            .tasks()?
-            .into_iter()
-            .filter_map(|t| t.artifact)
-            .collect();
-        let db = self.connect()?;
-        let mut q = db.prepare("SELECT data FROM papers ORDER BY updated DESC")?;
-        for raw in q.query_map([], |r| r.get::<_, String>(0))? {
-            let p: Paper = serde_json::from_str(&raw?)?;
-            artifacts.push(p.artifact);
-        }
-        let mut found = std::collections::BTreeMap::new();
-        for a in artifacts {
-            if a.identity_confirmed
-                && crate::files::verify_identity(record, &a.candidate).unwrap_or(false)
-            {
-                found.entry(a.candidate.sha256.clone()).or_insert(a);
-            }
-        }
-        if found.len() > 1 {
-            return Err(Failure::new(
-                "AMBIGUOUS_RESULT",
-                "已有多个不同版本的核验文件，请选择实际来源版本，不能自动复用。",
-            ));
-        }
-        Ok(found.into_values().next())
+        crate::wos_reuse::select(&self.connect()?, record).map(|v| v.map(|v| v.artifact))
     }
     pub fn begin_attempt(&self, task: &mut Task, action: &str) -> Result<String> {
         self.begin_attempt_with_payload(task, action, json!({}))

@@ -76,6 +76,7 @@ export interface Task {
     path: string;
     source: string;
     record_url: string;
+    downloaded?: number;
     identity_confirmed: boolean;
     candidate: {
       title: string;

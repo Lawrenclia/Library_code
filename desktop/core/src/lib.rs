@@ -30,6 +30,7 @@ pub mod template_rules;
 pub mod templates;
 pub mod versions;
 pub mod workflow;
+pub mod wos_reuse;
 pub use model::*;
 pub use store::Store;
 #[cfg(test)]

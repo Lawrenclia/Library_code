@@ -165,6 +165,39 @@ const pageTitles: Record<string, string> = {
   settings: "模型与工作空间",
 };
 const detailExpanded = ref(false);
+const reusedArtifact = computed(() => {
+  const task = current.value;
+  if (!task?.artifact) return null;
+  for (const evidence of [...task.evidence].reverse()) {
+    if (evidence.kind !== "artifact_reuse") continue;
+    try {
+      const saved = JSON.parse(evidence.text);
+      if (
+        saved.schema === "wos_artifact_reuse_v1" &&
+        saved.target_id === task.id &&
+        saved.input_hash === task.input_hash &&
+        saved.artifact?.candidate?.sha256 === task.artifact.candidate.sha256 &&
+        saved.artifact?.path === task.artifact.path &&
+        saved.artifact?.record_url === task.artifact.record_url &&
+        saved.artifact?.downloaded === task.artifact.downloaded &&
+        saved.new_download === false
+      ) {
+        const origins: unknown[] = Array.isArray(saved.origins)
+          ? saved.origins
+          : [];
+        const ids = origins.flatMap((origin) => {
+          if (!origin || typeof origin !== "object") return [];
+          const id = (origin as Record<string, unknown>).task_id;
+          return typeof id === "string" && id ? [id] : [];
+        });
+        return { sourceIds: [...new Set(ids)], created: evidence.created };
+      }
+    } catch {
+      /* Historical incomplete audits remain in the evidence list. */
+    }
+  }
+  return null;
+});
 const filters = [
   { id: "all", label: "全部任务" },
   { id: "zero", label: "零匹配" },
@@ -1328,6 +1361,21 @@ function frameworkBrowser(role: string, entry?: string) {
                     }}</Badge>
                   </div>
                   <p class="path">{{ current.artifact.path }}</p>
+                  <div
+                    v-if="reusedArtifact"
+                    class="mt-3 space-y-1 border-t pt-3 text-[11px] leading-6 text-muted-foreground"
+                  >
+                    <p>本次复用已归档的同篇来源，未重新下载。</p>
+                    <p v-if="reusedArtifact.sourceIds.length">
+                      来源 SA：{{ reusedArtifact.sourceIds.join("、") }}
+                    </p>
+                    <p>
+                      复用记录时间：{{
+                        new Date(reusedArtifact.created).toLocaleString()
+                      }}
+                    </p>
+                    <p>本条认领和处理状态仍需分别核验。</p>
+                  </div>
                 </div>
                 <Button
                   variant="outline"

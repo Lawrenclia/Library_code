@@ -27,7 +27,10 @@ pub fn read_import_archive(task: &Task, payload: &serde_json::Value) -> Result<V
             "原导入归档不是有效单篇文件，保持结果未知。",
         ));
     }
-    let raw = std::fs::read(path)
+    use std::io::Read;
+    let mut raw = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(524288 + 1).read_to_end(&mut raw))
         .map_err(|_| Failure::new("FILE_INVALID", "原导入归档不可读取，保持结果未知。"))?;
     let candidate = parse_wos(&raw)?;
     let actual = serde_json::to_value(&candidate)?;

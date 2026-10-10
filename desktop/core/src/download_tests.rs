@@ -43,6 +43,76 @@ fn finished(store: &Store, receipt: &DownloadReceipt, raw: &[u8]) {
         .unwrap();
 }
 #[test]
+fn existing_equal_archive_still_retains_actual_native_completion_receipt_once() {
+    let (_dir, store, receipt) = setup();
+    finished(&store, &receipt, TXT);
+    let mut task = store.task("sa1").unwrap();
+    task.artifact = Some(Artifact {
+        path: files::archive(&store.root, TXT)
+            .unwrap()
+            .to_string_lossy()
+            .into(),
+        source: "WOS".into(),
+        record_url: SOURCE.into(),
+        downloaded: 100,
+        candidate: files::parse_wos(TXT).unwrap(),
+        identity_confirmed: true,
+    });
+    store
+        .save(&mut task, "fixture_existing_equal_archive")
+        .unwrap();
+    assert!(store.recover_native_download("sa1").unwrap());
+    let adopted = store.task("sa1").unwrap();
+    assert_eq!(adopted.stage, Stage::Downloaded);
+    assert!(!adopted.running);
+    assert_eq!(adopted.artifact.unwrap().downloaded, 100);
+    assert_eq!(
+        adopted
+            .evidence
+            .iter()
+            .filter(|e| e.id == receipt.id && e.kind == "native_download")
+            .count(),
+        1
+    );
+    assert_eq!(store.native_downloads("sa1").unwrap()[0].state, "adopted");
+    assert!(!store.recover_native_download("sa1").unwrap());
+    assert_eq!(store.task("sa1").unwrap().revision, adopted.revision);
+}
+#[test]
+fn completed_receipt_does_not_accept_existing_cached_fields_from_hash_alone() {
+    let (_dir, store, receipt) = setup();
+    finished(&store, &receipt, TXT);
+    let mut task = store.task("sa1").unwrap();
+    let mut candidate = files::parse_wos(TXT).unwrap();
+    candidate.authors = "Forged author".into();
+    task.artifact = Some(Artifact {
+        path: files::archive(&store.root, TXT)
+            .unwrap()
+            .to_string_lossy()
+            .into(),
+        source: "WOS".into(),
+        record_url: SOURCE.into(),
+        downloaded: 100,
+        candidate,
+        identity_confirmed: true,
+    });
+    store
+        .save(&mut task, "fixture_existing_corrupt_cache")
+        .unwrap();
+    assert_eq!(
+        store.recover_native_download("sa1").unwrap_err().code,
+        "IDENTITY_CONFLICT"
+    );
+    assert_eq!(store.native_downloads("sa1").unwrap()[0].state, "completed");
+    assert_eq!(store.task("sa1").unwrap().revision, task.revision);
+    assert!(!store
+        .task("sa1")
+        .unwrap()
+        .evidence
+        .iter()
+        .any(|e| e.id == receipt.id));
+}
+#[test]
 fn native_completed_before_task_save_is_adopted_once_at_restart() {
     let (dir, store, receipt) = setup();
     let mut before = store.task("sa1").unwrap();

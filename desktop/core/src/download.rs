@@ -217,12 +217,13 @@ impl Store {
         }
         let strong = files::verify_identity(&task.record, &candidate)?;
         if let Some(a) = &task.artifact {
-            if a.candidate.sha256 != candidate.sha256 {
+            if serde_json::to_value(&a.candidate)? != serde_json::to_value(&candidate)? {
                 return Err(Failure::new(
                     "IDENTITY_CONFLICT",
-                    "已有归档与下载回执不是同一文件。",
+                    "已有归档的完整字段与下载回执不一致。",
                 ));
             }
+            files::read_metadata_candidate(&task)?;
         } else {
             let archive = files::archive(&self.root, &raw)?;
             task.evidence.push(Evidence {
@@ -230,13 +231,6 @@ impl Store {
                 kind: "metadata".into(),
                 source: r.record_url.clone(),
                 text: serde_json::to_string_pretty(&candidate.fields)?,
-                created: now(),
-            });
-            task.evidence.push(Evidence {
-                id: r.id.clone(),
-                kind: "native_download".into(),
-                source: r.record_url.clone(),
-                text: serde_json::to_string(&r)?,
                 created: now(),
             });
             task.artifact = Some(Artifact {
@@ -251,8 +245,36 @@ impl Store {
             task.stage = Stage::Downloaded;
             task.running = false;
             task.last_error = None;
-            Self::write_task(&tx, &task, "native_download_recovered")?;
         }
+        // A coincidentally existing artifact cannot consume a completion receipt
+        // without retaining the original download event and checking all fields.
+        let receipt_text = serde_json::to_string(&r)?;
+        if let Some(existing) = task.evidence.iter().find(|e| e.id == r.id) {
+            if existing.kind != "native_download"
+                || existing.source != r.record_url
+                || existing.text != receipt_text
+            {
+                return Err(Failure::new(
+                    "IDENTITY_CONFLICT",
+                    "原下载回执审计已变化，未消费完成回执。",
+                ));
+            }
+        } else {
+            task.evidence.push(Evidence {
+                id: r.id.clone(),
+                kind: "native_download".into(),
+                source: r.record_url.clone(),
+                text: receipt_text,
+                created: now(),
+            });
+        }
+        files::ensure_metadata_evidence(&mut task)?;
+        if task.running || task.stage == Stage::Downloading {
+            task.running = false;
+            task.stage = Stage::Downloaded;
+            task.last_error = None;
+        }
+        Self::write_task(&tx, &task, "native_download_recovered")?;
         r.state = "adopted".into();
         tx.execute(
             "UPDATE native_downloads SET state=?,data=? WHERE id=?",
