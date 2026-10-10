@@ -1,6 +1,21 @@
 use super::*;
 
 impl Engine {
+    pub(super) fn record_completion(
+        task: &mut Task,
+        payload: &Value,
+        snapshot: &Value,
+    ) -> Result<()> {
+        sa::verify_complete(task, payload, snapshot)?;
+        task.evidence.push(Evidence {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: "sa_complete_verified".into(),
+            source: "机构库 SA · 原完成意图与完整字段回读".into(),
+            text: json!({"payload":payload,"sa_after":snapshot}).to_string(),
+            created: now(),
+        });
+        Ok(())
+    }
     pub async fn read_sa(&self, app: &AppHandle, t: &mut Task) -> Result<Value> {
         let result = self
             .browser
@@ -241,9 +256,9 @@ impl Engine {
         let d = self.read_sa(app, &mut t).await?;
         let mut verification = d.clone();
         let next = match action {
-            "complete"
-                if d["row"]["markStatus"] == "已处理" && d["row"]["remark"] == payload["note"] =>
-            {
+            "complete" => {
+                Self::record_completion(&mut t, payload, &d)?;
+                verification = json!({"payload":payload,"sa_after":d});
                 Stage::Completed
             }
             "link"

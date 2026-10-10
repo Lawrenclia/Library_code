@@ -246,79 +246,9 @@ impl Engine {
                     let target = library::latest(&t)?["target"].clone();
                     self.search_library(app, &mut t, target).await?;
                 }
-                t.assert_complete()?;
                 let d = self.read_sa(app, &mut t).await?;
-                if matched_ids(&d["row"])?.len() == 1 {
-                    issues::assert_resolved(&t, &d)?;
-                }
-                if t.route == Route::Duplicate
-                    && matched_ids(&d["row"])? != vec![t.platform_id.clone()]
-                {
-                    return Err(Failure::new(
-                        "REVIEW_REQUIRED",
-                        "合并后 SA 尚未回读为唯一主条目，不能设置已处理。",
-                    ));
-                }
-                let count = d["row"]["matchCount"]
-                    .as_u64()
-                    .or_else(|| d["row"]["matchCount"].as_str().and_then(|s| s.parse().ok()));
-                if (t.route == Route::NonSjtu && count != Some(0))
-                    || (t.route == Route::Existing && count != Some(1))
-                {
-                    return Err(Failure::new(
-                        "TASK_CHANGED",
-                        "实时匹配数量已变化，请重新核验业务分支。",
-                    ));
-                }
-                if matches!(
-                    t.route,
-                    Route::Missing | Route::CorrectedExisting | Route::Duplicate
-                ) && d["row"]["itemId"]
-                    .as_str()
-                    .unwrap_or("")
-                    .trim_start_matches(',')
-                    != t.platform_id
-                {
-                    return Err(Failure::new(
-                        "REVIEW_REQUIRED",
-                        "SA 尚未关联核验后的平台唯一号。",
-                    ));
-                }
-                let mut note = t.review.as_ref().unwrap().note.clone();
-                if !t.issue_reviews.is_empty() {
-                    note.push_str("；逐项核对：");
-                    note.push_str(
-                        &t.issue_reviews
-                            .iter()
-                            .map(|r| {
-                                format!(
-                                    "{}：{}",
-                                    t.issue_plan
-                                        .as_ref()
-                                        .and_then(|p| p
-                                            .requirements
-                                            .iter()
-                                            .find(|i| i.key == r.key))
-                                        .map(|i| i.label.as_str())
-                                        .unwrap_or(&r.key),
-                                    r.note
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("；"),
-                    );
-                }
-                if note.chars().count() > 2000 {
-                    return Err(Failure::new(
-                        "INCOMPLETE_METADATA",
-                        "逐项备注合计超过平台 2000 字符限制，请缩短结论；完整依据保留在来源报告。",
-                    ));
-                }
-                (
-                    "sa",
-                    json!({"sa_id":id,"expected":d["row"],"expected_comparison":d["comparison"],"reviewed":true,"note":note}),
-                    Stage::Completed,
-                )
+                let payload = sa::complete_payload(&t, &d)?;
+                ("sa", payload, Stage::Completed)
             }
             "submit_claim" => {
                 if matches!(
@@ -450,6 +380,26 @@ impl Engine {
                             "unknown",
                             d,
                             "result_unknown",
+                        )?;
+                        self.changed(app);
+                        return Err(error);
+                    }
+                }
+                if action == "complete" {
+                    let checked = match self.read_sa(app, &mut t).await {
+                        Ok(live) => Self::record_completion(&mut t, &audit, &live),
+                        Err(error) => Err(error),
+                    };
+                    if let Err(error) = checked {
+                        t.stage = Stage::Unknown;
+                        t.running = false;
+                        t.last_error = Some(error.clone());
+                        self.store.finish_attempt(
+                            &mut t,
+                            &attempt,
+                            "unknown",
+                            d,
+                            "completion_unconfirmed",
                         )?;
                         self.changed(app);
                         return Err(error);

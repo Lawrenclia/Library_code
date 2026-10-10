@@ -219,3 +219,139 @@ fn unknown_missing_link_restores_only_original_pushed_checkpoint() {
     assert_eq!(t.record.matches, 0);
     assert!(!t.record.done);
 }
+
+fn complete_snapshot() -> Value {
+    let mut result = snapshot(true);
+    for key in [
+        "id",
+        "title",
+        "doi",
+        "doiValue",
+        "wos",
+        "wosValue",
+        "claimStatus",
+        "qr",
+        "updateTime",
+        "updateUsername",
+        "remark",
+    ] {
+        result["row"][key] = json!("");
+    }
+    result["row"]["id"] = json!("record-001");
+    result["comparison"] = json!([{"label":"题名","sa":"Paper","library":"Paper"}]);
+    result
+}
+
+#[test]
+fn completion_readback_binds_full_original_row_and_proof_after_restart() {
+    let mut t = task();
+    let before = complete_snapshot();
+    issues::prepare(&mut t, &before).unwrap();
+    let payload = sa::complete_payload(&t, &before).unwrap();
+    let mut after = before.clone();
+    after["row"]["markStatus"] = json!("已处理");
+    after["row"]["remark"] = payload["note"].clone();
+    after["row"]["updateTime"] = json!("new server time");
+    after["row"]["updateUsername"] = json!("operator");
+    sa::verify_complete(&t, &payload, &after).unwrap();
+    t.stage = Stage::Unknown;
+    sa::verify_complete(&t, &payload, &after).unwrap();
+    for key in [
+        "id",
+        "saLzkId",
+        "gh",
+        "itemId",
+        "matchCount",
+        "title",
+        "titleValue",
+        "doi",
+        "doiValue",
+        "wos",
+        "wosValue",
+        "reason",
+        "claimStatus",
+        "qr",
+        "remark",
+        "markStatus",
+    ] {
+        let mut changed = after.clone();
+        changed["row"][key] = json!("changed");
+        assert!(
+            sa::verify_complete(&t, &payload, &changed).is_err(),
+            "{key}"
+        );
+    }
+    let mut missing = after.clone();
+    missing["row"].as_object_mut().unwrap().remove("doi");
+    assert!(sa::verify_complete(&t, &payload, &missing).is_err());
+    let mut changed = after.clone();
+    changed["comparison"][0]["library"] = json!("Other paper");
+    assert!(sa::verify_complete(&t, &payload, &changed).is_err());
+    let thin = json!({"sa_id":t.id,"expected":before["row"],"note":payload["note"]});
+    assert!(sa::verify_complete(&t, &thin, &after).is_err());
+    let mut changed = t.clone();
+    changed.input_hash = "new-input".into();
+    assert!(sa::verify_complete(&changed, &payload, &after).is_err());
+    let mut changed = t.clone();
+    changed.review.as_mut().unwrap().note = "different decision".into();
+    assert!(sa::verify_complete(&changed, &payload, &after).is_err());
+    let mut changed = t.clone();
+    changed
+        .evidence
+        .iter_mut()
+        .find(|e| e.id == "human")
+        .unwrap()
+        .text = "replaced proof".into();
+    assert!(sa::verify_complete(&changed, &payload, &after).is_err());
+    assert!(
+        !t.record.done,
+        "read-only verification does not mark the roster done"
+    );
+}
+
+#[test]
+fn completion_never_marks_not_found_or_replays_unknown_intent() {
+    let before = complete_snapshot();
+    for route in [Route::NotFound, Route::ZeroReview] {
+        let mut t = task();
+        t.route = route.clone();
+        t.review.as_mut().unwrap().route = route;
+        assert!(sa::complete_payload(&t, &before).is_err());
+    }
+    let mut t = task();
+    issues::prepare(&mut t, &before).unwrap();
+    for stage in [Stage::Unknown, Stage::Completed] {
+        t.stage = stage;
+        assert!(sa::complete_payload(&t, &before).is_err());
+    }
+}
+
+#[test]
+fn non_sjtu_completion_keeps_original_zero_match_and_full_identity() {
+    let mut t = task();
+    t.route = Route::NonSjtu;
+    t.platform_id.clear();
+    let review = t.review.as_mut().unwrap();
+    review.route = Route::NonSjtu;
+    review.platform_id.clear();
+    review.note = "原文署名已核验：非交大成果".into();
+    t.evidence
+        .iter_mut()
+        .find(|e| e.id == "human")
+        .unwrap()
+        .text = "原文完整单位署名无交大".into();
+    let mut before = complete_snapshot();
+    before["row"]["matchCount"] = json!(0);
+    before["row"]["itemId"] = json!("");
+    let payload = sa::complete_payload(&t, &before).unwrap();
+    let mut after = before;
+    after["row"]["markStatus"] = json!("已处理");
+    after["row"]["remark"] = payload["note"].clone();
+    t.stage = Stage::Unknown;
+    sa::verify_complete(&t, &payload, &after).unwrap();
+    assert_eq!(t.record.matches, 0);
+    assert!(!t.record.done);
+    after["row"]["matchCount"] = json!(1);
+    after["row"]["itemId"] = json!(ITEM);
+    assert!(sa::verify_complete(&t, &payload, &after).is_err());
+}

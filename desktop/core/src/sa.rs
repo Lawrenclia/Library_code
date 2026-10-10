@@ -2,6 +2,185 @@
 use crate::*;
 use serde_json::{json, Value};
 
+const COMPLETE_ROW_KEYS: &[&str] = &[
+    "id",
+    "saLzkId",
+    "itemId",
+    "matchCount",
+    "markStatus",
+    "reason",
+    "title",
+    "titleValue",
+    "doi",
+    "doiValue",
+    "wos",
+    "wosValue",
+    "claimStatus",
+    "gh",
+    "qr",
+    "updateTime",
+    "updateUsername",
+    "remark",
+];
+
+fn complete_row(snapshot: &Value) -> Result<&serde_json::Map<String, Value>> {
+    let row = snapshot["row"]
+        .as_object()
+        .ok_or_else(|| Failure::new("REMOTE_RESULT_UNKNOWN", "缺少完整 SA 行回读。"))?;
+    if COMPLETE_ROW_KEYS.iter().any(|key| {
+        !row.get(*key)
+            .is_some_and(|v| v.is_string() || v.is_number() || v.is_boolean())
+    }) || ["id", "saLzkId", "gh"].iter().any(|key| {
+        !row.get(*key)
+            .and_then(Value::as_str)
+            .is_some_and(|v| !v.trim().is_empty())
+    }) || !snapshot["comparison"].as_array().is_some_and(|rows| {
+        !rows.is_empty()
+            && rows.iter().all(|r| {
+                ["label", "sa", "library"]
+                    .iter()
+                    .all(|key| r[*key].is_string())
+            })
+    }) {
+        return Err(Failure::new(
+            "REMOTE_RESULT_UNKNOWN",
+            "SA 行或逐项回读不完整，不能确认完成。",
+        ));
+    }
+    Ok(row)
+}
+
+/// Freeze the complete intent before sending the single status write.
+pub fn complete_payload(task: &Task, snapshot: &Value) -> Result<Value> {
+    complete_row(snapshot)?;
+    let ids = identity(task, snapshot)?;
+    if matches!(task.stage, Stage::Unknown | Stage::Completed) {
+        return Err(Failure::new(
+            "INVALID_TRANSITION",
+            "先核验上次操作，不能再次设置已处理。",
+        ));
+    }
+    let mut checked = task.clone();
+    checked.sa_snapshot = Some(snapshot.clone());
+    checked.assert_complete()?;
+    if (task.route == Route::NonSjtu && !ids.is_empty())
+        || (task.route == Route::Existing && ids.len() != 1)
+        || (matches!(
+            task.route,
+            Route::Missing | Route::CorrectedExisting | Route::Duplicate
+        ) && ids != vec![task.platform_id.clone()])
+    {
+        return Err(Failure::new(
+            "TASK_CHANGED",
+            "实时 SA 匹配与原完成分支或条目不一致。",
+        ));
+    }
+    if ids.len() == 1 {
+        issues::assert_resolved(&checked, snapshot)?;
+    }
+    let review = task.review.as_ref().unwrap();
+    if review.route != task.route {
+        return Err(Failure::new(
+            "TASK_CHANGED",
+            "核验结论与当前完成分支不一致。",
+        ));
+    }
+    checked.validate_review(review)?;
+    let library_before = if matches!(task.route, Route::Missing | Route::CorrectedExisting) {
+        library::latest(task)?
+    } else {
+        Value::Null
+    };
+    let mut note = review.note.trim().to_owned();
+    if !task.issue_reviews.is_empty() {
+        note.push_str("；逐项核对：");
+        note.push_str(
+            &task
+                .issue_reviews
+                .iter()
+                .map(|r| {
+                    let label = task
+                        .issue_plan
+                        .as_ref()
+                        .and_then(|p| p.requirements.iter().find(|i| i.key == r.key))
+                        .map(|i| i.label.as_str())
+                        .unwrap_or(&r.key);
+                    format!("{}：{}", label, r.note)
+                })
+                .collect::<Vec<_>>()
+                .join("；"),
+        );
+    }
+    if note.is_empty() || note.chars().count() > 2000 {
+        return Err(Failure::new(
+            "INCOMPLETE_METADATA",
+            "完成备注须非空且不超过平台 2000 字符限制。",
+        ));
+    }
+    let proofs: Vec<_> = task
+        .evidence
+        .iter()
+        .filter(|e| {
+            e.id == review.evidence_id
+                || task.issue_reviews.iter().any(|r| r.evidence_id == e.id)
+                || task.merges.iter().any(|m| m.evidence_id == e.id)
+        })
+        .collect();
+    Ok(json!({
+        "schema":"sa_complete_v1", "sa_id":task.id,
+        "input_hash":task.input_hash, "record_fingerprint":task.record.fingerprint(),
+        "route":task.route, "previous_stage":task.stage, "platform_id":task.platform_id,
+        "original_review":review, "issue_plan":task.issue_plan,
+        "issue_reviews":task.issue_reviews, "merges":task.merges, "proofs":proofs,
+        "library_before":library_before,
+        "original_sa":snapshot, "expected":snapshot["row"],
+        "expected_comparison":snapshot["comparison"], "reviewed":true, "note":note
+    }))
+}
+
+/// A status/remark marker alone cannot prove that the original task completed.
+/// This read-only check also handles restart recovery; it never sends a write.
+pub fn verify_complete(task: &Task, payload: &Value, snapshot: &Value) -> Result<()> {
+    if payload["schema"] != "sa_complete_v1" {
+        return Err(Failure::new(
+            "REMOTE_RESULT_UNKNOWN",
+            "旧完成检查点缺少完整原意图，须人工核对，不能自动确认或重发。",
+        ));
+    }
+    let previous: Stage = serde_json::from_value(payload["previous_stage"].clone())
+        .map_err(|_| Failure::new("REMOTE_RESULT_UNKNOWN", "缺少原完成阶段。"))?;
+    if task.record.done || (task.stage != Stage::Unknown && task.stage != previous) {
+        return Err(Failure::new(
+            "REMOTE_RESULT_UNKNOWN",
+            "任务阶段已变化，不能把原完成检查点用于其他阶段。",
+        ));
+    }
+    let mut original = task.clone();
+    original.stage = previous;
+    if complete_payload(&original, &payload["original_sa"])? != *payload {
+        return Err(Failure::new(
+            "REMOTE_RESULT_UNKNOWN",
+            "名单、分支、条目或完整核验依据已变化，不能沿用原完成意图。",
+        ));
+    }
+    let row = complete_row(snapshot)?;
+    let before = complete_row(&payload["original_sa"])?;
+    let allowed = ["markStatus", "remark", "updateTime", "updateUsername"];
+    if row["markStatus"] != "已处理"
+        || row["remark"] != payload["note"]
+        || before
+            .iter()
+            .any(|(key, value)| !allowed.contains(&key.as_str()) && row.get(key) != Some(value))
+        || snapshot["comparison"] != payload["expected_comparison"]
+    {
+        return Err(Failure::new(
+            "REMOTE_RESULT_UNKNOWN",
+            "未回读到原 SA 的准确完成结果，或其他字段/逐项比对已变化；不能重复提交。",
+        ));
+    }
+    Ok(())
+}
+
 fn identity(task: &Task, snapshot: &Value) -> Result<Vec<String>> {
     let row = &snapshot["row"];
     if row["saLzkId"] != task.id
