@@ -47,6 +47,7 @@ export interface Task {
     source: string;
   };
   evidence: Evidence[];
+  wos_searches?: WosSearchTrace[];
   last_error: Failure | null;
   review: Review | null;
   classification: Record<string, unknown> | null;
@@ -90,6 +91,29 @@ export interface Task {
       sha256: string;
       fields: Record<string, string>;
     };
+  };
+}
+export interface WosSearchTrace {
+  event_id: number;
+  trace_id: string;
+  phase: string;
+  task_id: string;
+  input_hash: string;
+  task_snapshot_matches: boolean;
+  observed_at: number;
+  source_url: string | null;
+  data: {
+    search_context?: {
+      field: string;
+      field_label: string;
+      query: string;
+      scope_controls: string[];
+      scope_controls_exhaustive: boolean;
+    };
+    state?: string;
+    outcome?: string;
+    error?: Failure;
+    [key: string]: unknown;
   };
 }
 export interface InputProposal {

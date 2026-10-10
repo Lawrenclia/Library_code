@@ -324,19 +324,35 @@ async function runWOSCommand(command) {
       const input=one(inputs,"单行文献检索输入框");
       searchButton(field,input); // Ambiguity stops before replacing the query.
       set(input,query);
+      if(norm(input.value)!==norm(query))fail("输入框没有保留本次查询词，未点击检索");
       const action=searchButton(field,input); // Input events may replace the button.
       if(action.disabled||action.getAttribute("aria-disabled")==="true")fail("控件尚不可用");
       if(command.action==="wos_start_search") {
+        const searchContext={schema:"wos_search_context_v1",command_id:command.id,
+          field:command.wos?"wos":command.doi?"doi":"title",field_label:fieldText(field),
+          query:String(input.value),source_url:location.origin+location.pathname,prepared_at:Date.now(),
+          collection_route:"/wos/woscc/",scope_controls:all('select,button,[role="combobox"]')
+            .map(selection).filter(s=>/Core Collection|核心合集|核心合輯|Editions?|Timespan|时间跨度|時間跨度|All years|所有年份/i.test(s))
+            .slice(0,20).map(s=>s.slice(0,1000)),
+          scope_controls_exhaustive:false,submission_confirmed:false};
         if(command.defer_click){
-          window.__wosNativeSearch={id:command.id,button:action};
-          return {ok:true,data:{ready:true}};
+          window.__wosNativeSearch={id:command.id,button:action,
+            submit:()=>{
+              check();
+              if(!input.isConnected||!field.isConnected||!action.isConnected||norm(input.value)!==norm(query)
+                ||fields().length!==1||fieldText(fields()[0])!==searchContext.field_label
+                ||location.origin+location.pathname!==searchContext.source_url||searchButton(fields()[0],input)!==action)
+                fail("检索预览后的字段、查询词或页面变化，未点击检索");
+              click(action);
+            }};
+          return {ok:true,data:{ready:true,search_context:searchContext}};
         }
         // Return before the click can navigate. A real WOS navigation may destroy
         // an injected execution context; keeping that navigation inside this long
         // command was the source of desktop timeouts and a permanently busy worker.
         // The extension background performs the subsequent read-only polling.
         setTimeout(()=>action.click(),0);
-        return {ok:true,data:{submitted:true}};
+        return {ok:true,data:{submitted:true,search_context:searchContext}};
       }
       const before=new Map(resultLinks().map(r=>[r.link,r.url+'|'+caption(r.link)]));
       const emptyElements=()=>all('h1,h2,h3,h4,p,div,span,strong,b,section,[role="status"],[role="alert"]').filter(el=>

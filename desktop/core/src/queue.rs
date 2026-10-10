@@ -259,6 +259,20 @@ impl Store {
         // Include failed/unconfirmed receipts too; an absent artifact must not
         // hide the original request, scope or owned path in the source report.
         for task in &mut tasks {
+            let mut stmt = tx.prepare("SELECT seq,data FROM events WHERE task_id=? AND kind='wos_search_trace' ORDER BY seq")?;
+            for row in stmt.query_map([&task.id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })? {
+                let (seq, text) = row?;
+                let receipt: serde_json::Value = serde_json::from_str(&text)?;
+                task.evidence.push(crate::Evidence {
+                    id: format!("wos-search-event:{seq}"),
+                    kind: "database_search_trace".into(),
+                    source: receipt["source_url"].as_str().unwrap_or("WOS").into(),
+                    text,
+                    created: receipt["observed_at"].as_u64().unwrap_or(0),
+                });
+            }
             let mut stmt =
                 tx.prepare("SELECT data FROM native_downloads WHERE task_id=? ORDER BY rowid")?;
             let rows = stmt.query_map([&task.id], |r| r.get::<_, String>(0))?;

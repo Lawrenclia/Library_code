@@ -98,6 +98,10 @@ impl Engine {
             .is_some_and(|q| q.status.unfinished() && q.status != queue::QueueStatus::Running);
         let mut tasks = serde_json::to_value(self.store.tasks()?)?;
         for task in tasks.as_array_mut().unwrap() {
+            task["wos_searches"] = serde_json::to_value(
+                self.store
+                    .wos_search_traces(task["id"].as_str().unwrap_or(""))?,
+            )?;
             let attempts = self.store.unresolved(task["id"].as_str().unwrap_or(""))?;
             task["pending_action"] = if attempts.len() == 1 {
                 attempts[0]["action"].clone()

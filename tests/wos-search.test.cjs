@@ -16,6 +16,21 @@ const edge='C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
   const success=async()=>{const result=await run();assert.equal(result.ok,true,JSON.stringify(result));assert.equal(await page.evaluate(()=>searches),1);};
   const stopped=async count=>{const result=await run();assert.equal(result.ok,false);assert.match(result.error,new RegExp('识别到 '+count+' 个'));assert.equal(await page.evaluate(()=>searches),0);};
   const tests=[];const test=(name,fn)=>tests.push([name,fn]);
+  test('deferred native search reports actual accession query instead of roster title before clicking',async()=>{
+    const result=await page.evaluate(runWOSCommand,{id:'native-context',action:'wos_start_search',defer_click:true,sa_id:'synthetic',title:'Synthetic paper',doi:'10.1234/test',wos:'WOS:000123456789012',expires:Date.now()+30000});
+    assert.equal(result.ok,true,JSON.stringify(result));
+    assert.equal(result.data.ready,true);assert.equal(result.data.search_context.field,'wos');
+    assert.equal(result.data.search_context.query,'WOS:000123456789012');
+    assert.equal(result.data.search_context.submission_confirmed,false);
+    assert.equal(result.data.search_context.scope_controls_exhaustive,false);
+    assert.equal(await page.evaluate(()=>searches),0);
+  });
+  test('changing query after native preview prevents the deferred click',async()=>{
+    const result=await page.evaluate(runWOSCommand,{id:'native-context',action:'wos_start_search',defer_click:true,sa_id:'synthetic',title:'Synthetic paper',expires:Date.now()+30000});
+    assert.equal(result.ok,true,JSON.stringify(result));
+    const failure=await page.evaluate(()=>{document.querySelector('input').value='Different query';try{window.__wosNativeSearch.submit();return '';}catch(error){return error.message;}});
+    assert.match(failure,/查询词或页面变化/);assert.equal(await page.evaluate(()=>searches),0);
+  });
   test('Chinese search text ignores the material magnifier ligature',async()=>{
     await page.evaluate(()=>document.querySelector('button').innerHTML='<mat-icon>search</mat-icon><span>检索</span>');await success();
   });

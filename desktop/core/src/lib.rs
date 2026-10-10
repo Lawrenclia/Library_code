@@ -31,6 +31,7 @@ pub mod templates;
 pub mod versions;
 pub mod workflow;
 pub mod wos_reuse;
+pub mod wos_search;
 pub use model::*;
 pub use store::Store;
 #[cfg(test)]

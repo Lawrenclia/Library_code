@@ -119,7 +119,10 @@ impl Engine {
         self.store.save(&mut t, "search_started")?;
         self.changed(app);
         let payload = json!({"sa_id":t.id,"title":t.record.title,"doi":normalized_doi(&t.record.doi),"wos":normalized_wos(&t.record.wos)});
-        let record = self.browser.search(app, payload.clone()).await?;
+        let journal = library_core::wos_search::begin(&self.store, &t)?;
+        let searched = self.browser.search(app, payload.clone(), &journal).await;
+        journal.finish(&searched)?;
+        let record = searched?;
         if self.pause.load(Ordering::SeqCst) {
             t.running = false;
             t.stage = Stage::Pending;
@@ -129,13 +132,6 @@ impl Engine {
         let url = record["record_url"]
             .as_str()
             .ok_or_else(|| Failure::new("PAGE_UNSUPPORTED", "检索没有返回来源链接。"))?;
-        t.evidence.push(Evidence {
-            id: uuid::Uuid::new_v4().to_string(),
-            kind: "database_search".into(),
-            source: url.into(),
-            text: format!("WOS 检索：{}", t.record.title),
-            created: now(),
-        });
         t.stage = Stage::Downloading;
         self.store.save(&mut t, "export_started")?;
         self.changed(app);

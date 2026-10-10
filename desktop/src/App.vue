@@ -31,6 +31,7 @@ import WorkbenchShell from "@/components/WorkbenchShell.vue";
 import WorkflowOverview from "@/components/WorkflowOverview.vue";
 import SourceImporter from "@/components/SourceImporter.vue";
 import SearchScopePanel from "@/components/SearchScopePanel.vue";
+import WosSearchPanel from "@/components/WosSearchPanel.vue";
 import LegacyKeyPanel from "@/components/LegacyKeyPanel.vue";
 import AiQueuePanel from "@/components/AiQueuePanel.vue";
 import MaterialBatchPanel from "@/components/MaterialBatchPanel.vue";
@@ -1402,6 +1403,7 @@ function frameworkBrowser(role: string, entry?: string) {
                   :channels="workspace.framework?.channels || []"
                   :run="run"
                 />
+                <WosSearchPanel :task="current" />
                 <SearchScopePanel
                   :key="current.id"
                   :task="current"

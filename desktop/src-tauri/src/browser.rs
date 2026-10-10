@@ -345,7 +345,12 @@ impl Browser {
         }
         Ok(response["data"].clone())
     }
-    pub async fn search(&self, app: &AppHandle, payload: Value) -> Result<Value> {
+    pub async fn search(
+        &self,
+        app: &AppHandle,
+        payload: Value,
+        journal: &library_core::wos_search::Journal,
+    ) -> Result<Value> {
         let w = app
             .get_webview_window("wos")
             .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "请打开 WOS 并完成机构访问。"))?;
@@ -376,20 +381,53 @@ impl Browser {
         let start = self
             .execute(app, "wos", "wos_start_search", start_payload.clone(), 35)
             .await;
-        if let Err(e) = start {
-            if e.message.contains("保留上一条零结果") {
+        let start = match start {
+            Ok(value) => value,
+            Err(e) if e.message.contains("保留上一条零结果") => {
                 w.navigate(format!("{origin}/wos/woscc/basic-search").parse().unwrap())
                     .map_err(Failure::storage)?;
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 self.execute(app, "wos", "wos_start_search", start_payload, 35)
-                    .await?;
-            } else {
-                return Err(e);
+                    .await?
             }
+            Err(e) => return Err(e),
+        };
+        journal.record(
+            "prepared",
+            start["search_context"]["source_url"].as_str(),
+            start.clone(),
+        )?;
+        let context = &start["search_context"];
+        let (field, query) = if payload["wos"].as_str().is_some_and(|s| !s.is_empty()) {
+            ("wos", &payload["wos"])
+        } else if payload["doi"].as_str().is_some_and(|s| !s.is_empty()) {
+            ("doi", &payload["doi"])
+        } else {
+            ("title", &payload["title"])
+        };
+        if start["ready"] != true
+            || context["schema"] != "wos_search_context_v1"
+            || context["field"] != field
+            || context["query"].as_str() != query.as_str()
+            || context["command_id"]
+                .as_str()
+                .is_none_or(|id| id.is_empty() || id.len() > 100)
+        {
+            return Err(Failure::new(
+                "PAGE_UNSUPPORTED",
+                "没有回读到本次实际检索字段和查询词，未派发检索。",
+            ));
         }
+        journal.record(
+            "dispatch_requested",
+            context["source_url"].as_str(),
+            json!({"search_context":context,"submission_confirmed":false}),
+        )?;
         // The deferred click is issued outside the result callback: navigation can destroy
         // the JavaScript document without destroying the desktop command channel.
-        w.eval("if(window.__wosNativeSearch){const p=window.__wosNativeSearch;delete window.__wosNativeSearch;if(p.button?.isConnected)p.button.click();}").map_err(Failure::storage)?;
+        let expected_command = serde_json::to_string(&context["command_id"])?;
+        w.eval(format!("if(window.__wosNativeSearch?.id==={expected_command}){{const p=window.__wosNativeSearch;delete window.__wosNativeSearch;if(typeof p.submit==='function')p.submit();}}"))
+            .map_err(Failure::storage)?;
         let mut navigated = false;
         while now() < end {
             tokio::time::sleep(Duration::from_millis(700)).await;
@@ -408,6 +446,9 @@ impl Browser {
                 Err(e) if e.code == "PAGE_TIMEOUT" => continue,
                 Err(e) => return Err(e),
             };
+            if data["state"] != "loading" {
+                journal.record("observed_result", Some(current.as_str()), data.clone())?;
+            }
             match data["state"].as_str() {
                 Some("loading") => continue,
                 Some("zero") => return Err(Failure::new("NO_RESULT", "本次 WOS 检索未找到记录。")),
