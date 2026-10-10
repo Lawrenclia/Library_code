@@ -48,7 +48,7 @@ pub(crate) fn preview_reused_source(
         .as_ref()
         .ok_or_else(|| Failure::new("SOURCE_REUSE_INVALID", "复用来源缺少快照。"))?
         .selection;
-    let offset = if draft.format == "txt" {
+    let offset = if draft.format == "txt" && !draft.options.text_table {
         selected.row.saturating_sub(1)
     } else {
         selected.row.saturating_sub(selected.header_row + 1)

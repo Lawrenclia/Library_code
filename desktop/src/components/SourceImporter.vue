@@ -25,7 +25,8 @@ const props = defineProps<{
 }>();
 const channel = ref("cnki"),
   encoding = ref("utf-8"),
-  delimiter = ref("comma");
+  delimiter = ref("comma"),
+  textTable = ref(false);
 const data = ref<SourcePage | null>(null),
   sheet = ref(""),
   header = ref(1),
@@ -39,7 +40,11 @@ const textStart = ref(1),
 const url = ref(""),
   note = ref(""),
   confirmed = ref(false);
-const textMode = computed(() => data.value?.draft.format === "txt");
+const textMode = computed(() =>
+  data.value?.layout
+    ? data.value.layout === "text"
+    : data.value?.draft.format === "txt",
+);
 const reusing = computed(() => !!data.value?.draft.origin);
 const reusable = ref<SourceReuseOptions | null>(null);
 const originals = computed(() =>
@@ -185,7 +190,11 @@ async function preview() {
     {
       id,
       channel: channel.value,
-      options: { encoding: encoding.value, delimiter: delimiter.value },
+      options: {
+        encoding: encoding.value,
+        delimiter: delimiter.value,
+        text_table: textTable.value,
+      },
     },
     "原文件已保存，选择其中一条论文记录并核对表头。",
   );
@@ -275,9 +284,9 @@ async function attach() {
         </select></label
       >
       <label class="field"
-        >CSV 分隔符<select
+        >表格分隔符<select
           v-model="delimiter"
-          aria-label="来源 CSV 分隔符"
+          aria-label="来源表格分隔符"
           class="native-select mt-2 w-full"
           :disabled="locked"
         >
@@ -287,12 +296,25 @@ async function attach() {
         </select></label
       >
     </div>
+    <label class="flex items-start gap-2 text-xs leading-6">
+      <input
+        v-model="textTable"
+        type="checkbox"
+        :disabled="locked"
+        class="mt-1.5"
+      />
+      TXT 按分隔表格读取（适用于带表头的制表符、逗号或分号文件）
+    </label>
+    <p class="text-[10px] text-muted-foreground">
+      普通文本保持按行读取；勾选后按上方分隔符读取全部列，仍需选择实际记录和身份列。
+    </p>
     <SourceBrowserPanel
       :task="task"
       :channel="channel"
       :locked="locked"
       :encoding="encoding"
       :delimiter="delimiter"
+      :text-table="textTable"
       :run="run"
       @preview="captured"
     />
@@ -410,11 +432,11 @@ async function attach() {
         </select></label
       >
       <label v-if="!textMode" class="field"
-        >原始表头行号<Input
+        >原始表头记录号<Input
           type="number"
           min="1"
           v-model.number="header"
-          aria-label="来源表头行号"
+          aria-label="来源表头记录号"
           :disabled="locked || reusing"
           class="mt-2"
       /></label>
@@ -424,6 +446,12 @@ async function attach() {
       <p class="text-[11px] text-muted-foreground">
         {{ data.total }} {{ textMode ? "行文本" : "条记录" }}，每页最多 50
         条。请明确选择本篇，程序不会默认第一条。
+      </p>
+      <p
+        v-if="data.draft.format === 'txt' && !textMode"
+        class="text-[11px] text-muted-foreground"
+      >
+        本预览按分隔表格读取。记录号对应表格行；引号内换行保留在同一字段，不按物理文本行拆分。
       </p>
       <div class="max-h-56 space-y-1 overflow-auto rounded border p-2">
         <label

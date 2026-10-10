@@ -497,6 +497,7 @@ export interface SourceWindowState {
 }
 export interface SourcePage {
   draft: SourceDraft;
+  layout?: "text" | "table";
   sheet: string;
   header_row: number;
   page: number;

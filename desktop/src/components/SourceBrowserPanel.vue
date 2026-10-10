@@ -18,6 +18,7 @@ const props = defineProps<{
   locked: boolean;
   encoding: string;
   delimiter: string;
+  textTable: boolean;
   run: <T>(
     command: DesktopCommand,
     args?: Record<string, unknown>,
@@ -178,7 +179,11 @@ async function preview(download: SourceDownload) {
     {
       id,
       downloadId: download.id,
-      options: { encoding: props.encoding, delimiter: props.delimiter },
+      options: {
+        encoding: props.encoding,
+        delimiter: props.delimiter,
+        text_table: props.textTable,
+      },
     },
     "原始下载已读取，请明确选择论文记录并填写绑定依据。",
   );

@@ -14,12 +14,18 @@ const MAX_CELLS: usize = 200_000;
 pub struct ReadOptions {
     pub encoding: String,
     pub delimiter: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub text_table: bool,
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 impl Default for ReadOptions {
     fn default() -> Self {
         Self {
             encoding: "utf-8".into(),
             delimiter: "comma".into(),
+            text_table: false,
         }
     }
 }
@@ -49,6 +55,7 @@ struct Table {
 pub struct Document {
     tables: Vec<Table>,
     encoding: String,
+    text_mode: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Selection {
@@ -206,7 +213,7 @@ pub fn read(path: &Path, format: &str, options: &ReadOptions) -> Result<Document
             }
             encoding = "XLSX".into();
         }
-        "csv" => {
+        "csv" | "txt" if format == "csv" || options.text_table => {
             let (text, actual) = decode(&raw, &options.encoding)?;
             encoding = actual;
             let delimiter = match options.delimiter.as_str() {
@@ -221,7 +228,9 @@ pub fn read(path: &Path, format: &str, options: &ReadOptions) -> Result<Document
                 .from_reader(text.as_bytes());
             let mut rows = vec![];
             for record in reader.records() {
-                let row = record.map_err(|_| fail("CSV 列数或引号不一致，请核对分隔符。"))?;
+                let row = record.map_err(|_| {
+                    fail("分隔表格的列数或引号不一致，请核对分隔符；不会丢弃字段。")
+                })?;
                 cells += row.len();
                 if cells > MAX_CELLS {
                     return Err(fail("来源超过 200000 个单元格。"));
@@ -229,7 +238,7 @@ pub fn read(path: &Path, format: &str, options: &ReadOptions) -> Result<Document
                 rows.push(row.iter().map(str::to_string).collect());
             }
             tables.push(Table {
-                name: "CSV".into(),
+                name: if format == "csv" { "CSV" } else { "TXT 表格" }.into(),
                 start_row: 0,
                 start_col: 0,
                 rows,
@@ -259,7 +268,11 @@ pub fn read(path: &Path, format: &str, options: &ReadOptions) -> Result<Document
     if tables.iter().all(|t| t.rows.is_empty()) {
         return Err(fail("文件没有可读取的记录。"));
     }
-    Ok(Document { tables, encoding })
+    Ok(Document {
+        tables,
+        encoding,
+        text_mode: format == "txt" && !options.text_table,
+    })
 }
 pub fn prepare(
     root: &Path,
@@ -369,7 +382,7 @@ impl Document {
         } else {
             header_row
         };
-        let offset = if draft.format == "txt" {
+        let offset = if self.text_mode {
             0
         } else {
             header_row
@@ -377,7 +390,7 @@ impl Document {
                 .ok_or_else(|| fail("表头行不在实际数据内。"))? as usize
                 + 1
         };
-        let headers = if draft.format == "txt" {
+        let headers = if self.text_mode {
             vec![]
         } else {
             table.rows.get(offset-1).ok_or_else(||fail("表头行不存在。"))?.iter().enumerate().map(|(i,s)|json!({"column":table.start_col+i as u32,"name":s,"label":format!("{} [{}列]",s,column(table.start_col+i as u32))})).collect()
@@ -398,12 +411,12 @@ impl Document {
             .map(|(i, row)| json!({"row":table.start_row+i as u32+1,"values":row}))
             .collect();
         Ok(
-            json!({"draft":draft,"sheets":self.tables.iter().map(|t|json!({"name":t.name,"first_row":t.start_row+1,"rows":t.rows.len()})).collect::<Vec<_>>(),"sheet":table.name,"header_row":header_row,"columns":headers,"rows":rows,"page":page,"total":count,"actual_encoding":self.encoding}),
+            json!({"draft":draft,"layout":if self.text_mode {"text"} else {"table"},"sheets":self.tables.iter().map(|t|json!({"name":t.name,"first_row":t.start_row+1,"rows":t.rows.len()})).collect::<Vec<_>>(),"sheet":table.name,"header_row":header_row,"columns":headers,"rows":rows,"page":page,"total":count,"actual_encoding":self.encoding}),
         )
     }
     fn extract(
         &self,
-        format: &str,
+        _format: &str,
         s: &Selection,
     ) -> Result<(Vec<Field>, String, String, String, String)> {
         let table = self.table(&s.sheet)?;
@@ -412,7 +425,7 @@ impl Document {
             .checked_sub(table.start_row + 1)
             .ok_or_else(|| fail("所选行不存在。"))? as usize;
         let values = table.rows.get(row).ok_or_else(|| fail("所选行不存在。"))?;
-        if format == "txt" {
+        if self.text_mode {
             let end = s
                 .end_row
                 .checked_sub(table.start_row + 1)
@@ -752,6 +765,121 @@ mod tests {
             "Identifiers and full title checked".into(),
             true,
         )
+    }
+    #[test]
+    fn explicitly_delimited_txt_preserves_all_selected_fields_and_read_settings() {
+        for channel in ["cscd", "cssci", "cnki", "wanfang"] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut t = task();
+            let path = dir.path().join("original.txt");
+            let raw = "Title\tDOI\tWOS\tKeyword\tKeyword\tAbstract\nPaper\t10.1234/test\tWOS:000123456789012\tfirst\tsecond\t\"full abstract\nwith a tab\there\"\nOther\t\t\t\t\t\n";
+            std::fs::write(&path, raw).unwrap();
+            let d = prepare(
+                dir.path(),
+                &t,
+                channel,
+                &path,
+                ReadOptions {
+                    delimiter: "tab".into(),
+                    text_table: true,
+                    ..ReadOptions::default()
+                },
+            )
+            .unwrap();
+            let doc = check_draft(dir.path(), &t, &d).unwrap();
+            let page = doc.page(&d, None, 1, 0).unwrap();
+            assert_eq!(page["layout"], "table");
+            assert_eq!(page["total"], 2);
+            assert_eq!(page["columns"].as_array().unwrap().len(), 6);
+            assert_eq!(
+                page["rows"][0]["values"][5],
+                "full abstract\nwith a tab\there"
+            );
+            let mut s = csv_selection();
+            s.sheet = "TXT 表格".into();
+            let e = evidence(dir.path(), &t, &d, s).unwrap();
+            let receipt: Receipt = serde_json::from_str(&e.text).unwrap();
+            assert!(receipt.options.text_table);
+            assert_eq!(receipt.channel, channel);
+            assert_eq!(receipt.fields.len(), 6);
+            assert_eq!(receipt.fields[3].label, receipt.fields[4].label);
+            assert_eq!(receipt.fields[3].value, "first");
+            assert_eq!(receipt.fields[4].value, "second");
+            assert_eq!(receipt.fields[5].value, "full abstract\nwith a tab\there");
+            assert_eq!(
+                std::fs::read(&receipt.archive_path).unwrap(),
+                raw.as_bytes()
+            );
+            t.evidence.push(e.clone());
+            assert!(verify_for_ai(dir.path(), &t).unwrap().contains(&e.id));
+            let mut changed = receipt;
+            changed.options.text_table = false;
+            t.evidence[0].text = serde_json::to_string(&changed).unwrap();
+            assert!(verify_for_ai(dir.path(), &t).is_err());
+        }
+    }
+    #[test]
+    fn old_txt_options_and_receipts_keep_raw_line_semantics_without_implicit_conversion() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = task();
+        let options: ReadOptions =
+            serde_json::from_value(json!({"encoding":"utf-8","delimiter":"tab"})).unwrap();
+        assert!(!options.text_table);
+        assert_eq!(
+            json!(options),
+            json!({"encoding":"utf-8","delimiter":"tab"})
+        );
+        let path = dir.path().join("legacy.txt");
+        std::fs::write(
+            &path,
+            "Title\tDOI\nPaper\t10.1234/test\nAbstract\tall details",
+        )
+        .unwrap();
+        let d = prepare(dir.path(), &t, "cnki", &path, options).unwrap();
+        let doc = check_draft(dir.path(), &t, &d).unwrap();
+        let page = doc.page(&d, None, 1, 0).unwrap();
+        assert_eq!(page["layout"], "text");
+        assert_eq!(page["rows"][1]["values"][0], "Paper\t10.1234/test");
+        let s = Selection {
+            sheet: "文本".into(),
+            header_row: 1,
+            row: 1,
+            end_row: 3,
+            title_column: None,
+            doi_column: None,
+            wos_column: None,
+            text_title: "Paper".into(),
+        };
+        let e = evidence(dir.path(), &t, &d, s).unwrap();
+        assert!(!e.text.contains("text_table"));
+        let id = e.id.clone();
+        t.evidence.push(e);
+        assert!(verify_for_ai(dir.path(), &t).unwrap().contains(&id));
+    }
+    #[test]
+    fn delimited_txt_rejects_inconsistent_columns_and_paginates_logical_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = task();
+        let path = dir.path().join("table.txt");
+        let options = ReadOptions {
+            delimiter: "semicolon".into(),
+            text_table: true,
+            ..ReadOptions::default()
+        };
+        std::fs::write(&path, "Title;DOI;Detail\nPaper;10.1234/test\n").unwrap();
+        assert!(prepare(dir.path(), &t, "cnki", &path, options.clone()).is_err());
+        let mut raw = "Title;DOI;Detail\n".to_string();
+        for n in 0..60 {
+            raw.push_str(&format!("Paper {n};10.1234/test;\"part 1\npart 2\"\n"));
+        }
+        std::fs::write(&path, raw).unwrap();
+        let d = prepare(dir.path(), &t, "cnki", &path, options).unwrap();
+        let doc = check_draft(dir.path(), &t, &d).unwrap();
+        let page = doc.page(&d, None, 1, 1).unwrap();
+        assert_eq!(page["total"], 60);
+        assert_eq!(page["rows"][0]["row"], 52);
+        assert_eq!(page["rows"][0]["values"][0], "Paper 50");
+        assert!(doc.page(&d, None, 1, 2).is_err());
     }
     #[test]
     fn registry_formats_are_explicit_and_original_bytes_are_unchanged() {
