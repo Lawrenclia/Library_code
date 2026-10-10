@@ -6,6 +6,10 @@
 
 ## 当前版本
 
+### 0.1.4 主分支 GitHub 构建交付（2026-10-10）
+
+[本次 Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38064502881) 全部步骤成功，实际源码为合并提交 `f19a13cf37e91623dd73cf04ad3b6ca9353fe507`，产物 `Windows-EXE-0.1.4-f19a13cf`。已下载 ZIP 并直接读取安装包，确认版本 0.1.4、源码提交、文件名、6,721,130 字节及 SHA256 `1B3EC70C70BC5123D342B33311DC2A7F5FDE6DC63A8B056F045F859394A1AB62` 与 `build-info.json`、`SHA256SUMS.txt` 一致。ZIP 位于 `D:\Library\releases\github\0.1.4\f19a13cf\Windows-EXE-0.1.4-f19a13cf.zip`。只编译打包和检查交付文件，没有安装启动、业务测试或平台操作；完整目标仍未验收完成。
+
 ### 0.1.4 CNKI Excel 应用内另存（2026-10-10）
 
 Rust `cnki_excel.rs` 接入本地文件选择和已完成的原生下载，读取 XLSX、二进制 XLS 及 HTML 表格 XLS，按文本保存完整单元格及位置，重新读取对照后保存另存回执。原件及另存文件分别归档，绑定、AI、来源复用和材料准备核对两份文件及回执，提交资料包附完整原件。无法完整处理的合并/嵌套 HTML 表格、非文本内容、公式、Excel 日期/错误类型与超限字段提示人工另存。没有自动确认论文身份、交大归属或平台成功，CNKI 自动上传仍待接通。

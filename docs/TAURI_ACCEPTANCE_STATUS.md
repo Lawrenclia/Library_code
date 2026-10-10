@@ -1,5 +1,7 @@
 # 当前源码与安装包交付状态
 
+主分支 **0.1.4 云端构建已成功**：[Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38064502881) 全部步骤成功结束。源码为 `f19a13cf37e91623dd73cf04ad3b6ca9353fe507`，其文件树与合入的本地分支一致；产物 `Windows-EXE-0.1.4-f19a13cf` 已上传。已下载并直接读取 ZIP，安装 EXE 为 6,721,130 字节，实际 SHA256 `1B3EC70C70BC5123D342B33311DC2A7F5FDE6DC63A8B056F045F859394A1AB62` 与版本记录、哈希清单一致。云端 ZIP 保存在 `D:\Library\releases\github\0.1.4\f19a13cf`。云端与本地安装包分别记录哈希，未安装、启动或进行业务测试。
+
 当前 **0.1.4** 增加 CNKI Excel 应用内另存：保留原件、完整单元格、另存文件和回执，并接入来源绑定、AI、材料准备及资料包。前端生产构建、Rust release 与 NSIS 打包成功，安装包 `D:\Library\releases\0.1.4\机构知识库工作台_0.1.4_x64-setup.exe` 为 6,793,753 字节，SHA256 `54ED9D4B775F5A2C1519D58B2D01F1F15ED2EFB965FD0A410EC0D212B580FEB3`。只编译打包，未运行测试或操作真实网站；CNKI 自动上传仍未实现。按用户要求，将本地新版合入 GitHub 主分支，Actions 默认源码及自动构建分支均为 `main`。步骤见 [0.1.4 自测说明](TAURI_TESTING_0_1_4.md)。下文保留较早版本的实际交付证据，不代表当前业务已经验收。
 
 GitHub Windows EXE 首轮构建已成功结束：[Actions #1](https://github.com/Lawrenclia/Library_code/actions/runs/38063069025)。源码为 `b6f8bb437457d5cc7adfc692eeb130d7a4359330`，产物 `Windows-EXE-0.1.3-b6f8bb43` 包含安装 EXE、`build-info.json` 和 `SHA256SUMS.txt`。已下载并读取压缩包，安装 EXE 为 6,445,536 字节，实际 SHA256 与包内记录一致：`B0BDBDC4DA58C12980E2C087350DD5FAD1E3E88E6DB8358959619B81D01BD1FF`。该哈希属于 GitHub 构建，下面的本地构建是另一份文件，不应混用哈希。未安装或启动云端程序，业务测试与现场验收仍未执行。

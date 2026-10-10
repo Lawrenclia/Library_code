@@ -6,7 +6,7 @@
 
 当前新版为 **0.1.4，Rust + TypeScript + Tauri 2**，位于主分支 `desktop`。新增 CNKI Excel 应用内另存并保留原件和回执，使用步骤见 [0.1.4 自测说明](docs/TAURI_TESTING_0_1_4.md)。Python 是保留的旧版，新桌面 EXE 不依赖它；当前业务仍待自测。
 
-**0.1.3 云端安装包已生成：** [Actions #1](https://github.com/Lawrenclia/Library_code/actions/runs/38063069025) 全部步骤成功，下载 `Windows-EXE-0.1.3-b6f8bb43` 后解压并安装。包内包含源码提交和 SHA256；本轮只编译打包，业务流程仍由用户自测。
+**0.1.4 主分支云端安装包已生成：** [本次 Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38064502881) 全部步骤成功，在 **Artifacts** 下载 `Windows-EXE-0.1.4-f19a13cf` 后解压并安装。源码为主分支合并提交 `f19a13c`，包内包含源码提交和 SHA256，实际安装包哈希已核对；本轮只编译打包，业务流程仍由用户自测。
 
 新增“流程与连接”总览，后端已拆分服务并统一操作、浏览器和渠道注册。结构与扩展规则见 [完整框架说明](docs/FRAMEWORK.md)。已登记渠道与实际自动能力分开显示，真实 WOS/机构后台仍待现场验收。
 
