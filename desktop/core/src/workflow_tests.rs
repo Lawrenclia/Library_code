@@ -159,6 +159,72 @@ fn imported_batch_cannot_resolve_unknown_push() {
     );
 }
 #[test]
+fn complete_import_readback_binds_original_batch_counts_and_single_paper() {
+    let raw = b"TI\tAU\tAF\tSO\tPY\tC1\tUT\tDI\nPaper\tA B\tAuthor B\tJournal\t2026\tShanghai Jiao Tong University\tWOS:000123456789012\t10.1234/test\n";
+    let candidate = files::parse_wos(raw).unwrap();
+    let batch = json!({"id":"batch-1","modelId":"article-model","source":"WOS","instructions":"SA补充-sa1","total":1,"actual":0,"fail":0,"status":1});
+    let payload = json!({"sa_id":"sa1","instructions":"SA补充-sa1","candidate":candidate,"batch":batch,"batch_id":"batch-1"});
+    let mut result = json!({"verified":true,"batch":batch,"items":[{"metadata":{"title":["Paper"],"wosId":["000123456789012"],"doi":["https://doi.org/10.1234/test"]}}]});
+    assert_eq!(
+        validate_import_readback(&result, &payload, false).unwrap(),
+        Stage::Imported
+    );
+    assert!(validate_import_readback(&result, &payload, true).is_err());
+    result["batch"]["status"] = json!(2);
+    result["batch"]["actual"] = json!(1);
+    assert_eq!(
+        validate_import_readback(&result, &payload, true).unwrap(),
+        Stage::Pushed
+    );
+    for (pointer, value) in [
+        ("/verified", json!(false)),
+        ("/batch/id", json!("other")),
+        ("/batch/modelId", json!("other-model")),
+        ("/batch/source", json!("Other")),
+        ("/batch/instructions", json!("SA补充-other")),
+        ("/batch/total", json!(2)),
+        ("/batch/actual", json!(0)),
+        ("/batch/fail", json!(1)),
+        ("/batch/status", json!(0)),
+        ("/batch/fail", json!("+0")),
+        ("/batch/total", json!(null)),
+        ("/items", json!([])),
+        ("/items/0/metadata/title", json!(["Wrong title"])),
+        ("/items/0/metadata/wosId", json!(["WOS:999999999999999"])),
+        ("/items/0/metadata/doi", json!(["10.1234/other"])),
+        ("/items/0/metadata/title", json!(["Paper", "Another title"])),
+    ] {
+        let mut wrong = result.clone();
+        *wrong.pointer_mut(pointer).unwrap() = value;
+        assert_eq!(
+            validate_import_readback(&wrong, &payload, true)
+                .unwrap_err()
+                .code,
+            "REMOTE_RESULT_UNKNOWN",
+            "{pointer}"
+        );
+    }
+    let mut duplicate = result.clone();
+    let item = duplicate["items"][0].clone();
+    duplicate["items"].as_array_mut().unwrap().push(item);
+    assert!(validate_import_readback(&duplicate, &payload, true).is_err());
+    assert!(validate_import_readback(
+        &json!({"verified":true,"batch":{"status":2}}),
+        &payload,
+        true
+    )
+    .is_err());
+    let mut discovery = payload.clone();
+    discovery.as_object_mut().unwrap().remove("batch");
+    discovery.as_object_mut().unwrap().remove("batch_id");
+    assert_eq!(
+        validate_import_readback(&result, &discovery, true).unwrap(),
+        Stage::Pushed
+    );
+    discovery["candidate"]["sjtu"] = json!(false);
+    assert!(validate_import_readback(&result, &discovery, true).is_err());
+}
+#[test]
 fn upload_recovery_requires_original_task_file_and_success_receipt() {
     let payload = json!({"sa_id":"sa1","instructions":"SA补充-sa1","contentSha":"a".repeat(64),"candidate":{"sha256":"a".repeat(64)}});
     let result = json!({"verified":true,"uploaded":true,"sa_id":"sa1","instructions":"SA补充-sa1","sha256":"a".repeat(64),

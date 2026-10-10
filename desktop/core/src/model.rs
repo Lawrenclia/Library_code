@@ -199,6 +199,97 @@ pub fn verified_import_stage(result: &Value, require_push: bool) -> Result<Stage
         "尚未回读到本次导入/推送的准确完成状态，不能重发。",
     ))
 }
+/// A browser success marker is not proof of the original batch or paper.
+pub fn validate_import_readback(
+    result: &Value,
+    payload: &Value,
+    require_push: bool,
+) -> Result<Stage> {
+    let bad = || {
+        Failure::new(
+            "REMOTE_RESULT_UNKNOWN",
+            "原批次说明、身份、数量或单篇文献尚未完整核验，保持结果未知，不重发导入或推送。",
+        )
+    };
+    fn count(value: &Value) -> Option<u64> {
+        value.as_u64().or_else(|| {
+            value
+                .as_str()
+                .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|s| s.parse().ok())
+        })
+    }
+    fn scalar<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+        value[key]
+            .as_array()
+            .filter(|a| a.len() == 1)?
+            .first()?
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+    }
+    let id = payload["sa_id"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(bad)?;
+    let candidate: Candidate =
+        serde_json::from_value(payload["candidate"].clone()).map_err(|_| bad())?;
+    let batch = &result["batch"];
+    if result["verified"] != true
+        || payload["instructions"] != format!("SA补充-{id}")
+        || !candidate.sjtu
+        || candidate.title.trim().is_empty()
+        || candidate.sha256.len() != 64
+        || !candidate.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+        || !regex::Regex::new(r"^WOS:[0-9]{15}$")
+            .unwrap()
+            .is_match(&candidate.wos)
+        || batch["source"] != "WOS"
+        || batch["instructions"] != payload["instructions"]
+        || ["id", "modelId"].iter().any(|k| {
+            batch[*k]
+                .as_str()
+                .is_none_or(|s| s.is_empty() || s.chars().any(char::is_whitespace))
+        })
+        || count(&batch["total"]) != Some(1)
+        || count(&batch["fail"]) != Some(0)
+        || !matches!(count(&batch["actual"]), Some(0 | 1))
+        || !matches!(count(&batch["status"]), Some(1 | 2))
+        || (count(&batch["status"]) == Some(2) && count(&batch["actual"]) != Some(1))
+    {
+        return Err(bad());
+    }
+    if let Some(expected_id) = payload.get("batch_id").filter(|v| !v.is_null()) {
+        let expected_id = expected_id.as_str().ok_or_else(bad)?;
+        if !expected_id.is_empty() && batch["id"] != expected_id {
+            return Err(bad());
+        }
+    }
+    if let Some(expected) = payload.get("batch").filter(|v| !v.is_null()) {
+        if !expected.is_object()
+            || ["id", "modelId", "source", "instructions"]
+                .iter()
+                .any(|key| expected[*key] != batch[*key])
+            || count(&expected["total"]) != count(&batch["total"])
+        {
+            return Err(bad());
+        }
+    }
+    let items = result["items"]
+        .as_array()
+        .filter(|a| a.len() == 1)
+        .ok_or_else(bad)?;
+    let metadata = &items[0]["metadata"];
+    let title = scalar(metadata, "title").ok_or_else(bad)?;
+    let wos = scalar(metadata, "wosId").ok_or_else(bad)?;
+    if norm(title) != norm(&candidate.title)
+        || normalized_wos(wos) != candidate.wos
+        || (!candidate.doi.is_empty()
+            && scalar(metadata, "doi").map(normalized_doi) != Some(candidate.doi.clone()))
+    {
+        return Err(bad());
+    }
+    verified_import_stage(result, require_push)
+}
 pub fn validate_upload_readback(result: &Value, payload: &Value, size: usize) -> Result<()> {
     let sa_id = payload["sa_id"].as_str().unwrap_or("");
     let sha = payload["candidate"]["sha256"].as_str().unwrap_or("");

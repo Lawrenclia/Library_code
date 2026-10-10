@@ -81,6 +81,7 @@ impl Engine {
                 .browser
                 .execute(app, "import", "import_check", cmd.clone(), 65)
                 .await?;
+            files::read_import_archive(&t, original)?;
             if result["uploaded"] == true {
                 validate_upload_readback(&result, &cmd, raw.len())?;
                 if checkpoint.as_ref().is_some_and(|previous| {
@@ -94,7 +95,7 @@ impl Engine {
                 t.stage = Stage::Uploaded;
                 t.batch = Some(result.clone());
             } else {
-                t.stage = verified_import_stage(&result, false)?;
+                t.stage = validate_import_readback(&result, &cmd, false)?;
                 t.batch = Some(result["batch"].clone());
             }
             t.running = false;
@@ -121,10 +122,17 @@ impl Engine {
             return Ok(result);
         }
         let mut cmd = original.clone();
-        cmd["batch_id"] = original
+        // Upload receipts describe a temporary object, not an imported batch.
+        cmd["batch"] = original
             .get("batch")
-            .or(t.batch.as_ref())
-            .and_then(|v| v["id"].as_str())
+            .filter(|v| !v.is_null())
+            .or(t.batch.as_ref().filter(|v| v["uploaded"] != true))
+            .cloned()
+            .unwrap_or(Value::Null);
+        cmd["batch_id"] = original["batch_id"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .or_else(|| cmd["batch"]["id"].as_str())
             .unwrap_or("")
             .into();
         cmd["expect_pushed"] = (attempts
@@ -135,7 +143,7 @@ impl Engine {
         let require_push = cmd["expect_pushed"] == true;
         let d = self
             .browser
-            .execute(app, "import", "import_check", cmd, 65)
+            .execute(app, "import", "import_check", cmd.clone(), 65)
             .await?;
         if d["verified"] != true {
             return Err(Failure::new(
@@ -143,7 +151,8 @@ impl Engine {
                 "尚未核验到导入/推送成功。",
             ));
         }
-        t.stage = verified_import_stage(&d, require_push)?;
+        files::read_import_archive(&t, original)?;
+        t.stage = validate_import_readback(&d, &cmd, require_push)?;
         t.batch = Some(d["batch"].clone());
         t.running = false;
         t.last_error = None;
