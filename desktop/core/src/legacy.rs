@@ -20,6 +20,13 @@ pub struct Entry {
     pub needs_readback: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
+pub struct Conflict {
+    pub sa_id: String,
+    pub kind: String,
+    pub source: String,
+    pub message: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Preview {
     pub root: String,
     pub fingerprint: String,
@@ -32,6 +39,8 @@ pub struct Preview {
     pub material_file_count: usize,
     pub unbound_material_count: usize,
     pub material_warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<Conflict>,
     pub entries: Vec<Entry>,
 }
 pub struct Plan {
@@ -157,18 +166,25 @@ pub fn inspect(root: &Path) -> Result<Plan> {
             "旧名单必须有唯一的查询方式列，才能核对旧任务版本。",
         ));
     }
+    let start_row = range.start().unwrap_or((0, 0)).0;
     let keys = records
         .iter()
         .map(|r| {
+            let offset = r
+                .row
+                .checked_sub(start_row + 1)
+                .ok_or_else(|| Failure::new("MIGRATION_INVALID", "旧名单行号不在实际工作表内。"))?;
             let value = range
                 .rows()
-                .nth((r.row - 1) as usize)
+                .nth(offset as usize)
                 .and_then(|row| row.get(queries[0]))
                 .map(|x| x.to_string())
-                .unwrap_or_default();
-            (r.sa_id.clone(), record_key(r, value.trim()))
+                .ok_or_else(|| {
+                    Failure::new("MIGRATION_INVALID", "旧名单对应行缺少实际查询方式单元格。")
+                })?;
+            Ok((r.sa_id.clone(), record_key(r, value.trim())))
         })
-        .collect::<BTreeMap<_, _>>();
+        .collect::<Result<BTreeMap<_, _>>>()?;
     if before != input_hash || before != hash(&std::fs::read(&roster)?) {
         return Err(Failure::new(
             "INPUT_CHANGED",
@@ -251,17 +267,25 @@ pub fn inspect(root: &Path) -> Result<Plan> {
                         "旧日志标识符与原始 TXT 不一致。",
                     ));
                 }
-                artifacts.insert(
-                    format!("{relative}:{}", row["sa_id"].as_str().unwrap_or("")),
-                    Artifact {
-                        path: archived.to_string_lossy().into(),
-                        source: "WOS · 旧版迁移".into(),
-                        record_url: "".into(),
-                        downloaded: now(),
-                        candidate,
-                        identity_confirmed: false,
-                    },
-                );
+                if artifacts
+                    .insert(
+                        format!("{relative}:{}", row["sa_id"].as_str().unwrap_or("")),
+                        Artifact {
+                            path: archived.to_string_lossy().into(),
+                            source: "WOS · 旧版迁移".into(),
+                            record_url: "".into(),
+                            downloaded: now(),
+                            candidate,
+                            identity_confirmed: false,
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err(Failure::new(
+                        "MIGRATION_CONFLICT",
+                        "同一旧日志内有重复 SA 导出记录，不能覆盖其中一份归档。",
+                    ));
+                }
             }
         }
         sources.push(json!({"path":relative,"imports":imports,"snapshot":data}));
@@ -330,6 +354,7 @@ pub fn inspect(root: &Path) -> Result<Plan> {
                 .filter(|m| m.task_ids.is_empty())
                 .count(),
             material_warnings: materials.warnings.clone(),
+            conflicts: source_conflicts(&snapshot, &artifacts),
             entries,
         },
         records,
@@ -338,6 +363,77 @@ pub fn inspect(root: &Path) -> Result<Plan> {
         artifacts,
         materials,
     })
+}
+/// Preflight ambiguities before copying files or changing any task.
+pub fn source_conflicts(snapshot: &Value, artifacts: &BTreeMap<String, Artifact>) -> Vec<Conflict> {
+    let mut conflicts = Vec::new();
+    let mut owners: BTreeMap<String, (String, String)> = BTreeMap::new();
+    for source in snapshot["sources"].as_array().into_iter().flatten() {
+        let path = source["path"].as_str().unwrap_or("");
+        for row in source["snapshot"]["rows"].as_array().into_iter().flatten() {
+            let id = row["sa_id"].as_str().unwrap_or("");
+            let key = row["record_key"].as_str().unwrap_or("");
+            if let Some((prior, prior_source)) = owners.get(key) {
+                if prior != id {
+                    conflicts.push(Conflict {
+                        sa_id: id.into(),
+                        kind: "task_key_owner".into(),
+                        source: format!("{prior_source} / {path}"),
+                        message: format!(
+                            "同一旧任务键 {key} 同时指向 SA {prior} 和 {id}，事件不能确定归属。"
+                        ),
+                    });
+                }
+            } else {
+                owners.insert(key.into(), (id.into(), path.into()));
+            }
+        }
+    }
+    for record in snapshot["records"].as_array().into_iter().flatten() {
+        let id = record["sa_id"].as_str().unwrap_or("");
+        let mut hashes = std::collections::BTreeSet::new();
+        let mut files = Vec::new();
+        let mut remote = Vec::new();
+        for source in snapshot["sources"].as_array().into_iter().flatten() {
+            let path = source["path"].as_str().unwrap_or("");
+            if let Some(a) = artifacts.get(&format!("{path}:{id}")) {
+                hashes.insert(a.candidate.sha256.clone());
+                files.push(path);
+            }
+            if source["imports"] == true {
+                for row in source["snapshot"]["rows"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|r| r["sa_id"] == id && write_history(r))
+                {
+                    remote.push(format!(
+                        "{path} · {}",
+                        row["data"]["phase"].as_str().unwrap_or("")
+                    ));
+                }
+            }
+        }
+        if hashes.len() > 1 {
+            conflicts.push(Conflict {
+                sa_id: id.into(),
+                kind: "archive_versions".into(),
+                source: files.join(" / "),
+                message: "同一 SA 的旧导出文件有多个哈希版本，需先核对实际来源，不能选取最后一份。"
+                    .into(),
+            });
+        }
+        if remote.len() > 1 {
+            conflicts.push(Conflict {
+                sa_id: id.into(),
+                kind: "multiple_remote_checkpoints".into(),
+                source: remote.join(" / "),
+                message: "同一 SA 有多个旧导入写入检查点，需先核对原批次，不能合成一项回读。"
+                    .into(),
+            });
+        }
+    }
+    conflicts
 }
 pub fn rows_for<'a>(snapshot: &'a Value, id: &str) -> Vec<&'a Value> {
     snapshot["sources"]

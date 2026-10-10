@@ -2350,7 +2350,29 @@ function frameworkBrowser(role: string, entry?: string) {
                   {{ warning }}
                 </p>
               </details>
-              <Button :disabled="locked" @click="migrateLegacy"
+              <div
+                v-if="legacyPreview.conflicts?.length"
+                class="rounded-lg border border-destructive/40 p-3 text-xs leading-6"
+              >
+                <p class="font-medium text-destructive">
+                  发现
+                  {{
+                    legacyPreview.conflicts.length
+                  }}
+                  项迁移冲突，请先核对并重新预览；尚未写入任务。
+                </p>
+                <div
+                  v-for="(conflict, index) in legacyPreview.conflicts"
+                  :key="index"
+                  class="break-all border-b py-2 last:border-0"
+                >
+                  <p>SA {{ conflict.sa_id }} · {{ conflict.message }}</p>
+                  <p class="text-muted-foreground">{{ conflict.source }}</p>
+                </div>
+              </div>
+              <Button
+                :disabled="locked || !!legacyPreview.conflicts?.length"
+                @click="migrateLegacy"
                 ><Check />迁移这些记录</Button
               >
             </template>

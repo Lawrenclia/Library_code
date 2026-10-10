@@ -406,6 +406,18 @@ impl Store {
                 json!({"already_imported":true,"count":0,"fingerprint":plan.preview.fingerprint}),
             );
         }
+        let conflicts = Self::legacy_conflicts_on(&tx, plan)?;
+        if let Some(first) = conflicts.first() {
+            return Err(Failure::new(
+                "MIGRATION_CONFLICT",
+                format!(
+                    "发现 {} 项迁移冲突；SA {}：{}。尚未复制文件或迁移任务。",
+                    conflicts.len(),
+                    first.sa_id,
+                    first.message
+                ),
+            ));
+        }
         let material_archives = crate::legacy_materials::archive(
             &self.root,
             std::path::Path::new(&plan.preview.root),
@@ -419,7 +431,7 @@ impl Store {
                 .optional()?;
             let mut task = if let Some(raw) = old {
                 let old: Task = serde_json::from_str(&raw)?;
-                if old.record.fingerprint() != record.fingerprint()
+                if serde_json::to_value(&old.record)? != serde_json::to_value(record)?
                     || old.running
                     || old.stage == Stage::Unknown
                 {
@@ -594,7 +606,9 @@ impl Store {
                     "REMOTE_RESULT_UNKNOWN",
                     "旧版已有平台操作；先回读历史批次或 SA，不重新提交。",
                 ));
-            } else if task.stage != Stage::Completed && task.artifact.is_some() {
+            } else if matches!(task.stage, Stage::Pending | Stage::AwaitingReview)
+                && task.artifact.is_some()
+            {
                 task.stage = Stage::Downloaded;
             }
             if changed {
@@ -628,6 +642,95 @@ impl Store {
         Ok(
             json!({"already_imported":false,"count":plan.records.len(),"fingerprint":plan.preview.fingerprint,"orphans":plan.preview.orphan_count}),
         )
+    }
+    pub fn legacy_conflicts(
+        &self,
+        plan: &crate::legacy::Plan,
+    ) -> Result<Vec<crate::legacy::Conflict>> {
+        let db = self.connect()?;
+        if db.query_row(
+            "SELECT count(*) FROM legacy_migrations WHERE fingerprint=?",
+            [&plan.preview.fingerprint],
+            |r| r.get::<_, u32>(0),
+        )? > 0
+        {
+            return Ok(Vec::new());
+        }
+        Self::legacy_conflicts_on(&db, plan)
+    }
+    fn legacy_conflicts_on(
+        db: &Connection,
+        plan: &crate::legacy::Plan,
+    ) -> Result<Vec<crate::legacy::Conflict>> {
+        let mut conflicts = crate::legacy::source_conflicts(&plan.snapshot, &plan.artifacts);
+        for record in &plan.records {
+            let raw: Option<String> = db
+                .query_row("SELECT data FROM tasks WHERE id=?", [&record.sa_id], |r| {
+                    r.get(0)
+                })
+                .optional()?;
+            let Some(raw) = raw else {
+                continue;
+            };
+            let current: Task = serde_json::from_str(&raw)?;
+            let pending: u32 = db.query_row(
+                "SELECT count(*) FROM pending_inputs WHERE task_id=?",
+                [&record.sa_id],
+                |r| r.get(0),
+            )?;
+            let unknown: u32 = db.query_row(
+                "SELECT count(*) FROM attempts WHERE task_id=? AND state IN ('intent','unknown')",
+                [&record.sa_id],
+                |r| r.get(0),
+            )?;
+            let rows = crate::legacy::rows_for(&plan.snapshot, &record.sa_id);
+            let writing = rows.iter().any(|r| crate::legacy::write_history(r));
+            let reason = if json!(current.record) != json!(record) {
+                Some("工作台已有不同的完整名单字段（含原行号、状态与跳过标记）。")
+            } else if current.running
+                || current.stage == Stage::Unknown
+                || pending > 0
+                || unknown > 0
+                || current.batch_recheck.is_some()
+            {
+                Some("工作台正在执行、切换名单或回读未确认的检查点。")
+            } else if writing
+                && (current.batch.is_some()
+                    || matches!(
+                        current.stage,
+                        Stage::Uploaded | Stage::Imported | Stage::Pushed | Stage::Claimed
+                    ))
+            {
+                Some("工作台已有平台执行结果，不能将另一份旧写入检查点替换为当前操作。")
+            } else if current.artifact.as_ref().is_some_and(|a| {
+                plan.snapshot["sources"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|s| {
+                        plan.artifacts
+                            .get(&format!(
+                                "{}:{}",
+                                s["path"].as_str().unwrap_or(""),
+                                record.sa_id
+                            ))
+                            .is_some_and(|old| old.candidate.sha256 != a.candidate.sha256)
+                    })
+            }) {
+                Some("工作台已有不同版本的实际论文归档。")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                conflicts.push(crate::legacy::Conflict {
+                    sa_id: record.sa_id.clone(),
+                    kind: "workspace_task".into(),
+                    source: "当前工作台".into(),
+                    message: reason.into(),
+                });
+            }
+        }
+        Ok(conflicts)
     }
     pub fn reusable_artifact(&self, record: &Record) -> Result<Option<Artifact>> {
         crate::wos_reuse::select(&self.connect()?, record).map(|v| v.map(|v| v.artifact))

@@ -59,6 +59,12 @@ export function useWorkbench() {
     material_file_count?: number;
     unbound_material_count?: number;
     material_warnings?: string[];
+    conflicts?: {
+      sa_id: string;
+      kind: string;
+      source: string;
+      message: string;
+    }[];
     entries: {
       sa_id: string;
       title: string;
@@ -81,7 +87,7 @@ export function useWorkbench() {
   }
   async function migrateLegacy() {
     const preview = legacyPreview.value;
-    if (!preview) return;
+    if (!preview || preview.conflicts?.length) return;
     const result = await run(
       "migrate_legacy",
       { root: preview.root, fingerprint: preview.fingerprint },

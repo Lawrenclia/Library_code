@@ -79,7 +79,9 @@ pub(crate) async fn preview_legacy(
     else {
         return Ok(json!({"cancelled":true}));
     };
-    let plan = library_core::legacy::inspect(folder.path())?;
+    let mut plan = library_core::legacy::inspect(folder.path())?;
+    let conflicts = state.store.legacy_conflicts(&plan)?;
+    plan.preview.conflicts = conflicts;
     Ok(serde_json::to_value(plan.preview)?)
 }
 #[tauri::command]
