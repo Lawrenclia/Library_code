@@ -67,9 +67,14 @@ pub fn validate_ai(value: &Value, evidence: &[Evidence], template: Option<&Value
                         .collect::<std::collections::BTreeSet<_>>()
                         .len()
                         == ids.len()
-                    && ids
-                        .iter()
-                        .all(|id| evidence.iter().any(|e| Some(e.id.as_str()) == id.as_str()))
+                    && ids.iter().all(|id| {
+                        evidence.iter().any(|e| {
+                            Some(e.id.as_str()) == id.as_str()
+                                && classification::factual_kind(&e.kind)
+                                && !e.text.trim().is_empty()
+                                && !e.source.trim().is_empty()
+                        })
+                    })
             })
             .unwrap_or(false)
     };
@@ -188,7 +193,7 @@ mod tests {
     fn rejects_unsupported_field_citation() {
         let evidence = vec![Evidence {
             id: "source".into(),
-            kind: "test".into(),
+            kind: "human_review".into(),
             source: "url".into(),
             text: "paper".into(),
             created: 0,
@@ -198,5 +203,10 @@ mod tests {
         assert!(validate_ai(&value, &evidence, Some(&template)).is_err());
         value["fields"]["题名"]["evidence_ids"] = json!(["source"]);
         assert!(validate_ai(&value, &evidence, Some(&template)).is_ok());
+        let mut log = evidence.clone();
+        log[0].kind = "search_result".into();
+        assert!(validate_ai(&value, &log, Some(&template)).is_err());
+        log[0].kind = "future_operation_receipt".into();
+        assert!(validate_ai(&value, &log, Some(&template)).is_err());
     }
 }

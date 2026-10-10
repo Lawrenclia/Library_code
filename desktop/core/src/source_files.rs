@@ -685,27 +685,13 @@ pub fn verified_evidence(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
         .evidence
         .iter()
         .filter(|e| {
-            (e.kind != "external_metadata" || current.contains(&e.id))
+            crate::classification::factual_kind(&e.kind)
+                && e.kind != "roster_input" // Added from the current record, never restored from history.
+                && !e.text.trim().is_empty()
+                && !e.source.trim().is_empty()
+                && (e.kind != "external_metadata" || current.contains(&e.id))
                 && (e.kind != crate::doi_sources::KIND || doi_sources.contains(&e.id))
                 && (e.kind != "metadata" || metadata.contains(&e.id))
-                && !matches!(
-                    e.kind.as_str(),
-                    "alias_verified"
-                        | "claim_verified"
-                        | "legacy_claim_verified"
-                        | "source_download"
-                        | "source_reuse_origin"
-                        | "doi_lookup"
-                        | "sa_read"
-                        | "material_validation"
-                        | "material_export"
-                        | "submission_packet"
-                        | "legacy_material"
-                        | "legacy_history"
-                        | "ai_classification"
-                        | "ai_failure"
-                        | "roster_input"
-                )
         })
         .cloned()
         .collect())

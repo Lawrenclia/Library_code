@@ -1897,6 +1897,9 @@ mod tests {
         });
         assert!(validate_alias_source(&t, "Li, X", "e").is_err());
         t.evidence[0].kind = "metadata".into();
+        assert!(validate_alias_source(&t, "Li, X", "e").is_err()); // No current original file.
+        t.evidence[0].kind = "human_review".into();
+        t.evidence[0].source = "原始论文署名核对".into();
         validate_alias_source(&t, "Li, X", "e").unwrap();
         assert!(validate_alias_source(&t, "Invented Name", "e").is_err());
         assert!(validate_alias_source(&t, "Li, X\n", "e").is_err());

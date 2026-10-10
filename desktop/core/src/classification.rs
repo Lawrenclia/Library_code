@@ -3,6 +3,19 @@ use crate::*;
 use serde_json::{json, Value};
 use std::path::Path;
 
+/// These are factual source categories, not platform outcomes or execution records.
+pub fn factual_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "metadata"
+            | "external_metadata"
+            | "doi_metadata"
+            | "human_review"
+            | "manual"
+            | "roster_input"
+    )
+}
+
 pub fn sources(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
     let mut sources = source_files::verified_evidence(root, task)?;
     let input=json!({"schema":"roster_input_v1","input_hash":task.input_hash,"record_fingerprint":task.record.fingerprint(),"record":{"title":task.record.title,"doi":task.record.doi,"wos":task.record.wos}}).to_string();
@@ -153,6 +166,64 @@ mod tests {
         assert!(parse_response(&envelope(&v), &source, Some(&schema)).is_ok());
         v["fields"] = json!({"Author":{"value":"Paper","evidence_ids":[source[0].id]}});
         assert!(parse_response(&envelope(&v), &source, Some(&schema)).is_err());
+    }
+    #[test]
+    fn operational_and_roster_history_stay_in_reports_without_becoming_ai_facts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut task = task();
+        task.evidence.push(Evidence {
+            id: "actual-paper".into(),
+            kind: "manual".into(),
+            source: "Original publication".into(),
+            text: "Paper published in Journal; original author A B.".into(),
+            created: 1,
+        });
+        let before = sources(dir.path(), &task).unwrap();
+        for kind in [
+            "search_result",
+            "database_search",
+            "native_download",
+            "native_download_receipt",
+            "library_search",
+            "issue_baseline",
+            "issue_verified",
+            "metadata_verified",
+            "sa_link_verified",
+            "duplicate_merge_verified",
+            "import_receipt",
+            "upload_verified",
+            "input_version_history",
+            "input_version_review",
+            "future_operation_receipt",
+            "roster_input",
+        ] {
+            task.evidence.push(Evidence { id:format!("audit-{kind}"), kind:kind.into(), source:"Local execution audit".into(), text:json!({"private-owner":"Old roster owner","private-staff":"001","task":kind,"error":"NO_RESULT"}).to_string(), created:2 });
+        }
+        let after = sources(dir.path(), &task).unwrap();
+        assert_eq!(json!(after), json!(before));
+        assert_eq!(
+            crate::ai_queue::source_hash(&after).unwrap(),
+            crate::ai_queue::source_hash(&before).unwrap()
+        );
+        assert!(!input(&task, &after, None)
+            .to_string()
+            .contains("private-staff"));
+        assert_eq!(after.iter().filter(|e| e.kind == "roster_input").count(), 1);
+        let mut invalid = result("audit-search_result");
+        invalid["confidence"] = json!("高");
+        assert!(parse_response(&envelope(&invalid), &after, None).is_err());
+        let count = task.evidence.len();
+        let report = dir.path().join("local-audit.xlsx");
+        files::export_report(&[task.clone()], &report).unwrap();
+        let mut book = open_workbook_auto(&report).unwrap();
+        let sheet = book.worksheet_range("原始来源依据").unwrap();
+        assert_eq!(sheet.height(), count + 1);
+        assert!(sheet
+            .rows()
+            .skip(1)
+            .any(|r| r[2].to_string() == "audit-input_version_history"
+                && r[6].to_string().contains("private-staff")));
+        assert_eq!(task.evidence.len(), count);
     }
     #[test]
     fn malformed_confidence_types_channels_missing_and_citations_refuse_results() {
