@@ -12,6 +12,7 @@ mod commands;
 #[cfg(feature = "smoke-test")]
 mod download_smoke;
 mod engine;
+mod legacy_key;
 #[cfg(feature = "smoke-test")]
 mod link_smoke;
 #[cfg(feature = "smoke-test")]
@@ -73,6 +74,8 @@ fn main() {
             commands::workspace::open_folder,
             commands::models::ai_settings,
             commands::models::save_ai_settings,
+            commands::models::preview_legacy_api_key,
+            commands::models::import_legacy_api_key,
             commands::models::classify_task,
             commands::models::run_ai_queue,
             commands::models::resume_ai_queue,

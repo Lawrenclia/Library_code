@@ -32,6 +32,8 @@ fn main() {
             "open_folder",
             "ai_settings",
             "save_ai_settings",
+            "preview_legacy_api_key",
+            "import_legacy_api_key",
             "classify_task",
             "run_ai_queue",
             "resume_ai_queue",

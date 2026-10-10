@@ -22,6 +22,43 @@ pub(crate) fn save_ai_settings(
     let _lease = state.acquire()?;
     ai::save(&state, base, model, key)
 }
+
+#[tauri::command]
+pub(crate) async fn preview_legacy_api_key(
+    window: WebviewWindow,
+    state: State<'_, Engine>,
+) -> Result<Value> {
+    local(&window)?;
+    let _lease = state.acquire()?;
+    let Some(file) = rfd::AsyncFileDialog::new()
+        .set_title("选择旧版 runtime/model_api_key.dpapi")
+        .add_filter("旧版加密密钥", &["dpapi"])
+        .pick_file()
+        .await
+    else {
+        return Ok(serde_json::json!({"cancelled":true}));
+    };
+    crate::legacy_key::preview(&state, file.path())
+}
+#[tauri::command]
+pub(crate) fn import_legacy_api_key(
+    window: WebviewWindow,
+    state: State<Engine>,
+    path: String,
+    fingerprint: String,
+    base: String,
+    model: String,
+) -> Result<Value> {
+    local(&window)?;
+    let _lease = state.acquire()?;
+    crate::legacy_key::import(
+        &state,
+        std::path::Path::new(&path),
+        &fingerprint,
+        &base,
+        &model,
+    )
+}
 #[tauri::command]
 pub(crate) async fn classify_task(
     window: WebviewWindow,

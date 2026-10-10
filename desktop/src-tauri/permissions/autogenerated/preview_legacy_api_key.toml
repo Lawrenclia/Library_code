@@ -1,0 +1,10 @@
+# Registered for generation during the next build; no build is run now.
+[[permission]]
+identifier = "allow-preview-legacy-api-key"
+description = "Enables explicit selection of the old encrypted API key file."
+commands.allow = ["preview_legacy_api_key"]
+
+[[permission]]
+identifier = "deny-preview-legacy-api-key"
+description = "Denies selection of the old encrypted API key file."
+commands.deny = ["preview_legacy_api_key"]

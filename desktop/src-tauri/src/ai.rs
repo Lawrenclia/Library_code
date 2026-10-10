@@ -43,6 +43,73 @@ pub fn save(e: &Engine, base: String, model: String, key: String) -> Result<()> 
         json!({"base":base.trim_end_matches('/'),"model":model}),
     )
 }
+/// The legacy key belonged to the fixed university service. Importing it never
+/// redirects that credential to a different saved API, or replaces an existing key.
+pub(crate) fn import_legacy_key(e: &Engine, key: &str, base: &str, model: &str) -> Result<Value> {
+    let config = settings(e)?;
+    if base.trim_end_matches('/') != DEFAULT_BASE
+        || config["base"].as_str().map(|b| b.trim_end_matches('/')) != Some(DEFAULT_BASE)
+        || config["model"] != model
+    {
+        return Err(Failure::new(
+            "AI_CONFIG_CHANGED",
+            "先保存交大 API 基础地址；预览后的地址或模型变化时请重新选择旧密钥。",
+        ));
+    }
+    let credential = entry()?;
+    match credential.get_password() {
+        Ok(password) => {
+            clear_secret(password.into_bytes());
+            return Err(Failure::new(
+                "AI_CONFIG_EXISTS",
+                "当前已配置密钥，保留现有设置；如需更换请使用正常设置入口。",
+            ));
+        }
+        Err(keyring::Error::NoEntry) => {}
+        Err(_) => {
+            return Err(Failure::new(
+                "AI_CONFIG_INVALID",
+                "无法检查系统凭据，未覆盖或导入密钥。",
+            ))
+        }
+    }
+    credential.set_password(key).map_err(|_| {
+        Failure::new(
+            "AI_CONFIG_INVALID",
+            "系统凭据保存失败，旧加密文件保持不变。",
+        )
+    })?;
+    let password = credential.get_password().map_err(|_| {
+        Failure::new(
+            "AI_CONFIG_INVALID",
+            "已请求保存系统凭据，但无法回读，请刷新设置检查；旧文件保持不变。",
+        )
+    })?;
+    let verified = password == key;
+    clear_secret(password.into_bytes());
+    if !verified {
+        return Err(Failure::new(
+            "AI_CONFIG_CHANGED",
+            "系统凭据回读不一致，请核对当前设置；未修改旧文件。",
+        ));
+    }
+    let after = settings(e)?;
+    if after["base"] != config["base"] || after["model"] != config["model"] {
+        return Err(Failure::new(
+            "AI_CONFIG_CHANGED",
+            "密钥已保存在系统凭据，但设置在保存期间变化，请核对 API 地址与模型。",
+        ));
+    }
+    Ok(after)
+}
+fn clear_secret(mut data: Vec<u8>) {
+    for byte in &mut data {
+        unsafe {
+            std::ptr::write_volatile(byte, 0);
+        }
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+}
 pub fn resolve_template(e: &Engine, id: Option<&str>) -> Result<Option<Value>> {
     let Some(id) = id else { return Ok(None) };
     let saved: Vec<library_core::templates::Template> =

@@ -31,6 +31,7 @@ import WorkbenchShell from "@/components/WorkbenchShell.vue";
 import WorkflowOverview from "@/components/WorkflowOverview.vue";
 import SourceImporter from "@/components/SourceImporter.vue";
 import SearchScopePanel from "@/components/SearchScopePanel.vue";
+import LegacyKeyPanel from "@/components/LegacyKeyPanel.vue";
 import AiQueuePanel from "@/components/AiQueuePanel.vue";
 import MaterialBatchPanel from "@/components/MaterialBatchPanel.vue";
 import SubmissionMaterial from "@/components/SubmissionMaterial.vue";
@@ -2176,9 +2177,13 @@ function frameworkBrowser(role: string, entry?: string) {
               " /></label
           ><Button :disabled="locked" @click="saveApi"
             ><Check />保存模型设置</Button
-          ></CardContent
-        ></Card
-      >
+          ><LegacyKeyPanel
+            :locked="locked"
+            :configured="api.configured"
+            :run="run"
+            @imported="(value) => Object.assign(api, value, { key: '' })"
+          /> </CardContent
+      ></Card>
       <div class="space-y-4">
         <Card class="shadow-none"
           ><CardHeader

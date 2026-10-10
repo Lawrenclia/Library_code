@@ -32,6 +32,8 @@
     "allow-open-folder",
     "allow-ai-settings",
     "allow-save-ai-settings",
+    "allow-preview-legacy-api-key",
+    "allow-import-legacy-api-key",
     "allow-classify-task",
     "allow-run-ai-queue",
     "allow-resume-ai-queue",
