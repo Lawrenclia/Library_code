@@ -19,6 +19,7 @@ const prepared = ref<SubmissionPrepared | null>(null);
 const stale = ref(false);
 const names: Record<string, string> = {
   original: "原始数据库导出",
+  original_pending: "原格式文件已保留，待渠道核验",
   field_valid: "模板字段校验通过",
   draft: "待完善草稿",
 };
@@ -106,6 +107,24 @@ async function prepare() {
           />
           <span class="min-w-0 flex-1">
             <span class="block">{{ names[choice.kind] || choice.kind }}</span>
+            <span
+              v-if="choice.channel_label"
+              class="block text-muted-foreground"
+              >{{ choice.channel_label }}</span
+            >
+            <span v-if="choice.source_title" class="mt-1 block">{{
+              choice.source_title
+            }}</span>
+            <span
+              v-if="choice.source_name"
+              class="block break-all text-muted-foreground"
+              >{{ choice.source_name }} · {{ choice.source_location }}</span
+            >
+            <span
+              v-if="choice.source_url"
+              class="block break-all text-muted-foreground"
+              >{{ choice.source_url }}</span
+            >
             <span class="mt-1 block break-all text-muted-foreground">{{
               choice.path
             }}</span>
@@ -113,6 +132,17 @@ async function prepare() {
               v-if="choice.issue"
               class="mt-1 block text-amber-700 dark:text-amber-400"
               >{{ choice.issue.message }}</span
+            >
+            <span
+              v-if="choice.notice"
+              class="mt-1 block text-amber-700 dark:text-amber-400"
+              >{{ choice.notice }}</span
+            >
+            <span
+              v-for="problem in choice.validation?.requires_review || []"
+              :key="`${problem.column}-${problem.reason}`"
+              class="mt-1 block text-amber-700 dark:text-amber-400"
+              >{{ problem.reason }}</span
             >
           </span>
         </label>

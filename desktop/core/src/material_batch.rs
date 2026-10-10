@@ -18,6 +18,8 @@ pub struct Target {
     pub revision: i64,
     pub facts: Option<Value>,
     pub template: Option<Template>,
+    #[serde(default)]
+    pub original_source: Option<source_files::OriginalExport>,
     pub error: Option<Failure>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -85,9 +87,16 @@ impl Store {
                 && !t.record.skipped
                 && t.stage != Stage::Completed
         }) {
-            let prepared = (|| -> Result<(Value, Option<Template>)> {
+            let prepared = (|| -> Result<(Value, Option<Template>, Option<source_files::OriginalExport>)> {
                 let facts = materials::facts(&self.root, &t)?;
-                let schema = if t.artifact.is_some() {
+                let exports = if t.artifact.is_none() { source_files::original_exports(&self.root,&t)? } else {vec![]};
+                let original_source = if exports.len() > 1 {
+                    let packet=submission::current(self,&t.id)?.filter(|p|p.material.kind=="original_pending")
+                        .ok_or_else(||Failure::new("AMBIGUOUS_RESULT","本篇有多个原始导出或记录绑定，请在本篇提交材料中明确选择并保存。"))?;
+                    submission::validate(self,&t,&packet)?;
+                    materials::original_source(self,&packet.material)?
+                } else { exports.into_iter().next() };
+                let schema = if t.artifact.is_some() || original_source.is_some() {
                     None
                 } else {
                     let id = t
@@ -105,11 +114,11 @@ impl Store {
                     })?;
                     Some(materials::actual_template(saved)?)
                 };
-                Ok((facts, schema))
+                Ok((facts, schema, original_source))
             })();
-            let (facts, template, error) = match prepared {
-                Ok((f, s)) => (Some(f), s, None),
-                Err(e) => (None, None, Some(e)),
+            let (facts, template, original_source, error) = match prepared {
+                Ok((f, s, original)) => (Some(f), s, original, None),
+                Err(e) => (None, None, None, Some(e)),
             };
             targets.push(Target {
                 id: t.id,
@@ -119,6 +128,7 @@ impl Store {
                 revision: t.revision,
                 facts,
                 template,
+                original_source,
                 error,
             });
         }
@@ -203,6 +213,14 @@ impl Store {
         if let Some(e) = &target.error {
             return Err(e.clone());
         }
+        if let Some(original) = &target.original_source {
+            let task = self.task(&target.id)?;
+            let (current, _) =
+                source_files::read_original_export(&self.root, &task, &original.evidence_id)?;
+            if json!(current) != json!(original) {
+                return Err(bad("原范围绑定的原始导出已变化，请核对。"));
+            }
+        }
         if let Some(frozen) = &target.template {
             let current: Vec<Template> =
                 serde_json::from_value(self.setting("templates")?.unwrap_or(json!([])))?;
@@ -219,15 +237,19 @@ impl Store {
                 ));
             }
         }
-        materials::prepare(
-            self,
-            &target.id,
-            target
-                .facts
-                .as_ref()
-                .ok_or_else(|| bad("原材料事实缺失。"))?,
-            target.template.as_ref(),
-        )
+        let facts = target
+            .facts
+            .as_ref()
+            .ok_or_else(|| bad("原材料事实缺失。"))?;
+        if let Some(original) = &target.original_source {
+            return materials::prepare_original_source(
+                self,
+                &target.id,
+                facts,
+                &original.evidence_id,
+            );
+        }
+        materials::prepare(self, &target.id, facts, target.template.as_ref())
     }
     pub fn finish_material_target(&self, id: &str, result: Result<Product>) -> Result<Batch> {
         if let Ok(product) = &result {

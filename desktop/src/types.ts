@@ -225,7 +225,7 @@ export interface MaterialBatch {
     id: string;
     error: Failure | null;
     product: {
-      kind: "original" | "field_valid" | "draft";
+      kind: "original" | "original_pending" | "field_valid" | "draft";
       path: string;
       audit: string;
       reused: boolean;
@@ -352,6 +352,13 @@ export interface SubmissionOptions {
     sha256: string;
     usable: boolean;
     issue: Failure | null;
+    notice?: string;
+    channel?: string | null;
+    channel_label?: string;
+    source_title?: string | null;
+    source_location?: string | null;
+    source_name?: string | null;
+    source_url?: string | null;
     validation?: MaterialValidation;
   }[];
   prepared: SubmissionPrepared | null;

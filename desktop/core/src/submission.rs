@@ -46,6 +46,8 @@ fn product(audit: &Value, evidence: &Evidence) -> Option<Product> {
         recipe: audit["recipe"].as_str()?.into(),
         kind: if audit["plan"]["kind"] == "original" {
             "original"
+        } else if audit["plan"]["kind"] == "original_source" {
+            "original_pending"
         } else if audit["validation"]["ready"] == true {
             "field_valid"
         } else {
@@ -88,21 +90,23 @@ pub fn validate(store: &Store, task: &Task, packet: &Packet) -> Result<()> {
         ));
     }
     materials::verify_product(store, &packet.material, &packet.facts)?;
-    if packet.material.kind == "draft" || packet.material.validation["ready"] != true {
+    if packet.material.kind == "draft"
+        || (packet.material.kind != "original_pending"
+            && packet.material.validation["ready"] != true)
+    {
         return Err(Failure::new(
             "INCOMPLETE_METADATA",
             "当前材料仍是草稿，不能上传。",
         ));
     }
-    let expected_channel = if packet.material.kind == "original" {
-        "wos_txt"
-    } else {
-        "general"
-    };
-    if packet.channel != expected_channel || packet.material.sa_id != task.id {
+    let expected_channel = material_channel(store, &packet.material)?;
+    if packet.channel != expected_channel
+        || packet.channel_label != channel_label(&expected_channel)?
+        || packet.material.sa_id != task.id
+    {
         return Err(fail("文件与原提交渠道或论文不对应。"));
     }
-    if packet.channel == "wos_txt" {
+    if packet.material.kind == "original" {
         let original = task
             .artifact
             .as_ref()
@@ -110,7 +114,7 @@ pub fn validate(store: &Store, task: &Task, packet: &Packet) -> Result<()> {
         if !original.identity_confirmed || original.candidate.sha256 != packet.material.sha256 {
             return Err(fail("所选原始导出与当前核验归档不一致。"));
         }
-    } else {
+    } else if packet.material.kind != "original_pending" {
         let kind = task
             .classification
             .as_ref()
@@ -124,6 +128,33 @@ pub fn validate(store: &Store, task: &Task, packet: &Packet) -> Result<()> {
     }
     Ok(())
 }
+fn material_channel(store: &Store, material: &Product) -> Result<String> {
+    if let Some(export) = materials::original_source(store, material)? {
+        Ok(export.receipt.channel)
+    } else if material.kind == "original" {
+        Ok("wos_txt".into())
+    } else {
+        Ok("general".into())
+    }
+}
+fn channel_label(channel: &str) -> Result<String> {
+    catalog::channels()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == channel)
+        .and_then(|c| c["label"].as_str())
+        .map(str::to_string)
+        .ok_or_else(|| fail("材料的原始渠道未登记。"))
+}
+fn source_location(export: &source_files::OriginalExport) -> String {
+    let s = &export.receipt.selection;
+    if export.receipt.format == "txt" {
+        format!("{} · 第 {} 至 {} 行", s.sheet, s.row, s.end_row)
+    } else {
+        format!("{} · 第 {} 行", s.sheet, s.row)
+    }
+}
 fn gates(store: &Store, task: &Task, packet: &Packet) -> Vec<Failure> {
     let mut issues = vec![];
     if let Err(e) = eligible(store, task) {
@@ -131,6 +162,12 @@ fn gates(store: &Store, task: &Task, packet: &Packet) -> Vec<Failure> {
     }
     if let Err(e) = validate(store, task, packet) {
         issues.push(e);
+    }
+    if packet.material.validation["ready"] != true {
+        issues.push(Failure::new(
+            "INCOMPLETE_METADATA",
+            "原始文件已归档，但仍需核对导出范围、渠道格式和必要字段；不能自动上传。",
+        ));
     }
     let review = task.review.as_ref();
     if task.route != Route::Missing
@@ -147,7 +184,7 @@ fn gates(store: &Store, task: &Task, packet: &Packet) -> Vec<Failure> {
     if packet.channel != "wos_txt" {
         issues.push(Failure::new(
             "CHANNEL_UNSUPPORTED",
-            "本地模板材料已准备；通用 Excel 上传页面驱动尚未接通，不能自动提交。",
+            "本篇材料已保存；所选渠道的上传页面驱动尚未接通，不能自动提交。",
         ));
     } else if let Err(e) = task.import_ready() {
         issues.push(e);
@@ -171,6 +208,9 @@ pub fn options(store: &Store, id: &str) -> Result<Value> {
     if let Some(original) = &task.artifact {
         choices.push(json!({"recipe":"original-export","kind":"original","path":original.path,"sha256":original.candidate.sha256,"usable":original.identity_confirmed,"issue":if original.identity_confirmed {Value::Null} else {json!(Failure::new("IDENTITY_CONFLICT","原始导出身份待核验。"))}}));
     }
+    for export in source_files::original_exports(&store.root, &task)? {
+        choices.push(json!({"recipe":format!("source-export:{}",export.evidence_id),"kind":"original_pending","path":export.receipt.archive_path,"sha256":export.receipt.sha256,"channel":export.receipt.channel,"channel_label":channel_label(&export.receipt.channel)?,"source_title":export.receipt.title,"source_location":source_location(&export),"source_name":export.receipt.original_name,"source_url":export.receipt.source_url,"usable":true,"issue":Value::Null,"notice":"可按原格式归档并保存提交信息；导出范围、渠道字段和身份归属仍需核验。"}));
+    }
     let mut seen = HashSet::new();
     for e in task
         .evidence
@@ -193,7 +233,12 @@ pub fn options(store: &Store, id: &str) -> Result<Value> {
                 (p.kind == "draft")
                     .then(|| Failure::new("INCOMPLETE_METADATA", "材料仍有缺项或未核对要求。"))
             });
-        choices.push(json!({"recipe":p.recipe,"kind":p.kind,"path":p.path,"sha256":p.sha256,"usable":error.is_none(),"issue":error,"validation":p.validation}));
+        let original = if error.is_none() {
+            materials::original_source(store, &p)?
+        } else {
+            None
+        };
+        choices.push(json!({"recipe":p.recipe,"kind":p.kind,"path":p.path,"sha256":p.sha256,"usable":error.is_none(),"issue":error,"validation":p.validation,"channel":original.as_ref().map(|o|o.receipt.channel.as_str()),"source_title":original.as_ref().map(|o|o.receipt.title.as_str()),"source_location":original.as_ref().map(source_location),"source_name":original.as_ref().map(|o|o.receipt.original_name.as_str()),"source_url":original.as_ref().map(|o|o.receipt.source_url.as_str())}));
     }
     let selected = current(store, id)?;
     Ok(
@@ -207,7 +252,9 @@ pub fn prepare(store: &Store, id: &str, recipe: &str, expected_revision: i64) ->
         return Err(fail("论文资料已更新，请刷新可用材料后选择。"));
     }
     let facts = materials::facts(&store.root, &task)?;
-    let material = if recipe == "original-export" {
+    let material = if let Some(evidence_id) = recipe.strip_prefix("source-export:") {
+        materials::prepare_original_source(store, id, &facts, evidence_id)?
+    } else if recipe == "original-export" {
         materials::prepare(store, id, &facts, None)?
     } else {
         task.evidence
@@ -224,11 +271,7 @@ pub fn prepare(store: &Store, id: &str, recipe: &str, expected_revision: i64) ->
     };
     // Material preparation may save its own audit; reload optimistic revision.
     task = store.task(id)?;
-    let channel = if material.kind == "original" {
-        "wos_txt"
-    } else {
-        "general"
-    };
+    let channel = material_channel(store, &material)?;
     let packet = Packet {
         id: uuid::Uuid::new_v4().to_string(),
         sa_id: id.into(),
@@ -236,13 +279,8 @@ pub fn prepare(store: &Store, id: &str, recipe: &str, expected_revision: i64) ->
         record: task.record.clone(),
         facts,
         material,
-        channel: channel.into(),
-        channel_label: if channel == "wos_txt" {
-            "WOS 数据导入 (Txt)"
-        } else {
-            "数据导入"
-        }
-        .into(),
+        channel_label: channel_label(&channel)?,
+        channel,
         work_type: task
             .classification
             .as_ref()
@@ -277,6 +315,13 @@ pub fn check_upload(store: &Store, task: &Task) -> Result<()> {
     if let Some(packet) = current(store, &task.id)? {
         eligible(store, task)?;
         validate(store, task, &packet)?;
+        if packet.material.kind == "original_pending" || packet.material.validation["ready"] != true
+        {
+            return Err(Failure::new(
+                "INCOMPLETE_METADATA",
+                "所选原始导出未通过渠道格式和必要字段核验，不能使用 WOS 驱动上传。",
+            ));
+        }
         if packet.channel != "wos_txt" {
             return Err(Failure::new(
                 "CHANNEL_UNSUPPORTED",

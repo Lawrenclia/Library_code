@@ -168,6 +168,30 @@ fn commit_audit(store: &Store, task: &mut Task, audit: &Value, path: &Path) -> R
     }
     Ok(())
 }
+fn original_source_validation() -> Value {
+    json!({"missing":[],"invalid":[],"requires_review":[
+        {"column":"原始导出","reason":"保留整个原文件，所选记录不代表文件只含本篇；上传前核对导出范围与渠道字段要求。","rule_source":"原始文件及明确选择的论文记录"},
+        {"column":"导入渠道","reason":"当前仅核对容器、原始字节与绑定来源；该文件尚未通过渠道导入格式及必要字段核验。","rule_source":"实际渠道导入契约"}
+    ],"ready":false})
+}
+pub fn original_source(
+    store: &Store,
+    product: &Product,
+) -> Result<Option<source_files::OriginalExport>> {
+    if product.kind != "original_pending" {
+        return Ok(None);
+    }
+    let audit = read_json(Path::new(&product.audit))?;
+    let saved: source_files::OriginalExport =
+        serde_json::from_value(audit["plan"]["original_source"].clone())?;
+    let task = store.task(&product.sa_id)?;
+    let (current, raw) =
+        source_files::read_original_export(&store.root, &task, &saved.evidence_id)?;
+    if json!(saved) != json!(current) || hash(&raw) != product.sha256 {
+        return Err(invalid("材料原始导出与当前记录绑定或原文件不同。"));
+    }
+    Ok(Some(current))
+}
 pub fn verify_product(store: &Store, product: &Product, frozen: &Value) -> Result<()> {
     let task = store.task(&product.sa_id)?;
     eligible(store, &task)?;
@@ -182,6 +206,8 @@ pub fn verify_product(store: &Store, product: &Product, frozen: &Value) -> Resul
     let audit = read_json(&audit_path)?;
     let expected_kind = if audit["plan"]["kind"] == "original" {
         "original"
+    } else if audit["plan"]["kind"] == "original_source" {
+        "original_pending"
     } else if audit["validation"]["ready"] == true {
         "field_valid"
     } else {
@@ -202,6 +228,12 @@ pub fn verify_product(store: &Store, product: &Product, frozen: &Value) -> Resul
     {
         return Err(invalid("材料字节、来源回执或保存审计不符。"));
     }
+    if product.kind == "original_pending" {
+        if product.validation != original_source_validation() {
+            return Err(invalid("原始来源核验条件已变化。"));
+        }
+        original_source(store, product)?;
+    }
     Ok(())
 }
 /// Publish a prepared product, or adopt the exact receipt after a local crash.
@@ -211,7 +243,7 @@ pub fn prepare(
     frozen: &Value,
     schema: Option<&Template>,
 ) -> Result<Product> {
-    prepare_product(store, id, frozen, schema, false)
+    prepare_product(store, id, frozen, schema, false, None)
 }
 /// An explicitly requested template uses the same durable product publication.
 /// Automatic batches still prefer original database exports.
@@ -221,7 +253,15 @@ pub fn prepare_template(
     frozen: &Value,
     schema: &Template,
 ) -> Result<Product> {
-    prepare_product(store, id, frozen, Some(schema), true)
+    prepare_product(store, id, frozen, Some(schema), true, None)
+}
+pub fn prepare_original_source(
+    store: &Store,
+    id: &str,
+    frozen: &Value,
+    evidence_id: &str,
+) -> Result<Product> {
+    prepare_product(store, id, frozen, None, false, Some(evidence_id))
 }
 /// Export a user copy while retaining the managed product as the authority.
 pub fn export_copy(
@@ -231,7 +271,7 @@ pub fn export_copy(
     destination: &Path,
 ) -> Result<Value> {
     verify_product(store, product, frozen)?;
-    if product.kind == "original"
+    if matches!(product.kind.as_str(), "original" | "original_pending")
         || destination
             .extension()
             .and_then(|v| v.to_str())
@@ -287,6 +327,7 @@ fn prepare_product(
     frozen: &Value,
     schema: Option<&Template>,
     explicit_template: bool,
+    selected_source: Option<&str>,
 ) -> Result<Product> {
     let mut task = store.task(id)?;
     eligible(store, &task)?;
@@ -299,8 +340,29 @@ fn prepare_product(
     if explicit_template {
         check_template_original(&task)?;
     }
-    let (kind, fields, template, original) = if let Some(artifact) =
-        task.artifact.as_ref().filter(|_| !explicit_template)
+    let source_original = if explicit_template {
+        None
+    } else if let Some(evidence_id) = selected_source {
+        check_template_original(&task)?;
+        Some(source_files::read_original_export(
+            &store.root,
+            &task,
+            evidence_id,
+        )?)
+    } else if task.artifact.is_none() {
+        let exports = source_files::original_exports(&store.root, &task)?;
+        match exports.as_slice() {
+            [] => None,
+            [export] => Some(source_files::read_original_export(&store.root,&task,&export.evidence_id)?),
+            _ => return Err(Failure::new("AMBIGUOUS_RESULT","本篇有多个原始导出或记录绑定，请在本篇提交材料中明确选择；不会默认第一份或改用模板。")),
+        }
+    } else {
+        None
+    };
+    let (kind, fields, template, original) = if let Some(artifact) = task
+        .artifact
+        .as_ref()
+        .filter(|_| !explicit_template && selected_source.is_none())
     {
         let payload = json!({"sa_id":id,"instructions":format!("SA补充-{id}"),"candidate":artifact.candidate,"contentSha":artifact.candidate.sha256});
         let bytes = files::read_import_archive(&task, &payload)?;
@@ -311,6 +373,13 @@ fn prepare_product(
             ));
         }
         ("original", BTreeMap::new(), None, Some(bytes))
+    } else if let Some((_, bytes)) = &source_original {
+        (
+            "original_source",
+            BTreeMap::new(),
+            None,
+            Some(bytes.clone()),
+        )
     } else {
         let saved = schema.ok_or_else(|| {
             Failure::new(
@@ -349,7 +418,10 @@ fn prepare_product(
             .collect();
         ("template", fields, Some(actual), None)
     };
-    let plan = json!({"schema":"material_recipe_v1","sa_id":id,"record":task.record,"facts":frozen,"kind":kind,"template":template,"fields":task.classification.as_ref().map(|v|&v["fields"]),"sources":sources,"platform_verified":false});
+    let mut plan = json!({"schema":"material_recipe_v1","sa_id":id,"record":task.record,"facts":frozen,"kind":kind,"template":template,"fields":task.classification.as_ref().map(|v|&v["fields"]),"sources":sources,"platform_verified":false});
+    if let Some((export, _)) = &source_original {
+        plan["original_source"] = json!(export);
+    }
     let recipe = hash(plan.to_string().as_bytes());
     let folder = directory(&store.root, &recipe)?;
     let intent = folder.join("intent.json");
@@ -360,10 +432,12 @@ fn prepare_product(
     } else {
         atomic_json(&intent, &plan)?;
     }
-    let output = folder.join(if kind == "original" {
-        "原始导出.txt"
+    let output = folder.join(if let Some((export, _)) = &source_original {
+        format!("原始导出.{}", export.receipt.format)
+    } else if kind == "original" {
+        "原始导出.txt".into()
     } else {
-        "模板材料.xlsx"
+        "模板材料.xlsx".into()
     });
     let receipt = folder.join("prepared.json");
     let reused = receipt.exists();
@@ -381,7 +455,15 @@ fn prepare_product(
         let temporary = folder.join(&staging);
         let validation = if let Some(bytes) = &original {
             fs::write(&temporary, bytes)?;
-            json!({"missing":[],"invalid":[],"requires_review":[],"ready":true})
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&temporary)?
+                .sync_all()?;
+            if source_original.is_some() {
+                original_source_validation()
+            } else {
+                json!({"missing":[],"invalid":[],"requires_review":[],"ready":true})
+            }
         } else {
             json!(templates::write_checked(
                 template.as_ref().unwrap(),
@@ -393,7 +475,9 @@ fn prepare_product(
         atomic_json(&receipt, &value)?;
         value
     };
-    let expected_validation = if kind == "original" {
+    let expected_validation = if source_original.is_some() {
+        original_source_validation()
+    } else if kind == "original" {
         json!({"missing":[],"invalid":[],"requires_review":[],"ready":true})
     } else {
         json!(templates::inspect_fields(
@@ -418,6 +502,13 @@ fn prepare_product(
     if let Some(schema) = &template {
         actual_template(schema)?;
         check_template_original(&task)?;
+    }
+    if let Some((export, original)) = &source_original {
+        let (current, bytes) =
+            source_files::read_original_export(&store.root, &task, &export.evidence_id)?;
+        if json!(current) != json!(export) || bytes != *original {
+            return Err(invalid("发布前原始导出或记录绑定变化。"));
+        }
     }
     let digest = prepared["sha256"]
         .as_str()
@@ -458,6 +549,8 @@ fn prepare_product(
         recipe,
         kind: if kind == "original" {
             "original"
+        } else if kind == "original_source" {
+            "original_pending"
         } else if prepared["validation"]["ready"] == true {
             "field_valid"
         } else {

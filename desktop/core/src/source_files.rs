@@ -89,6 +89,14 @@ pub struct Receipt {
     pub binding_note: String,
     pub institution_verified: bool,
 }
+/// A bound database export, retaining the complete file and selected record.
+/// Container verification does not prove suitability for platform import.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OriginalExport {
+    pub evidence_id: String,
+    pub evidence_hash: String,
+    pub receipt: Receipt,
+}
 fn fail(message: impl Into<String>) -> Failure {
     Failure::new("SOURCE_INVALID", message)
 }
@@ -608,6 +616,55 @@ pub fn verify_for_ai(root: &Path, task: &Task) -> Result<std::collections::BTree
         current.insert(evidence.id.clone());
     }
     Ok(current)
+}
+
+pub fn original_exports(root: &Path, task: &Task) -> Result<Vec<OriginalExport>> {
+    let current = verify_for_ai(root, task)?;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut exports = Vec::new();
+    for evidence in task
+        .evidence
+        .iter()
+        .rev()
+        .filter(|e| current.contains(&e.id))
+    {
+        let receipt: Receipt = serde_json::from_str(&evidence.text)?;
+        // General/other are template or unclassified source containers.
+        if matches!(receipt.channel.as_str(), "general" | "other") {
+            continue;
+        }
+        let key = json!({"hash":receipt.sha256,"channel":receipt.channel,"selection":receipt.selection,"options":receipt.options}).to_string();
+        if seen.insert(key) {
+            exports.push(OriginalExport {
+                evidence_id: evidence.id.clone(),
+                evidence_hash: hash(evidence.text.as_bytes()),
+                receipt,
+            });
+        }
+    }
+    Ok(exports)
+}
+pub fn read_original_export(
+    root: &Path,
+    task: &Task,
+    evidence_id: &str,
+) -> Result<(OriginalExport, Vec<u8>)> {
+    let export = original_exports(root, task)?
+        .into_iter()
+        .find(|e| e.evidence_id == evidence_id)
+        .ok_or_else(|| fail("原始导出不属于本篇当前绑定来源，请重新选择。"))?;
+    let receipt = &export.receipt;
+    let path = owned(
+        root,
+        &receipt.archive_path,
+        &receipt.sha256,
+        &receipt.format,
+    )?;
+    let raw = bytes(&path)?;
+    if hash(&raw) != receipt.sha256 {
+        return Err(fail("读取期间原始导出变化，未采纳。"));
+    }
+    Ok((export, raw))
 }
 
 /// One factual-source gate for both API requests and later material exports.

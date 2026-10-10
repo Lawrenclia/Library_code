@@ -29,6 +29,7 @@ const states: Record<string, string> = {
 };
 const kinds = {
   original: "原始数据库导出",
+  original_pending: "原格式文件已保留，待渠道核验",
   field_valid: "模板字段校验通过",
   draft: "模板草稿，仍有缺项或待核对要求",
 };
@@ -36,6 +37,8 @@ const counts = computed(() => {
   const results = batch.value?.outcomes || [];
   return {
     original: results.filter((r) => r.product?.kind === "original").length,
+    pending: results.filter((r) => r.product?.kind === "original_pending")
+      .length,
     valid: results.filter((r) => r.product?.kind === "field_valid").length,
     draft: results.filter((r) => r.product?.kind === "draft").length,
     failed: results.filter((r) => r.error).length,
@@ -53,7 +56,7 @@ const counts = computed(() => {
           <Files class="size-4 text-primary" />整理零匹配论文材料
         </p>
         <p class="mt-2 text-[11px] leading-6 text-muted-foreground">
-          优先保留已核验的数据库原始导出；其他论文按已保存建议对应的实际模板生成材料和来源表。此步骤整理本地资料，不请求
+          优先保留数据库原始导出；其他渠道已绑定的文件按原格式归档，导出范围与渠道要求仍需核验。没有原始导出的论文按已保存建议对应的实际模板生成材料和来源表。此步骤整理本地资料，不请求
           AI。缺少来源、建议或模板的论文会逐篇记录原因。
         </p>
       </div>
@@ -137,8 +140,9 @@ const counts = computed(() => {
         "
       />
       <p class="mt-2 leading-6 text-muted-foreground">
-        原始导出 {{ counts.original }} · 字段通过 {{ counts.valid }} ·
-        待完善草稿 {{ counts.draft }} · 未生成 {{ counts.failed }}。文件位于
+        已核验原始导出 {{ counts.original }} · 原文件待核验
+        {{ counts.pending }} · 字段通过 {{ counts.valid }} · 待完善草稿
+        {{ counts.draft }} · 未生成 {{ counts.failed }}。文件位于
         materials/products，来源表位于
         materials/batches。继续保留原名单范围；字段校验通过仍需核对来源与平台要求。
       </p>

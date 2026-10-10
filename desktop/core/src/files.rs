@@ -417,11 +417,10 @@ pub fn export_report(tasks: &[Task], path: &Path) -> Result<()> {
     export_report_with_queues(tasks, &[], path)
 }
 fn report_missing(task: &Task) -> String {
-    let Some(ai) = &task.classification else {
-        return String::new();
-    };
-    let mut missing: Vec<String> = ai["missing"]
-        .as_array()
+    let mut missing: Vec<String> = task
+        .classification
+        .as_ref()
+        .and_then(|ai| ai["missing"].as_array())
         .map(|a| {
             a.iter()
                 .filter_map(|v| v.as_str().map(str::to_string))
@@ -436,7 +435,11 @@ fn report_missing(task: &Task) -> String {
         .filter_map(|e| serde_json::from_str::<serde_json::Value>(&e.text).ok())
         .find(|m| {
             m["schema"] == "template_material_v1"
-                && m["classification_hash"] == hash(ai.to_string().as_bytes())
+                && m["classification_hash"]
+                    == serde_json::json!(task
+                        .classification
+                        .as_ref()
+                        .map(|ai| hash(ai.to_string().as_bytes())))
                 && m["input_hash"] == task.input_hash
                 && m["record_fingerprint"] == task.record.fingerprint()
         })
@@ -456,7 +459,11 @@ fn report_missing(task: &Task) -> String {
             }
         }
     }
-    serde_json::to_string(&missing).unwrap_or_default()
+    if task.classification.is_none() && missing.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(&missing).unwrap_or_default()
+    }
 }
 pub fn export_report_with_queues(
     tasks: &[Task],
@@ -932,15 +939,28 @@ pub fn export_report_with_materials(
                 let target = batch.targets.iter().find(|t| t.id == result.id);
                 let p = result.product.as_ref();
                 let list = |key: &str| p.map(|p| p.validation[key].to_string()).unwrap_or_default();
-                let source = target
-                    .and_then(|t| t.template.as_ref())
-                    .map(|t| format!("{} / {} / {}", t.name, t.path, t.fingerprint))
-                    .unwrap_or_else(|| {
-                        target
-                            .and_then(|t| t.artifact.as_ref())
-                            .map(|a| format!("{} / {}", a.source, a.record_url))
-                            .unwrap_or_default()
-                    });
+                let source = if let Some(original) = target.and_then(|t| t.original_source.as_ref())
+                {
+                    let receipt = &original.receipt;
+                    format!(
+                        "{} / {} / {} / SHA256 {} / 依据 {}",
+                        receipt.channel,
+                        receipt.source_url,
+                        receipt.archive_path,
+                        receipt.sha256,
+                        original.evidence_id
+                    )
+                } else {
+                    target
+                        .and_then(|t| t.template.as_ref())
+                        .map(|t| format!("{} / {} / {}", t.name, t.path, t.fingerprint))
+                        .unwrap_or_else(|| {
+                            target
+                                .and_then(|t| t.artifact.as_ref())
+                                .map(|a| format!("{} / {}", a.source, a.record_url))
+                                .unwrap_or_default()
+                        })
+                };
                 for (column, value) in [
                     batch.id.clone(),
                     batch.owner.clone(),
@@ -950,6 +970,7 @@ pub fn export_report_with_materials(
                     p.map(|p| {
                         match p.kind.as_str() {
                             "original" => "原始数据库导出",
+                            "original_pending" => "原格式文件已保留，待渠道核验",
                             "field_valid" => "模板字段校验通过",
                             _ => "草稿待核对",
                         }
