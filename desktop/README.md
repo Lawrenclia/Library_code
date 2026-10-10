@@ -1,5 +1,7 @@
 # 机构知识库工作台
 
+**在线编译：** [GitHub Actions → Windows EXE](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml) → **Run workflow** → **Artifacts** 下载 EXE 安装包。无需本地构建环境，步骤见 [GitHub 编译说明](../docs/GITHUB_ACTIONS_BUILD.md)。
+
 Tauri 2 + Rust + SQLite 桌面工作台。界面使用 shadcn-vue 官方开源组件，来源、MIT 许可和组件下载记录见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。业务规则依据原始 PPT 和 [重构目标](../docs/TAURI_REBUILD_GOAL.md)。
 
 实际验证结果与剩余目标见 [验收记录](../docs/TAURI_VERIFICATION.md)。

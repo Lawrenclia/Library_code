@@ -2,6 +2,8 @@
 
 ### 新桌面工作台（Tauri + Rust）
 
+**GitHub 在线编译 EXE：** 打开 [Windows EXE](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml)，点击 **Run workflow**，保留默认源码分支，编译成功后在 **Artifacts** 下载安装包。完整步骤见 [GitHub 编译说明](docs/GITHUB_ACTIONS_BUILD.md)。
+
 新增“流程与连接”总览，后端已拆分服务并统一操作、浏览器和渠道注册。结构与扩展规则见 [完整框架说明](docs/FRAMEWORK.md)。已登记渠道与实际自动能力分开显示，真实 WOS/机构后台仍待现场验收。
 
 新桌面的“来源”页增加用户配置的数据库窗口与应用内原始下载管理，文件保存在工作目录 `downloads/sources`，再明确选择论文记录作为 AI 依据。其他来源网站仍由用户完成检索、导出；自动网站适配与自动入库尚待实现。此新增代码按用户要求暂未验证，现有安装包不包含它。
