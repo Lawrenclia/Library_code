@@ -36,6 +36,8 @@ pub struct Draft {
     pub sha256: String,
     pub format: String,
     pub options: ReadOptions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::source_reuse::Origin>,
 }
 struct Table {
     name: String,
@@ -88,6 +90,8 @@ pub struct Receipt {
     pub source_url: String,
     pub binding_note: String,
     pub institution_verified: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::source_reuse::Origin>,
 }
 /// A bound database export, retaining the complete file and selected record.
 /// Container verification does not prove suitability for platform import.
@@ -309,6 +313,7 @@ pub fn prepare(
         sha256: sha,
         format,
         options,
+        origin: None,
     })
 }
 fn owned(root: &Path, path: &str, sha: &str, format: &str) -> Result<PathBuf> {
@@ -338,6 +343,7 @@ pub fn check_draft(root: &Path, task: &Task, draft: &Draft) -> Result<Document> 
         ));
     }
     let path = owned(root, &draft.path, &draft.sha256, &draft.format)?;
+    crate::source_reuse::verify_draft(root, task, draft)?;
     read(&path, &draft.format, &draft.options)
 }
 impl Document {
@@ -546,7 +552,9 @@ pub fn bind(
         source_url: source_url.clone(),
         binding_note: note,
         institution_verified: false,
+        origin: draft.origin.clone(),
     };
+    crate::source_reuse::verify_receipt(root, task, &receipt)?;
     Ok(Evidence {
         id: uuid::Uuid::new_v4().to_string(),
         kind: "external_metadata".into(),
@@ -613,6 +621,7 @@ pub fn verify_for_ai(root: &Path, task: &Task) -> Result<std::collections::BTree
         {
             return Err(fail("来源缓存与原始归档不符，不能发送给 AI。"));
         }
+        crate::source_reuse::verify_receipt(root, task, &receipt)?;
         current.insert(evidence.id.clone());
     }
     Ok(current)
@@ -681,6 +690,7 @@ pub fn verified_evidence(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
                         | "claim_verified"
                         | "legacy_claim_verified"
                         | "source_download"
+                        | "source_reuse_origin"
                         | "sa_read"
                         | "material_validation"
                         | "material_export"

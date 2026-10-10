@@ -57,6 +57,8 @@ fn main() {
             commands::tasks::run_step,
             commands::materials::adopt_file,
             commands::sources::preview_source_file,
+            commands::sources::source_reuse_options,
+            commands::sources::preview_reused_source,
             commands::sources::source_file_page,
             commands::sources::attach_source_file,
             commands::source_browsers::source_browser_state,

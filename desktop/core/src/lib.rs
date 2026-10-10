@@ -20,6 +20,7 @@ pub mod queue;
 pub mod sa;
 pub mod source_downloads;
 pub mod source_files;
+pub mod source_reuse;
 pub mod store;
 pub mod submission;
 pub mod template_rules;

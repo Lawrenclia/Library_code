@@ -16,6 +16,8 @@ fn main() {
             "run_step",
             "adopt_file",
             "preview_source_file",
+            "source_reuse_options",
+            "preview_reused_source",
             "source_file_page",
             "attach_source_file",
             "source_browser_state",

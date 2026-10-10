@@ -6,6 +6,63 @@ use library_core::{
 };
 use serde_json::{json, Value};
 use tauri::{AppHandle, State, WebviewWindow};
+#[tauri::command]
+pub(crate) fn source_reuse_options(
+    window: WebviewWindow,
+    state: State<Engine>,
+    id: String,
+) -> Result<Value> {
+    local(&window)?;
+    let task = state.store.task(&id)?;
+    library_core::source_reuse::options(&state.store, &task)
+}
+#[tauri::command]
+pub(crate) fn preview_reused_source(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<Engine>,
+    id: String,
+    expected_revision: i64,
+    source_id: String,
+    source_input_hash: String,
+    source_fingerprint: String,
+    evidence_id: String,
+    evidence_hash: String,
+) -> Result<Value> {
+    local(&window)?;
+    let _lease = state.acquire()?;
+    let draft = library_core::source_reuse::prepare(
+        &state.store,
+        &id,
+        expected_revision,
+        &source_id,
+        &source_input_hash,
+        &source_fingerprint,
+        &evidence_id,
+        &evidence_hash,
+    )?;
+    let task = state.store.task(&id)?;
+    let document = source_files::check_draft(&state.store.root, &task, &draft)?;
+    let selected = &draft
+        .origin
+        .as_ref()
+        .ok_or_else(|| Failure::new("SOURCE_REUSE_INVALID", "复用来源缺少快照。"))?
+        .selection;
+    let offset = if draft.format == "txt" {
+        selected.row.saturating_sub(1)
+    } else {
+        selected.row.saturating_sub(selected.header_row + 1)
+    };
+    let result = document.page(
+        &draft,
+        Some(&selected.sheet),
+        selected.header_row,
+        offset / 50,
+    )?;
+    remember(&state, draft)?;
+    state.changed(&app);
+    Ok(result)
+}
 fn drafts(state: &Engine) -> Result<Vec<Draft>> {
     Ok(serde_json::from_value(
         state.store.setting("source_previews")?.unwrap_or(json!([])),
@@ -70,7 +127,13 @@ pub(crate) fn source_file_page(
     let draft = resolve(&state, &id, preview_id.as_deref())?;
     let task = state.store.task(&id)?;
     let document = source_files::check_draft(&state.store.root, &task, &draft)?;
-    document.page(&draft, sheet.as_deref(), header_row, page)
+    let fixed = draft.origin.as_ref().map(|o| &o.selection);
+    document.page(
+        &draft,
+        fixed.map(|s| s.sheet.as_str()).or(sheet.as_deref()),
+        fixed.map(|s| s.header_row).unwrap_or(header_row),
+        page,
+    )
 }
 #[tauri::command]
 pub(crate) fn attach_source_file(
@@ -112,6 +175,10 @@ pub(crate) fn attach_source_file(
         note,
         confirmed,
     )?;
+    let receipt: source_files::Receipt = serde_json::from_str(&evidence.text)?;
+    if let Some(audit) = library_core::source_reuse::audit(&state.store.root, &task, &receipt)? {
+        task.evidence.push(audit);
+    }
     task.evidence.push(evidence);
     task.classification = None;
     state.store.save(&mut task, "original_source_attached")?;

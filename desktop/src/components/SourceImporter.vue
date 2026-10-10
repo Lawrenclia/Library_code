@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import type { Task, SourcePage } from "@/types";
+import type {
+  Task,
+  SourcePage,
+  SourceReuseChoice,
+  SourceReuseOptions,
+} from "@/types";
 import type { DesktopCommand } from "@/services/desktop";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +39,8 @@ const url = ref(""),
   note = ref(""),
   confirmed = ref(false);
 const textMode = computed(() => data.value?.draft.format === "txt");
+const reusing = computed(() => !!data.value?.draft.origin);
+const reusable = ref<SourceReuseOptions | null>(null);
 const originals = computed(() =>
   props.task.evidence
     .filter((e) => e.kind === "external_metadata")
@@ -81,7 +88,10 @@ function reset() {
   note.value = "";
   confirmed.value = false;
 }
-watch([() => props.task.id, () => props.task.revision], reset);
+watch([() => props.task.id, () => props.task.revision], () => {
+  reset();
+  reusable.value = null;
+});
 watch(
   [
     selectedRow,
@@ -108,14 +118,64 @@ function accept(value: SourcePage | undefined, id: string, revision: number) {
     props.task.revision !== revision
   )
     return;
+  const fresh = data.value?.draft.id !== value.draft.id;
+  if (fresh) reset();
   data.value = value;
   sheet.value = value.sheet;
   header.value = value.header_row;
-  selectedRow.value = null;
-  titleColumn.value = "";
-  doiColumn.value = "";
-  wosColumn.value = "";
+  if (value.draft.origin) {
+    const original = value.draft.origin;
+    const s = original.selection;
+    sheet.value = s.sheet;
+    header.value = s.header_row;
+    selectedRow.value = s.row;
+    titleColumn.value = s.title_column === null ? "" : String(s.title_column);
+    doiColumn.value = s.doi_column === null ? "" : String(s.doi_column);
+    wosColumn.value = s.wos_column === null ? "" : String(s.wos_column);
+    textStart.value = s.row;
+    textEnd.value = s.end_row;
+    textTitle.value = s.text_title;
+    if (fresh) url.value = original.source_url;
+  }
   confirmed.value = false;
+}
+async function loadReusable() {
+  const { id, revision } = props.task;
+  const result = await props.run<SourceReuseOptions>(
+    "source_reuse_options",
+    { id },
+    "已读取相同标识符的原始来源。",
+  );
+  if (
+    result &&
+    result.task_id === id &&
+    result.task_revision === revision &&
+    props.task.id === id &&
+    props.task.revision === revision
+  )
+    reusable.value = result;
+}
+async function reuse(choice: SourceReuseChoice) {
+  const { id, revision } = props.task;
+  if (
+    reusable.value?.task_id !== id ||
+    reusable.value.task_revision !== revision
+  )
+    return;
+  const result = await props.run<SourcePage>(
+    "preview_reused_source",
+    {
+      id,
+      expectedRevision: revision,
+      sourceId: choice.source_id,
+      sourceInputHash: choice.source_input_hash,
+      sourceFingerprint: choice.source_fingerprint,
+      evidenceId: choice.original.evidence_id,
+      evidenceHash: choice.original.evidence_hash,
+    },
+    "已读取所选原文件，请为本条填写对应依据并确认。",
+  );
+  accept(result, id, revision);
 }
 async function preview() {
   const { id, revision } = props.task;
@@ -250,6 +310,68 @@ async function attach() {
       @click="page(0, true)"
       ><RefreshCw />继续上次来源预览</Button
     >
+    <div class="space-y-2 rounded-lg border p-3" data-testid="source-reuse">
+      <p class="text-xs font-medium">复用其他 SA 的同篇原文件</p>
+      <p class="text-[11px] leading-5 text-muted-foreground">
+        按 DOI 或 WOS ID 查找，明确选择后核对原记录。各条 SA
+        的认领和处理进度分别保存。
+      </p>
+      <Button
+        variant="outline"
+        size="sm"
+        :disabled="locked"
+        @click="loadReusable"
+        >查找可复用来源</Button
+      >
+      <template v-if="reusable">
+        <p
+          v-if="!reusable.choices.length"
+          class="text-[11px] text-muted-foreground"
+        >
+          没有标识符一致且原文件完整的来源。可选择新的原始文件。
+        </p>
+        <div
+          v-for="choice in reusable.choices"
+          :key="`${choice.source_id}:${choice.original.evidence_id}`"
+          class="space-y-1 rounded-lg border p-2"
+        >
+          <p class="break-all text-xs">{{ choice.original.receipt.title }}</p>
+          <p class="text-[11px] text-muted-foreground">
+            SA {{ choice.source_id }} ·
+            {{
+              channels.find((c) => c.id === choice.original.receipt.channel)
+                ?.label || choice.original.receipt.channel
+            }}
+            · {{ choice.original.receipt.original_name }}
+          </p>
+          <p class="break-all text-[11px] text-muted-foreground">
+            {{ choice.original.receipt.doi || choice.original.receipt.wos }} ·
+            {{ choice.original.receipt.selection.sheet }} 第
+            {{ choice.original.receipt.selection.row }} 行
+          </p>
+          <p
+            v-if="choice.original.receipt.source_url"
+            class="break-all text-[11px] text-muted-foreground"
+          >
+            {{ choice.original.receipt.source_url }}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            :disabled="locked"
+            @click="reuse(choice)"
+            >预览这份来源</Button
+          >
+        </div>
+        <p
+          v-for="problem in reusable.problems"
+          :key="problem.source_id"
+          class="text-[11px] text-destructive"
+        >
+          SA {{ problem.source_id }}：{{ problem.error.message }}
+        </p>
+      </template>
+    </div>
     <div
       v-if="data"
       class="space-y-3 border-t pt-3"
@@ -267,12 +389,22 @@ async function attach() {
       <p class="break-all font-mono text-[10px] text-muted-foreground">
         SHA-256：{{ data.draft.sha256 }}
       </p>
+      <p
+        v-if="data.draft.origin"
+        class="text-[11px] leading-5 text-muted-foreground"
+      >
+        来源 SA
+        {{
+          data.draft.origin.task_id
+        }}
+        的原文件快照。已保留原绑定记录及全部字段，请填写本条对应依据；如需选择其他记录，请重新选择原文件。
+      </p>
       <label class="field"
         >原始工作表<select
           v-model="sheet"
           aria-label="来源工作表"
           class="native-select mt-2 w-full"
-          :disabled="locked"
+          :disabled="locked || reusing"
         >
           <option v-for="s in data.sheets" :key="s.name">{{ s.name }}</option>
         </select></label
@@ -283,7 +415,7 @@ async function attach() {
           min="1"
           v-model.number="header"
           aria-label="来源表头行号"
-          :disabled="locked"
+          :disabled="locked || reusing"
           class="mt-2"
       /></label>
       <Button variant="outline" size="sm" :disabled="locked" @click="page(0)"
@@ -304,7 +436,7 @@ async function attach() {
             type="radio"
             :value="row.row"
             v-model="selectedRow"
-            :disabled="locked"
+            :disabled="locked || reusing"
             aria-label="选择来源记录"
           />
           <span class="shrink-0 text-muted-foreground">{{ row.row }}</span
@@ -339,21 +471,21 @@ async function attach() {
               type="number"
               min="1"
               aria-label="来源文本开始行"
-              :disabled="locked" /></label
+              :disabled="locked || reusing" /></label
           ><label class="field"
             >结束行<Input
               v-model.number="textEnd"
               type="number"
               min="1"
               aria-label="来源文本结束行"
-              :disabled="locked"
+              :disabled="locked || reusing"
           /></label>
         </div>
         <label class="field"
           >范围中的完整原文题名<Input
             v-model="textTitle"
             aria-label="来源文本原文题名"
-            :disabled="locked"
+            :disabled="locked || reusing"
         /></label>
       </template>
       <template v-else>
@@ -362,7 +494,7 @@ async function attach() {
             v-model="titleColumn"
             aria-label="来源题名列"
             class="native-select mt-2 w-full"
-            :disabled="locked"
+            :disabled="locked || reusing"
           >
             <option value="">请选择真实题名列</option>
             <option
@@ -379,7 +511,7 @@ async function attach() {
             v-model="doiColumn"
             aria-label="来源 DOI 列"
             class="native-select mt-2 w-full"
-            :disabled="locked"
+            :disabled="locked || reusing"
           >
             <option value="">原文件未提供 / 待核验</option>
             <option
@@ -396,7 +528,7 @@ async function attach() {
             v-model="wosColumn"
             aria-label="来源 WOS 列"
             class="native-select mt-2 w-full"
-            :disabled="locked"
+            :disabled="locked || reusing"
           >
             <option value="">原文件未提供 / 待核验</option>
             <option

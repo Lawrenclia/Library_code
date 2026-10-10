@@ -21,6 +21,7 @@ export interface Review {
 }
 export interface Task {
   id: string;
+  input_hash: string;
   paper_id: string;
   revision: number;
   route: string;
@@ -386,6 +387,52 @@ export interface SourceDraft {
   path: string;
   sha256: string;
   format: string;
+  origin?: {
+    task_id: string;
+    input_hash: string;
+    evidence_id: string;
+    evidence_hash: string;
+    snapshot_path: string;
+    snapshot_hash: string;
+    selection: SourceSelection;
+    title: string;
+    source_url: string;
+  };
+}
+export interface SourceSelection {
+  sheet: string;
+  header_row: number;
+  row: number;
+  end_row: number;
+  title_column: number | null;
+  doi_column: number | null;
+  wos_column: number | null;
+  text_title: string;
+}
+export interface SourceReuseChoice {
+  source_id: string;
+  source_input_hash: string;
+  source_fingerprint: string;
+  original: {
+    evidence_id: string;
+    evidence_hash: string;
+    receipt: {
+      channel: string;
+      original_name: string;
+      title: string;
+      doi: string;
+      wos: string;
+      source_url: string;
+      sha256: string;
+      selection: SourceSelection;
+    };
+  };
+}
+export interface SourceReuseOptions {
+  task_id: string;
+  task_revision: number;
+  choices: SourceReuseChoice[];
+  problems: { source_id: string; error: Failure }[];
 }
 export interface SourceSite {
   channel: string;
