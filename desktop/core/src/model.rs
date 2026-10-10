@@ -143,6 +143,17 @@ pub struct Paper {
     pub updated: u64,
 }
 pub fn validate_alias_source(task: &Task, alias: &str, evidence_id: &str) -> Result<()> {
+    if task
+        .evidence
+        .iter()
+        .any(|e| e.id == evidence_id && e.kind == "metadata")
+        && !crate::files::verified_metadata_ids(task)?.contains(evidence_id)
+    {
+        return Err(Failure::new(
+            "EVIDENCE_REQUIRED",
+            "此摘录不属于当前完整原文件，请重新选择真实署名来源；历史摘录不能用于新增别名。",
+        ));
+    }
     if alias.trim().is_empty()
         || alias.chars().count() > 200
         || alias.chars().any(char::is_control)

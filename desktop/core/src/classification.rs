@@ -94,10 +94,14 @@ pub fn validate_saved(
         || result["record_fingerprint"] != task.record.fingerprint()
         || result["template_id"] != template["id"]
         || result["template_hash"] != template["fingerprint"]
+        || result.get("source_hash").is_some_and(|h| {
+            crate::ai_queue::source_hash(sources)
+                .map_or(true, |current| h.as_str() != Some(current.as_str()))
+        })
     {
         return Err(Failure::new(
             "AI_RESULT_INVALID",
-            "分类建议的名单或模板版本不同/未记录，请重新调用 AI。",
+            "分类建议的名单、来源或模板版本不同/未记录，请重新调用 AI。",
         ));
     }
     catalog::validate_ai(result, sources, Some(template))
@@ -204,6 +208,14 @@ mod tests {
         let mut changed = t.clone();
         changed.record.doi = "10.1234/other".into();
         assert!(validate_saved(&changed, &v, &source, &schema).is_err());
+        let mut bound = v.clone();
+        bound["source_hash"] = json!(crate::ai_queue::source_hash(&source).unwrap());
+        assert!(validate_saved(&t, &bound, &source, &schema).is_ok());
+        let mut altered = source.clone();
+        altered[0].text.push_str(" changed evidence");
+        assert!(validate_saved(&t, &bound, &altered, &schema).is_err());
+        bound["source_hash"] = Value::Null;
+        assert!(validate_saved(&t, &bound, &source, &schema).is_err());
     }
     #[test]
     fn complete_long_values_audit_survive_restart_and_excel_without_advancing_stage() {

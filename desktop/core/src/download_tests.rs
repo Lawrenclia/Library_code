@@ -45,6 +45,11 @@ fn finished(store: &Store, receipt: &DownloadReceipt, raw: &[u8]) {
 #[test]
 fn native_completed_before_task_save_is_adopted_once_at_restart() {
     let (dir, store, receipt) = setup();
+    let mut before = store.task("sa1").unwrap();
+    before.classification = Some(serde_json::json!({"old_roster_only_suggestion":true}));
+    store
+        .save(&mut before, "fixture_previous_classification")
+        .unwrap();
     let q = store.start_download_queue("one", false).unwrap();
     finished(&store, &receipt, TXT);
     assert!(store.task("sa1").unwrap().artifact.is_none());
@@ -55,6 +60,7 @@ fn native_completed_before_task_save_is_adopted_once_at_restart() {
     let a = task.artifact.as_ref().unwrap();
     assert_eq!(task.stage, Stage::Downloaded);
     assert!(!task.running);
+    assert!(task.classification.is_none());
     assert_eq!(std::fs::read(&a.path).unwrap(), TXT);
     assert_eq!(a.candidate.sha256, hash(TXT));
     assert_eq!(a.record_url, SOURCE);

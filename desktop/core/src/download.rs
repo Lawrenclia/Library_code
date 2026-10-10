@@ -247,6 +247,7 @@ impl Store {
                 candidate,
                 identity_confirmed: strong,
             });
+            task.classification = None;
             task.stage = Stage::Downloaded;
             task.running = false;
             task.last_error = None;

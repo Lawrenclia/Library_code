@@ -680,12 +680,14 @@ pub fn read_original_export(
 pub fn verified_evidence(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
     let current = verify_for_ai(root, task)?;
     let doi_sources = crate::doi_sources::verify(root, task)?;
+    let metadata = crate::files::verified_metadata_ids(task)?;
     Ok(task
         .evidence
         .iter()
         .filter(|e| {
             (e.kind != "external_metadata" || current.contains(&e.id))
                 && (e.kind != crate::doi_sources::KIND || doi_sources.contains(&e.id))
+                && (e.kind != "metadata" || metadata.contains(&e.id))
                 && !matches!(
                     e.kind.as_str(),
                     "alias_verified"

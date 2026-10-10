@@ -21,9 +21,21 @@ impl Engine {
                 "请选择真实单篇 WOS TXT 文件。",
             ));
         }
+        if std::fs::metadata(path)?.len() > 524288 {
+            return Err(Failure::new(
+                "FILE_INVALID",
+                "单篇 WOS 文件超过 512 KB，未读取或绑定。",
+            ));
+        }
         let raw = std::fs::read(path)?;
         let c = files::parse_wos(&raw)?;
         let mut t = self.store.task(id)?;
+        if self.store.pending_input(id)?.is_some() || !self.store.unresolved(id)?.is_empty() {
+            return Err(Failure::new(
+                "INVALID_TRANSITION",
+                "先核对名单版本和未确认的平台操作，再接收原始文件。",
+            ));
+        }
         if matches!(
             t.stage,
             Stage::Uploaded
@@ -57,6 +69,7 @@ impl Engine {
             candidate: c,
             identity_confirmed: strong,
         });
+        t.classification = None;
         t.running = false;
         t.last_error = None;
         t.stage = Stage::Downloaded;

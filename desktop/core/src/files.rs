@@ -359,30 +359,47 @@ pub fn verify_identity(record: &Record, c: &Candidate) -> Result<bool> {
     }
     Ok((!doi.is_empty() || !wos.is_empty()) && norm(&record.title) == norm(&c.title))
 }
-pub fn ensure_metadata_evidence(task: &mut Task) -> Result<bool> {
+/// Factual metadata is reread at every consumer, even when no upload is planned.
+pub fn read_metadata_candidate(task: &Task) -> Result<Option<Candidate>> {
     let Some(artifact) = &task.artifact else {
-        return Ok(false);
+        return Ok(None);
     };
-    let raw = std::fs::read(&artifact.path)?;
-    if hash(&raw) != artifact.candidate.sha256 {
-        return Err(Failure::new(
-            "FILE_INVALID",
-            "归档内容已变化，不能作为 AI 或学者署名的来源。",
-        ));
-    }
-    let actual = parse_wos(&raw)?;
-    if actual.fields != artifact.candidate.fields {
-        return Err(Failure::new(
-            "IDENTITY_CONFLICT",
-            "缓存元数据与原始文件不一致，请重新核验来源。",
-        ));
-    }
-    let text = serde_json::to_string_pretty(&actual.fields)?;
-    if task
+    let payload = serde_json::json!({"sa_id":task.id,"instructions":format!("SA补充-{}",task.id),"candidate":artifact.candidate,"contentSha":artifact.candidate.sha256});
+    read_import_archive(task, &payload)?;
+    verify_identity(&task.record, &artifact.candidate)?;
+    Ok(Some(artifact.candidate.clone()))
+}
+/// Old excerpts remain audit records; only the newest full current excerpt is a fact.
+pub fn verified_metadata_ids(task: &Task) -> Result<std::collections::BTreeSet<String>> {
+    let Some(actual) = read_metadata_candidate(task)? else {
+        return Ok(Default::default());
+    };
+    let source = &task.artifact.as_ref().unwrap().record_url;
+    Ok(task
         .evidence
         .iter()
-        .any(|e| e.kind == "metadata" && e.source == artifact.record_url && e.text == text)
-    {
+        .rev()
+        .filter(|e| e.kind == "metadata" && e.source == *source)
+        .filter(|e| {
+            serde_json::from_str::<BTreeMap<String, String>>(&e.text)
+                .is_ok_and(|fields| fields == actual.fields)
+        })
+        .take(1)
+        .map(|e| e.id.clone())
+        .collect())
+}
+pub fn ensure_metadata_evidence(task: &mut Task) -> Result<bool> {
+    let Some(actual) = read_metadata_candidate(task)? else {
+        return Ok(false);
+    };
+    let artifact = task.artifact.as_ref().unwrap();
+    let text = serde_json::to_string_pretty(&actual.fields)?;
+    if task.evidence.iter().any(|e| {
+        e.kind == "metadata"
+            && e.source == artifact.record_url
+            && serde_json::from_str::<BTreeMap<String, String>>(&e.text)
+                .is_ok_and(|fields| fields == actual.fields)
+    }) {
         return Ok(false);
     }
     task.evidence.push(Evidence {
@@ -392,6 +409,7 @@ pub fn ensure_metadata_evidence(task: &mut Task) -> Result<bool> {
         text,
         created: now(),
     });
+    task.classification = None;
     Ok(true)
 }
 pub fn archive(root: &Path, raw: &[u8]) -> Result<std::path::PathBuf> {
@@ -1632,6 +1650,67 @@ mod tests {
         a.extend(row);
         a.push(b'\n');
         assert_eq!(parse_wos(&a).unwrap_err().code, "FILE_INVALID");
+    }
+    #[test]
+    fn only_current_full_wos_excerpt_is_a_fact_and_cache_changes_block_materials() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = archive(dir.path(), &raw()).unwrap();
+        let mut task = Task::new(rec(), "input".into());
+        task.artifact = Some(Artifact {
+            path: path.to_string_lossy().into(),
+            source: "WOS".into(),
+            record_url: "https://source/current".into(),
+            downloaded: 1,
+            candidate: parse_wos(&raw()).unwrap(),
+            identity_confirmed: true,
+        });
+        task.evidence.push(Evidence {
+            id: "historical".into(),
+            kind: "metadata".into(),
+            source: "https://source/old".into(),
+            text: "Old author: Li, X".into(),
+            created: 0,
+        });
+        task.classification = Some(serde_json::json!({"old_suggestion":true}));
+        assert!(ensure_metadata_evidence(&mut task).unwrap());
+        assert!(task.classification.is_none());
+        let mut current = task.evidence.last().unwrap().clone();
+        current.id = "newest-current".into();
+        // Equivalent JSON formatting does not create another factual source or clear a valid suggestion.
+        current.text =
+            serde_json::to_string(&task.artifact.as_ref().unwrap().candidate.fields).unwrap();
+        task.evidence.push(current);
+        task.classification = Some(serde_json::json!({"kept_suggestion":true}));
+        assert!(!ensure_metadata_evidence(&mut task).unwrap());
+        assert!(task.classification.is_some());
+        let facts = classification::sources(dir.path(), &task).unwrap();
+        let metadata: Vec<_> = facts.iter().filter(|e| e.kind == "metadata").collect();
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata[0].id, "newest-current");
+        assert_eq!(
+            validate_alias_source(&task, "Li, X", "historical")
+                .unwrap_err()
+                .code,
+            "EVIDENCE_REQUIRED"
+        );
+        validate_alias_source(&task, "Li, X", "newest-current").unwrap();
+        let mut changed = task.clone();
+        changed.artifact.as_mut().unwrap().candidate.title = "Changed cache title".into();
+        assert_eq!(
+            classification::sources(dir.path(), &changed)
+                .unwrap_err()
+                .code,
+            "FILE_INVALID"
+        );
+        assert!(materials::facts(dir.path(), &changed).is_err());
+        std::fs::write(&path, b"changed bytes").unwrap();
+        assert!(classification::sources(dir.path(), &task).is_err());
+        task.artifact = None;
+        assert!(classification::sources(dir.path(), &task)
+            .unwrap()
+            .iter()
+            .all(|e| e.kind != "metadata"));
+        assert_eq!(task.evidence.len(), 3); // Full history remains available for reports.
     }
     #[test]
     fn upload_requires_library_absence() {
