@@ -471,6 +471,15 @@ pub fn export_report_with_history(
     legacy: &[serde_json::Value],
     path: &Path,
 ) -> Result<()> {
+    export_report_with_runs(tasks, queues, legacy, &[], path)
+}
+pub fn export_report_with_runs(
+    tasks: &[Task],
+    queues: &[crate::queue::DownloadQueue],
+    legacy: &[serde_json::Value],
+    ai: &[crate::ai_queue::AiQueue],
+    path: &Path,
+) -> Result<()> {
     use rust_xlsxwriter::Workbook;
     let mut book = Workbook::new();
     let sheet = book.add_worksheet();
@@ -818,6 +827,57 @@ pub fn export_report_with_history(
         }
         audit.set_freeze_panes(1, 0).map_err(Failure::storage)?;
         audit.set_column_width(5, 80.).map_err(Failure::storage)?;
+    }
+    if !ai.is_empty() {
+        let sheet = book.add_worksheet();
+        sheet.set_name("AI 批量结果").map_err(Failure::storage)?;
+        for (col, label) in [
+            "队列 ID",
+            "原负责人",
+            "范围",
+            "模型",
+            "状态",
+            "已记录",
+            "原总数",
+            "完整记录 SHA256",
+            "片段序号",
+            "完整记录 JSON（按序连接）",
+        ]
+        .iter()
+        .enumerate()
+        {
+            sheet
+                .write_string(0, col as u16, *label)
+                .map_err(Failure::storage)?;
+        }
+        let mut row = 1;
+        for q in ai {
+            let raw = serde_json::to_string(q)?;
+            let digest = hash(raw.as_bytes());
+            let chars: Vec<_> = raw.chars().collect();
+            for (part, chunk) in chars.chunks(15000).enumerate() {
+                let values = [
+                    q.id.clone(),
+                    q.owner.clone(),
+                    if q.zero_only { "zero" } else { "all" }.into(),
+                    q.config["model"].as_str().unwrap_or("").into(),
+                    serde_json::to_value(&q.status)?.as_str().unwrap().into(),
+                    q.cursor.to_string(),
+                    q.targets.len().to_string(),
+                    digest.clone(),
+                    (part + 1).to_string(),
+                    chunk.iter().collect(),
+                ];
+                for (col, value) in values.iter().enumerate() {
+                    sheet
+                        .write_string(row, col as u16, value)
+                        .map_err(Failure::storage)?;
+                }
+                row += 1;
+            }
+        }
+        sheet.set_freeze_panes(1, 0).map_err(Failure::storage)?;
+        sheet.set_column_width(9, 80.).map_err(Failure::storage)?;
     }
     book.save(path).map_err(Failure::storage)?;
     Ok(())

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-ai-queue"
+description = "Enables the cancel_ai_queue command without any pre-configured scope."
+commands.allow = ["cancel_ai_queue"]
+
+[[permission]]
+identifier = "deny-cancel-ai-queue"
+description = "Denies the cancel_ai_queue command without any pre-configured scope."
+commands.deny = ["cancel_ai_queue"]

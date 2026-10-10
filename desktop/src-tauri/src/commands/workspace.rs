@@ -118,10 +118,11 @@ pub(crate) async fn export_report(
         return Ok(json!({"cancelled":true}));
     };
     let (tasks, queues) = state.store.report_snapshot()?;
-    files::export_report_with_history(
+    files::export_report_with_runs(
         &tasks,
         &queues,
         &state.store.legacy_snapshots()?,
+        &state.store.ai_queues()?,
         path.path(),
     )?;
     Ok(json!({"path":path.path().to_string_lossy()}))

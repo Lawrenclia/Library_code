@@ -15,6 +15,9 @@ pub fn sources(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
     });
     Ok(sources)
 }
+pub fn input(task: &Task, sources: &[Evidence], template: Option<&Value>) -> Value {
+    json!({"record":{"title":task.record.title,"doi":task.record.doi,"wos":task.record.wos},"sources":sources,"metadata":task.artifact.as_ref().map(|a|&a.candidate),"template":template,"types":catalog::types(),"channels":catalog::channels()})
+}
 pub fn parse_response(raw: &[u8], sources: &[Evidence], template: Option<&Value>) -> Result<Value> {
     let invalid = |message: &str| Failure::new("AI_RESULT_INVALID", message);
     if raw.len() > 1024 * 1024 {

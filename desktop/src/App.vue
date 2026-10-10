@@ -30,6 +30,7 @@ import {
 import WorkbenchShell from "@/components/WorkbenchShell.vue";
 import WorkflowOverview from "@/components/WorkflowOverview.vue";
 import SourceImporter from "@/components/SourceImporter.vue";
+import AiQueuePanel from "@/components/AiQueuePanel.vue";
 import LegacyMaterials from "@/components/LegacyMaterials.vue";
 import TaskTable from "@/components/TaskTable.vue";
 import { Button } from "@/components/ui/button";
@@ -425,6 +426,14 @@ function frameworkBrowser(role: string, entry?: string) {
           >检索跳过项</Button
         >
       </div>
+      <AiQueuePanel
+        :workspace="workspace"
+        :owner="owner"
+        :locked="locked"
+        :configured="api.configured"
+        :templates="schemas"
+        :run="run"
+      />
       <section
         v-if="workspace.download_queue"
         aria-label="下载队列进度"

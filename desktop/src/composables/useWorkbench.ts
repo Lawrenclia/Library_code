@@ -606,8 +606,8 @@ export function useWorkbench() {
     args: Record<string, unknown> = {},
     success = "操作已完成。",
   ): Promise<T | undefined> {
-    if (pending.value && command !== "pause_queue") return;
-    const pausing = command === "pause_queue";
+    const pausing = command === "pause_queue" || command === "pause_ai_queue";
+    if (pending.value && !pausing) return;
     if (!pausing) pending.value = true;
     error.value = false;
     message.value = pausing ? "正在请求暂停…" : "正在执行，请保持工作页打开…";

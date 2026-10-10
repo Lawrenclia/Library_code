@@ -1,3 +1,4 @@
+pub mod ai_queue;
 pub mod alias;
 pub mod catalog;
 pub mod claim;
@@ -23,6 +24,8 @@ pub mod versions;
 pub mod workflow;
 pub use model::*;
 pub use store::Store;
+#[cfg(test)]
+mod ai_queue_tests;
 #[cfg(test)]
 mod alias_tests;
 #[cfg(test)]

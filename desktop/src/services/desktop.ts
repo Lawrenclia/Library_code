@@ -24,6 +24,10 @@ export type DesktopCommand =
   | "ai_settings"
   | "save_ai_settings"
   | "classify_task"
+  | "run_ai_queue"
+  | "resume_ai_queue"
+  | "pause_ai_queue"
+  | "cancel_ai_queue"
   | "templates"
   | "register_template"
   | "fill_template";

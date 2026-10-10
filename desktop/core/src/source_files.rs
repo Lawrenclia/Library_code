@@ -627,6 +627,7 @@ pub fn verified_evidence(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
                         | "legacy_material"
                         | "legacy_history"
                         | "ai_classification"
+                        | "ai_failure"
                         | "roster_input"
                 )
         })

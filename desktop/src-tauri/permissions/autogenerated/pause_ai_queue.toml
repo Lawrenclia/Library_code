@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pause-ai-queue"
+description = "Enables the pause_ai_queue command without any pre-configured scope."
+commands.allow = ["pause_ai_queue"]
+
+[[permission]]
+identifier = "deny-pause-ai-queue"
+description = "Denies the pause_ai_queue command without any pre-configured scope."
+commands.deny = ["pause_ai_queue"]

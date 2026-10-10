@@ -183,8 +183,10 @@ export interface Workspace {
   tasks: Task[];
   root: string;
   running: boolean;
+  running_service?: "general" | "download" | "ai" | null;
   paused: boolean;
   download_queue?: DownloadQueue | null;
+  ai_queue?: AiQueue | null;
   browsers: Record<string, { open: boolean; usable: boolean }>;
   policy: string;
   framework?: FrameworkManifest;
@@ -209,6 +211,31 @@ export interface Workspace {
     }[];
     warnings: string[];
   }[];
+}
+export interface AiQueue {
+  id: string;
+  owner: string;
+  zero_only: boolean;
+  config: { base: string; model: string };
+  template: Record<string, unknown> | null;
+  cursor: number;
+  targets: {
+    id: string;
+    record: Task["record"];
+    input_hash: string;
+    task_revision: number;
+    source_hash: string;
+  }[];
+  outcomes: {
+    id: string;
+    status: string;
+    error: Failure | null;
+    finished: number;
+  }[];
+  status: string;
+  pause_requested: boolean;
+  inflight: { id: string; task_id: string; task_revision: number } | null;
+  last_error: Failure | null;
 }
 export interface FrameworkManifest {
   schema_version: number;

@@ -14,7 +14,7 @@ pub(crate) async fn run_queue(
     retry_skipped: bool,
 ) -> Result<()> {
     local(&window)?;
-    let _lease = state.acquire()?;
+    let _lease = state.acquire_download()?;
     let r = state.queue(&app, &owner, retry_skipped).await;
     state.changed(&app);
     r
@@ -27,6 +27,7 @@ pub(crate) fn pause_queue(
 ) -> Result<()> {
     local(&window)?;
     state.store.request_download_pause()?;
+    state.store.request_ai_pause()?;
     state.pause.store(true, Ordering::SeqCst);
     state.changed(&app);
     Ok(())
@@ -39,7 +40,7 @@ pub(crate) async fn resume_queue(
     id: String,
 ) -> Result<()> {
     local(&window)?;
-    let _lease = state.acquire()?;
+    let _lease = state.acquire_download()?;
     let result = state.resume_queue(&app, &id).await;
     state.changed(&app);
     result

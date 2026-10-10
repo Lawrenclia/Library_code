@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resume-ai-queue"
+description = "Enables the resume_ai_queue command without any pre-configured scope."
+commands.allow = ["resume_ai_queue"]
+
+[[permission]]
+identifier = "deny-resume-ai-queue"
+description = "Denies the resume_ai_queue command without any pre-configured scope."
+commands.deny = ["resume_ai_queue"]

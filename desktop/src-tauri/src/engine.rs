@@ -2,7 +2,7 @@ use crate::browser::Browser;
 use library_core::{files, *};
 use serde_json::{json, Value};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
     Arc,
 };
 use tauri::{AppHandle, Emitter};
@@ -12,6 +12,7 @@ pub struct Engine {
     pub store: Store,
     pub browser: Browser,
     pub active: Arc<AtomicBool>,
+    active_kind: Arc<AtomicU8>,
     pub pause: Arc<AtomicBool>,
 }
 mod author_service;
@@ -46,10 +47,20 @@ impl Engine {
             store,
             browser: Browser::default(),
             active: Arc::new(AtomicBool::new(false)),
+            active_kind: Arc::new(AtomicU8::new(0)),
             pause: Arc::new(AtomicBool::new(false)),
         })
     }
     pub fn acquire(&self) -> Result<Lease> {
+        self.acquire_kind(1)
+    }
+    pub fn acquire_ai(&self) -> Result<Lease> {
+        self.acquire_kind(3)
+    }
+    pub fn acquire_download(&self) -> Result<Lease> {
+        self.acquire_kind(2)
+    }
+    fn acquire_kind(&self, kind: u8) -> Result<Lease> {
         if self
             .active
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -58,13 +69,21 @@ impl Engine {
             return Err(Failure::new("BUSY", "已有任务运行，先暂停或等待完成。"));
         }
         self.pause.store(false, Ordering::SeqCst);
-        Ok(Lease(self.active.clone()))
+        self.active_kind.store(kind, Ordering::SeqCst);
+        Ok(Lease(self.active.clone(), self.active_kind.clone()))
     }
     pub fn changed(&self, app: &AppHandle) {
         let _ = app.emit_to("main", "workspace-changed", json!({"time":now()}));
     }
     pub fn snapshot(&self, app: &AppHandle) -> Result<Value> {
         let download_queue = self.store.latest_download_queue()?;
+        let ai_queue = self.store.latest_ai_queue()?;
+        let running_service = match self.active_kind.load(Ordering::SeqCst) {
+            1 => Some("general"),
+            2 => Some("download"),
+            3 => Some("ai"),
+            _ => None,
+        };
         let queue_paused = download_queue
             .as_ref()
             .is_some_and(|q| q.status.unfinished() && q.status != queue::QueueStatus::Running);
@@ -80,7 +99,7 @@ impl Engine {
                 serde_json::to_value(self.store.pending_input(task["id"].as_str().unwrap())?)?;
         }
         Ok(
-            json!({"tasks":tasks,"root":self.store.root.to_string_lossy(),"running":self.active.load(Ordering::SeqCst),"paused":self.pause.load(Ordering::SeqCst)||queue_paused,"download_queue":download_queue,"browsers":self.browser.states(app),"policy":PUSH_POLICY,"framework":framework::manifest(),"legacy_materials":library_core::legacy_materials::summary(&self.store.legacy_snapshots()?)}),
+            json!({"tasks":tasks,"root":self.store.root.to_string_lossy(),"running":self.active.load(Ordering::SeqCst),"running_service":running_service,"paused":self.pause.load(Ordering::SeqCst)||queue_paused||ai_queue.as_ref().is_some_and(|q|q.status.unfinished()&&q.status!=queue::QueueStatus::Running),"download_queue":download_queue,"ai_queue":ai_queue,"browsers":self.browser.states(app),"policy":PUSH_POLICY,"framework":framework::manifest(),"legacy_materials":library_core::legacy_materials::summary(&self.store.legacy_snapshots()?)}),
         )
     }
     pub async fn step(
@@ -163,9 +182,10 @@ impl Engine {
         }
     }
 }
-pub struct Lease(Arc<AtomicBool>);
+pub struct Lease(Arc<AtomicBool>, Arc<AtomicU8>);
 impl Drop for Lease {
     fn drop(&mut self) {
+        self.1.store(0, Ordering::SeqCst);
         self.0.store(false, Ordering::SeqCst);
     }
 }
