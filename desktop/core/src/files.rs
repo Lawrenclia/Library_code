@@ -463,6 +463,14 @@ pub fn export_report_with_queues(
     queues: &[crate::queue::DownloadQueue],
     path: &Path,
 ) -> Result<()> {
+    export_report_with_history(tasks, queues, &[], path)
+}
+pub fn export_report_with_history(
+    tasks: &[Task],
+    queues: &[crate::queue::DownloadQueue],
+    legacy: &[serde_json::Value],
+    path: &Path,
+) -> Result<()> {
     use rust_xlsxwriter::Workbook;
     let mut book = Workbook::new();
     let sheet = book.add_worksheet();
@@ -729,6 +737,49 @@ pub fn export_report_with_queues(
     history
         .set_column_width(14, 80.)
         .map_err(Failure::storage)?;
+    if !legacy.is_empty() {
+        let audit = book.add_worksheet();
+        audit.set_name("旧版资料归档").map_err(Failure::storage)?;
+        for (col, label) in [
+            "迁移批次",
+            "旧版目录",
+            "名单哈希",
+            "完整迁移记录 SHA256",
+            "分段序号",
+            "完整迁移记录 JSON（按序连接）",
+        ]
+        .iter()
+        .enumerate()
+        {
+            audit
+                .write_string(0, col as u16, *label)
+                .map_err(Failure::storage)?;
+        }
+        let mut row = 1;
+        for (index, snapshot) in legacy.iter().enumerate() {
+            let raw = serde_json::to_string(snapshot)?;
+            // Unicode scalar chunks keep each cell below Excel's UTF-16 limit.
+            let chars: Vec<_> = raw.chars().collect();
+            for (part, chunk) in chars.chunks(15000).enumerate() {
+                let values = [
+                    (index + 1).to_string(),
+                    snapshot["root"].as_str().unwrap_or("").into(),
+                    snapshot["roster_hash"].as_str().unwrap_or("").into(),
+                    hash(raw.as_bytes()),
+                    (part + 1).to_string(),
+                    chunk.iter().collect(),
+                ];
+                for (col, value) in values.iter().enumerate() {
+                    audit
+                        .write_string(row, col as u16, value)
+                        .map_err(Failure::storage)?;
+                }
+                row += 1;
+            }
+        }
+        audit.set_freeze_panes(1, 0).map_err(Failure::storage)?;
+        audit.set_column_width(5, 80.).map_err(Failure::storage)?;
+    }
     book.save(path).map_err(Failure::storage)?;
     Ok(())
 }

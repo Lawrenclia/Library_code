@@ -14,6 +14,7 @@ pub struct Entry {
     pub sa_id: String,
     pub title: String,
     pub histories: usize,
+    pub materials: usize,
     pub phases: Vec<String>,
     pub input_changed: bool,
     pub needs_readback: bool,
@@ -26,6 +27,11 @@ pub struct Preview {
     pub journal_count: usize,
     pub import_count: usize,
     pub orphan_count: usize,
+    pub classification_count: usize,
+    pub prepared_count: usize,
+    pub material_file_count: usize,
+    pub unbound_material_count: usize,
+    pub material_warnings: Vec<String>,
     pub entries: Vec<Entry>,
 }
 pub struct Plan {
@@ -34,10 +40,11 @@ pub struct Plan {
     pub keys: BTreeMap<String, String>,
     pub snapshot: Value,
     pub artifacts: BTreeMap<String, Artifact>,
+    pub materials: crate::legacy_materials::Bundle,
 }
 
 // Python's json.dumps(..., ensure_ascii=False, sort_keys=True) uses spaces.
-fn python_json(value: &Value) -> String {
+pub(crate) fn python_json(value: &Value) -> String {
     match value {
         Value::Object(map) => format!(
             "{{{}}}",
@@ -259,13 +266,14 @@ pub fn inspect(root: &Path) -> Result<Plan> {
         }
         sources.push(json!({"path":relative,"imports":imports,"snapshot":data}));
     }
-    if sources.is_empty() {
+    let materials = crate::legacy_materials::inspect(&root, &records, &input_hash)?;
+    if sources.is_empty() && materials.files.is_empty() {
         return Err(Failure::new(
             "MIGRATION_INVALID",
             "所选目录没有支持的旧版进度或导入日志。",
         ));
     }
-    let snapshot = json!({"version":1,"root":root.to_string_lossy(),"roster_hash":input_hash,"records":records,"keys":keys,"sources":sources});
+    let snapshot = json!({"version":2,"root":root.to_string_lossy(),"roster_hash":input_hash,"records":records,"keys":keys,"sources":sources,"materials":materials});
     let mut entries = Vec::new();
     let mut orphans = std::collections::BTreeSet::new();
     for source in &sources {
@@ -281,6 +289,11 @@ pub fn inspect(root: &Path) -> Result<Plan> {
             sa_id: record.sa_id.clone(),
             title: record.title.clone(),
             histories: rows.len(),
+            materials: materials
+                .records
+                .iter()
+                .filter(|m| m.task_ids.contains(&record.sa_id))
+                .count(),
             phases: rows
                 .iter()
                 .filter_map(|r| r["data"]["phase"].as_str().or_else(|| r["state"].as_str()))
@@ -300,12 +313,30 @@ pub fn inspect(root: &Path) -> Result<Plan> {
             journal_count,
             import_count,
             orphan_count: orphans.len(),
+            classification_count: materials
+                .records
+                .iter()
+                .filter(|m| m.kind == "classification")
+                .count(),
+            prepared_count: materials
+                .records
+                .iter()
+                .filter(|m| m.kind == "submission")
+                .count(),
+            material_file_count: materials.files.len(),
+            unbound_material_count: materials
+                .records
+                .iter()
+                .filter(|m| m.task_ids.is_empty())
+                .count(),
+            material_warnings: materials.warnings.clone(),
             entries,
         },
         records,
         keys,
         snapshot,
         artifacts,
+        materials,
     })
 }
 pub fn rows_for<'a>(snapshot: &'a Value, id: &str) -> Vec<&'a Value> {
@@ -481,6 +512,242 @@ mod tests {
         assert_eq!(record_key(&r, "2"), record_key(&record(), "2"));
         r.staff_id = "0001".into();
         assert_ne!(record_key(&r, "2"), record_key(&record(), "2"));
+    }
+    fn material_fixture(checkpoint: bool) -> tempfile::TempDir {
+        let root = fixture("exported", false);
+        // Test a material-only legacy project, with no progress/import databases.
+        for relative in [
+            "runtime/progress.sqlite3",
+            "runtime/wos-imports/imports.sqlite3",
+        ] {
+            std::fs::remove_file(root.path().join(relative)).unwrap();
+        }
+        let sha = hash(&std::fs::read(root.path().join("list.xlsx")).unwrap());
+        let id = hash(python_json(&json!({"doi":"10.1234/test","title":"Paper"})).as_bytes());
+        let classify = root
+            .path()
+            .join("runtime/classification")
+            .join("a".repeat(64));
+        let submit = root.path().join("runtime/submission").join("b".repeat(64));
+        std::fs::create_dir_all(&classify).unwrap();
+        std::fs::create_dir_all(submit.join("待补草稿")).unwrap();
+        let paper = json!({"id":id,"title":"Paper","doi":"10.1234/test","rows":[2]});
+        std::fs::write(classify.join("分类结果.json"),json!({"model":"old-model","source":{"sha256":sha},"records":[{"id":id,"title":"Paper","doi":"10.1234/test","rows":[2],"classification":{"type":"期刊论文","confidence":"低","missing_evidence":["机构署名"]}}]}).to_string()).unwrap();
+        std::fs::write(classify.join("events.jsonl"), b"").unwrap();
+        std::fs::write(
+            submit.join("零匹配队列.json"),
+            json!({"sha256":sha,"papers":[paper]}).to_string(),
+        )
+        .unwrap();
+        let raw = b"TI\tDI\nPaper\t10.1234/test\n";
+        std::fs::write(submit.join("original.txt"), raw).unwrap();
+        std::fs::copy(
+            root.path().join("list.xlsx"),
+            submit.join("normalized.xlsx"),
+        )
+        .unwrap();
+        std::fs::copy(
+            root.path().join("list.xlsx"),
+            submit.join("待补草稿/期刊论文.xlsx"),
+        )
+        .unwrap();
+        let mut prepared = paper.clone();
+        prepared["metadata"] = json!({"fields":{"abstract":{"value":"长摘要🙂引用保留".repeat(5000),"source_ids":["source-1"]}},"missing":["机构署名"]});
+        prepared["sources"] = json!([{"id":"source-1","provider":"WOS","url":"https://example.test/record","fields":{"TI":"Paper"},"identity_verified":false}]);
+        prepared["status"] = json!("待补全");
+        prepared["export"] = json!({"file":"original.txt","sha256":hash(raw),"import_file":"normalized.xlsx","channel":"wos-txt"});
+        let (name, data) = if checkpoint {
+            (
+                "progress.json",
+                json!({"signature":"old","records":{id:prepared}}),
+            )
+        } else {
+            (
+                "提交准备.json",
+                json!({"records":[prepared],"notice":"仅准备，未上传"}),
+            )
+        };
+        std::fs::write(submit.join(name), data.to_string()).unwrap();
+        root
+    }
+    #[test]
+    fn materials_preserve_originals_and_citations_without_promoting_old_ai_after_restart() {
+        let old = material_fixture(false);
+        let plan = inspect(old.path()).unwrap();
+        assert_eq!(
+            (
+                plan.preview.classification_count,
+                plan.preview.prepared_count,
+                plan.preview.unbound_material_count
+            ),
+            (1, 1, 0)
+        );
+        assert_eq!(plan.preview.journal_count, 0);
+        let target = tempfile::tempdir().unwrap();
+        let store = Store::new(target.path()).unwrap();
+        store.apply_legacy(&plan).unwrap();
+        let store = Store::new(target.path()).unwrap();
+        let task = store.task("0001").unwrap();
+        assert_eq!(task.stage, Stage::Pending);
+        assert!(task.artifact.is_none() && task.classification.is_none());
+        let evidence = task
+            .evidence
+            .iter()
+            .filter(|e| e.kind == "legacy_material")
+            .collect::<Vec<_>>();
+        assert_eq!(evidence.len(), 2);
+        let prepared: Value = serde_json::from_str(&evidence[1].text).unwrap();
+        assert_eq!(prepared["record"], plan.materials.records[1].record);
+        assert_eq!(prepared["platform_verified"], false);
+        assert_eq!(prepared["review_required"], true);
+        assert!(source_files::verified_evidence(target.path(), &task)
+            .unwrap()
+            .is_empty());
+        let snapshots = store.legacy_snapshots().unwrap();
+        for file in &plan.materials.files {
+            let archived = &snapshots[0]["material_archives"][&file.relative];
+            let raw = std::fs::read(archived["archive_path"].as_str().unwrap()).unwrap();
+            assert_eq!(hash(&raw), file.sha256);
+            assert_eq!(raw, std::fs::read(old.path().join(&file.relative)).unwrap());
+        }
+        assert_eq!(
+            crate::legacy_materials::summary(&snapshots)[0]["records"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let revision = task.revision;
+        assert_eq!(store.apply_legacy(&plan).unwrap()["already_imported"], true);
+        assert_eq!(store.task("0001").unwrap().revision, revision);
+        let report = target.path().join("report.xlsx");
+        files::export_report_with_history(&[task], &[], &snapshots, &report).unwrap();
+        let mut book = open_workbook_auto(&report).unwrap();
+        let sheet = book.worksheet_range("旧版资料归档").unwrap();
+        let reconstructed = sheet
+            .rows()
+            .skip(1)
+            .map(|r| r[5].to_string())
+            .collect::<String>();
+        assert_eq!(
+            serde_json::from_str::<Value>(&reconstructed).unwrap(),
+            snapshots[0]
+        );
+        assert_eq!(
+            sheet.rows().nth(1).unwrap()[3].to_string(),
+            hash(reconstructed.as_bytes())
+        );
+        assert!(sheet.height() > 2);
+    }
+    #[test]
+    fn incomplete_preparation_checkpoint_keeps_exports_and_requires_review() {
+        let old = material_fixture(true);
+        let plan = inspect(old.path()).unwrap();
+        let material = &plan.materials.records[1];
+        assert_eq!(material.task_ids, vec!["0001"]);
+        assert!(material.file.ends_with("progress.json"));
+        assert!(material.files.iter().any(|f| f.ends_with("original.txt")));
+        assert!(!material.warnings.is_empty());
+        assert_eq!(plan.preview.prepared_count, 1);
+    }
+    #[test]
+    fn wrong_roster_or_rows_or_paper_keys_are_unbound_history() {
+        for changed in ["hash", "rows", "id", "queue"] {
+            let old = material_fixture(false);
+            let path = old.path().join("runtime/submission").join("b".repeat(64));
+            let (name, key) = if changed == "hash" || changed == "queue" {
+                ("零匹配队列.json", "papers")
+            } else {
+                ("提交准备.json", "records")
+            };
+            let p = path.join(name);
+            let mut data: Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+            match changed {
+                "hash" => data["sha256"] = json!("other"),
+                "rows" => data[key][0]["rows"] = json!([3]),
+                "id" => data[key][0]["id"] = json!("other"),
+                _ => data[key][0]["title"] = json!("other"),
+            };
+            std::fs::write(p, data.to_string()).unwrap();
+            let plan = inspect(old.path()).unwrap();
+            assert_eq!(plan.preview.unbound_material_count, 1);
+            assert!(plan.materials.records[1].task_ids.is_empty());
+            let target = tempfile::tempdir().unwrap();
+            let store = Store::new(target.path()).unwrap();
+            store.apply_legacy(&plan).unwrap();
+            assert_eq!(store.task("0001").unwrap().evidence.len(), 1);
+            assert_eq!(
+                crate::legacy_materials::summary(&store.legacy_snapshots().unwrap())[0]["records"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+        }
+    }
+    #[test]
+    fn changed_manifest_or_export_or_existing_archive_never_commits_migration() {
+        for changed in ["manifest", "export", "archive"] {
+            let old = material_fixture(false);
+            let plan = inspect(old.path()).unwrap();
+            let target = tempfile::tempdir().unwrap();
+            let store = Store::new(target.path()).unwrap();
+            let file = &plan.materials.files[0];
+            match changed {
+                "manifest" => {
+                    std::fs::write(old.path().join(&file.relative), b"{}").unwrap();
+                }
+                "export" => {
+                    std::fs::write(
+                        old.path()
+                            .join("runtime/submission")
+                            .join("b".repeat(64))
+                            .join("original.txt"),
+                        b"changed",
+                    )
+                    .unwrap();
+                }
+                _ => {
+                    let dir = target.path().join("legacy-files");
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(
+                        dir.join(format!("{}.{}", file.sha256, file.format)),
+                        b"changed",
+                    )
+                    .unwrap();
+                }
+            }
+            assert!(store.apply_legacy(&plan).is_err());
+            assert!(store.tasks().unwrap().is_empty());
+            assert!(store.legacy_snapshots().unwrap().is_empty());
+        }
+    }
+    #[test]
+    fn malformed_and_duplicate_manifest_or_external_export_refuse_migration() {
+        for changed in ["json", "duplicate", "external"] {
+            let old = material_fixture(false);
+            let p = old
+                .path()
+                .join("runtime/submission")
+                .join("b".repeat(64))
+                .join("提交准备.json");
+            if changed == "json" {
+                std::fs::write(&p, b"invalid").unwrap();
+            } else {
+                let mut data: Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+                let outside = tempfile::NamedTempFile::with_suffix(".txt").unwrap();
+                if changed == "duplicate" {
+                    let record = data["records"][0].clone();
+                    data["records"].as_array_mut().unwrap().push(record);
+                } else {
+                    data["records"][0]["export"]["file"] = json!(outside.path().to_string_lossy());
+                }
+                std::fs::write(&p, data.to_string()).unwrap();
+                assert!(inspect(old.path()).is_err());
+                continue;
+            }
+            assert!(inspect(old.path()).is_err());
+        }
     }
     #[test]
     fn legacy_sa_completion_requires_exact_live_identity_status_note_and_input() {

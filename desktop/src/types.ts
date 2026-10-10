@@ -188,6 +188,27 @@ export interface Workspace {
   browsers: Record<string, { open: boolean; usable: boolean }>;
   policy: string;
   framework?: FrameworkManifest;
+  legacy_materials?: {
+    root: string;
+    roster_hash: string;
+    review_required: boolean;
+    records: {
+      kind: string;
+      title: string;
+      paper_id: string;
+      task_ids: string[];
+      warnings: string[];
+      manifest: string;
+    }[];
+    files: {
+      original_file: string;
+      archive_path: string;
+      sha256: string;
+      bytes: number;
+      format: string;
+    }[];
+    warnings: string[];
+  }[];
 }
 export interface FrameworkManifest {
   schema_version: number;

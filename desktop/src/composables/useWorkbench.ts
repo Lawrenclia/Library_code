@@ -53,10 +53,16 @@ export function useWorkbench() {
     journal_count: number;
     import_count: number;
     orphan_count: number;
+    classification_count?: number;
+    prepared_count?: number;
+    material_file_count?: number;
+    unbound_material_count?: number;
+    material_warnings?: string[];
     entries: {
       sa_id: string;
       title: string;
       histories: number;
+      materials?: number;
       phases: string[];
       input_changed: boolean;
       needs_readback: boolean;

@@ -30,6 +30,7 @@ import {
 import WorkbenchShell from "@/components/WorkbenchShell.vue";
 import WorkflowOverview from "@/components/WorkflowOverview.vue";
 import SourceImporter from "@/components/SourceImporter.vue";
+import LegacyMaterials from "@/components/LegacyMaterials.vue";
 import TaskTable from "@/components/TaskTable.vue";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1325,10 +1326,20 @@ function frameworkBrowser(role: string, entry?: string) {
                   </p>
                   <p class="path mb-2">{{ e.source }}</p>
                   <details
-                    v-if="e.kind === 'external_metadata'"
+                    v-if="
+                      e.kind === 'external_metadata' ||
+                      e.kind === 'legacy_material' ||
+                      e.kind === 'legacy_history'
+                    "
                     class="text-xs leading-6"
                   >
-                    <summary>查看完整来源字段与绑定记录</summary>
+                    <summary>
+                      {{
+                        e.kind === "external_metadata"
+                          ? "查看完整来源字段与绑定记录"
+                          : "旧版历史资料 · 待复核，展开查看完整记录"
+                      }}
+                    </summary>
                     <p class="break-all whitespace-pre-wrap">{{ e.text }}</p>
                   </details>
                   <p v-else class="whitespace-pre-wrap text-xs leading-6">
@@ -2089,7 +2100,7 @@ function frameworkBrowser(role: string, entry?: string) {
             <CardDescription class="text-xs leading-6"
               >先关闭旧版助手，再选择含 list.xlsx 和 runtime
               的旧版代码目录。保留完整日志与原始
-              TXT；已有平台操作先回读。不会读取旧版密钥或浏览器登录数据。</CardDescription
+              TXT、分类结果和提交准备资料；历史建议与草稿仍需复核，已有平台操作先回读。不会读取旧版密钥或浏览器登录数据。</CardDescription
             >
           </CardHeader>
           <CardContent class="space-y-4">
@@ -2112,13 +2123,16 @@ function frameworkBrowser(role: string, entry?: string) {
               >
                 <div
                   v-for="entry in legacyPreview.entries.filter(
-                    (e) => e.histories,
+                    (e) => e.histories || e.materials,
                   )"
                   :key="entry.sa_id"
                   class="border-b py-2 last:border-0"
                 >
                   <p>{{ entry.sa_id }} · {{ entry.title }}</p>
                   <p class="text-muted-foreground">
+                    <span v-if="entry.materials"
+                      >{{ entry.materials }} 份历史材料 ·
+                    </span>
                     {{ entry.phases.join(" / ")
                     }}<span v-if="entry.input_changed">
                       · 输入版本不同，待核对</span
@@ -2126,12 +2140,38 @@ function frameworkBrowser(role: string, entry?: string) {
                   </p>
                 </div>
               </div>
+              <p class="text-xs leading-6">
+                {{ legacyPreview.classification_count ?? 0 }} 条分类 ·
+                {{ legacyPreview.prepared_count ?? 0 }} 条准备记录 ·
+                {{ legacyPreview.material_file_count ?? 0 }} 个原文件。{{
+                  legacyPreview.unbound_material_count ?? 0
+                }}
+                条未绑定资料将保存在历史归档中。
+              </p>
+              <details
+                v-if="legacyPreview.material_warnings?.length"
+                class="text-xs leading-6"
+              >
+                <summary>
+                  查看迁移注意事项（{{
+                    legacyPreview.material_warnings.length
+                  }}）
+                </summary>
+                <p
+                  v-for="(warning, index) in legacyPreview.material_warnings"
+                  :key="index"
+                  class="break-all"
+                >
+                  {{ warning }}
+                </p>
+              </details>
               <Button :disabled="locked" @click="migrateLegacy"
                 ><Check />迁移这些记录</Button
               >
             </template>
           </CardContent>
         </Card>
+        <LegacyMaterials :batches="workspace.legacy_materials || []" />
         <div class="rounded-xl border border-dashed p-5">
           <p class="flex items-center gap-2 text-xs font-medium">
             <ShieldCheck class="size-4 text-primary" />进度会保留

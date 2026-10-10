@@ -620,7 +620,12 @@ pub fn verified_evidence(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
             (e.kind != "external_metadata" || current.contains(&e.id))
                 && !matches!(
                     e.kind.as_str(),
-                    "alias_verified" | "claim_verified" | "sa_read" | "material_validation"
+                    "alias_verified"
+                        | "claim_verified"
+                        | "sa_read"
+                        | "material_validation"
+                        | "legacy_material"
+                        | "legacy_history"
                 )
         })
         .cloned()

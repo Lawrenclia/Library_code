@@ -80,7 +80,7 @@ impl Engine {
                 serde_json::to_value(self.store.pending_input(task["id"].as_str().unwrap())?)?;
         }
         Ok(
-            json!({"tasks":tasks,"root":self.store.root.to_string_lossy(),"running":self.active.load(Ordering::SeqCst),"paused":self.pause.load(Ordering::SeqCst)||queue_paused,"download_queue":download_queue,"browsers":self.browser.states(app),"policy":PUSH_POLICY,"framework":framework::manifest()}),
+            json!({"tasks":tasks,"root":self.store.root.to_string_lossy(),"running":self.active.load(Ordering::SeqCst),"paused":self.pause.load(Ordering::SeqCst)||queue_paused,"download_queue":download_queue,"browsers":self.browser.states(app),"policy":PUSH_POLICY,"framework":framework::manifest(),"legacy_materials":library_core::legacy_materials::summary(&self.store.legacy_snapshots()?)}),
         )
     }
     pub async fn step(

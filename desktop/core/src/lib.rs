@@ -6,6 +6,7 @@ pub mod files;
 pub mod framework;
 pub mod issues;
 pub mod legacy;
+pub mod legacy_materials;
 pub mod library;
 pub mod merge;
 pub mod metadata;

@@ -360,6 +360,11 @@ impl Store {
                 json!({"already_imported":true,"count":0,"fingerprint":plan.preview.fingerprint}),
             );
         }
+        let material_archives = crate::legacy_materials::archive(
+            &self.root,
+            std::path::Path::new(&plan.preview.root),
+            &plan.materials,
+        )?;
         for record in &plan.records {
             let old: Option<String> = tx
                 .query_row("SELECT data FROM tasks WHERE id=?", [&record.sa_id], |r| {
@@ -393,7 +398,18 @@ impl Store {
                 task
             };
             let rows = crate::legacy::rows_for(&plan.snapshot, &record.sa_id);
+            let material_evidence = crate::legacy_materials::evidence(
+                &plan.materials,
+                &task,
+                &plan.preview.fingerprint,
+                &material_archives,
+            )?;
+            let has_materials = !material_evidence.is_empty();
+            task.evidence.extend(material_evidence);
             if rows.is_empty() {
+                if has_materials {
+                    Self::write_task(&tx, &task, "legacy_materials_migrated")?;
+                }
                 continue;
             }
             // Keep the whole original journal, including historical input keys and events.
@@ -542,13 +558,11 @@ impl Store {
                 "迁移期间旧数据变化；任务与历史记录未提交，请关闭旧助手后重新预览。",
             ));
         }
+        let mut snapshot = plan.snapshot.clone();
+        snapshot["material_archives"] = serde_json::to_value(&material_archives)?;
         tx.execute(
             "INSERT INTO legacy_migrations VALUES(?,?,?)",
-            params![
-                plan.preview.fingerprint,
-                plan.snapshot.to_string(),
-                now() as i64
-            ],
+            params![plan.preview.fingerprint, snapshot.to_string(), now() as i64],
         )?;
         tx.commit()?;
         Ok(

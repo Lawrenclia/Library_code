@@ -103,6 +103,12 @@ cargo run --quiet --locked --manifest-path desktop/core/Cargo.toml --example fra
 
 `node tests/desktop-sources-ui.test.cjs` 验证原文件渠道/编码设置、明确记录/范围/列选择、分页和表头刷新、来源确认、版本清理、恢复入口及异步返回的任务隔离。`node tests/desktop-materials-ui.test.cjs` 验证模板材料和校验展示。这些测试均使用隔离 IPC，未操作真实数据库或平台。
 
+旧版迁移读取标准 `runtime/classification/<signature>/分类结果.json`、`runtime/submission/<signature>/提交准备.json` 和提交准备的 `progress.json`，保留完整来源字段与引用，以及标准伴随文件、草稿和明确引用的 TXT/CSV/XLSX。仅名单字节哈希、Python 论文键、题名、DOI、全部行号和零匹配队列一致时绑定当前任务；不一致的历史完整保存在批次归档。分类断点没有完整名单依据时仅归档原文件，不推断对应任务。历史材料不改变当前任务阶段，不成为 AI/模板的事实来源。
+
+归档在应用目录 `legacy-files/<sha256>.<ext>`，同时保存原路径、实际文件哈希和大小。预览后原内容改变、重复论文 ID、原导出哈希不符或现存归档被修改时拒绝迁移，SQLite 事务不提交。迁移只扫描标准签名目录及明确引用，单文件 20 MB、总量 256 MB；超限提示缩小范围，不截断。原绝对路径文件缺失时记录缺项，存在但超出所选旧目录时拒绝。不会搜索同名文件猜测来源。
+
+`node tests/desktop-legacy-materials-ui.test.cjs` 验证只有材料的预览、严格预览确认、断点/未绑定提示、保存位置与哈希及 1260/960 布局。核心迁移测试覆盖实际 SQLite 重开、幂等、完整长摘要和引用、原字节归档、材料不提升阶段、错误拒绝及 Excel 分段重组。来源报告的“旧版资料归档”保存完整历史 JSON；按批次/分段顺序连接后可用记录 SHA256 核对，未绑定资料也保留。
+
 原生完整流程由 `smoke-test` 编译后的程序运行 `tests/desktop-native.test.cjs`，只访问独立本地合成页面。正式编译不包含回环来源覆盖。完整合并进程恢复由 `tests/desktop-merge-restart.test.cjs` 验证，12 个实际程序进程及其 WebView2：外部模拟服务收到写入后结束测试自建进程，重启核对原意图、SA、候选池和完整主条目。三条原匹配先合并一条，剩余第三条继续独立核对；两次合并各仅一次，SA 不提前完成。字段/SA/候选/检索条件变化或实际未保存时保持未知，不重发。它证明本地模拟恢复，不证明真实机构平台恢复。
 
 从仓库根目录构建并运行独立合并测试（Windows / WebView2）：

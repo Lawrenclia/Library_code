@@ -118,7 +118,12 @@ pub(crate) async fn export_report(
         return Ok(json!({"cancelled":true}));
     };
     let (tasks, queues) = state.store.report_snapshot()?;
-    files::export_report_with_queues(&tasks, &queues, path.path())?;
+    files::export_report_with_history(
+        &tasks,
+        &queues,
+        &state.store.legacy_snapshots()?,
+        path.path(),
+    )?;
     Ok(json!({"path":path.path().to_string_lossy()}))
 }
 #[tauri::command]
