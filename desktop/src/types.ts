@@ -60,6 +60,13 @@ export interface Task {
   platform_id: string;
   batch: Record<string, unknown> | null;
   sa_snapshot: Record<string, unknown> | null;
+  sa_note?: {
+    plan_id: string;
+    note: string;
+    original_remark: string;
+    verified: boolean;
+    platform_completed: false;
+  } | null;
   issue_plan?: {
     baseline: Record<string, unknown>;
     requirements: { key: string; label: string }[];

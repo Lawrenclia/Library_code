@@ -50,6 +50,131 @@ fn complete_row(snapshot: &Value) -> Result<&serde_json::Map<String, Value>> {
     Ok(row)
 }
 
+/// A manual note handoff is separate from the status-changing completion command.
+pub fn not_found_note_payload(task: &Task, snapshot: &Value) -> Result<Value> {
+    complete_row(snapshot)?;
+    if task.route != Route::NotFound
+        || task.record.done
+        || task.record.skipped
+        || task.running
+        || task.batch.is_some()
+        || task.batch_recheck.is_some()
+        || !task.platform_id.is_empty()
+        || !matches!(
+            task.stage,
+            Stage::AwaitingReview | Stage::Downloaded | Stage::Ready
+        )
+        || !identity(task, snapshot)?.is_empty()
+    {
+        return Err(Failure::new(
+            "INVALID_TRANSITION",
+            "仅未查询到文献的待处理、零匹配任务可以准备独立备注。",
+        ));
+    }
+    let mut checked = task.clone();
+    checked.sa_snapshot = Some(snapshot.clone());
+    let review = task
+        .review
+        .as_ref()
+        .filter(|r| r.route == Route::NotFound)
+        .ok_or_else(|| Failure::new("REVIEW_REQUIRED", "先保存有实际检索范围的未查询到结论。"))?;
+    checked.validate_review(review)?;
+    let note = review.note.trim();
+    if note.chars().count() > 2000 {
+        return Err(Failure::new(
+            "INCOMPLETE_METADATA",
+            "平台备注不能超过 2000 字符。",
+        ));
+    }
+    let scope_ids: Vec<_> = search_scopes::current(&checked)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    let proofs: Vec<_> = task
+        .evidence
+        .iter()
+        .filter(|e| e.id == review.evidence_id || scope_ids.contains(&e.id))
+        .collect();
+    Ok(json!({"schema":"sa_not_found_note_v1", "sa_id":task.id,
+        "input_hash":task.input_hash,"record":task.record,"route":task.route,
+        "previous_stage":task.stage,"review":review,"proofs":proofs,
+        "original_sa":snapshot,"note":note,"mark_status":"待处理",
+        "execution":"manual_note_only","write_sent":false,"platform_completed":false}))
+}
+
+pub fn latest_note_plan(task: &Task) -> Result<(String, Value)> {
+    let evidence = task
+        .evidence
+        .iter()
+        .rev()
+        .find(|e| e.kind == "sa_note_handoff")
+        .ok_or_else(|| {
+            Failure::new(
+                "REVIEW_REQUIRED",
+                "先准备独立备注，保存原 SA 回读与检索依据。",
+            )
+        })?;
+    let payload: Value = serde_json::from_str(&evidence.text)
+        .map_err(|_| Failure::new("REMOTE_RESULT_UNKNOWN", "原备注交接记录不完整。"))?;
+    if payload["schema"] != "sa_not_found_note_v1"
+        || not_found_note_payload(task, &payload["original_sa"])? != payload
+    {
+        return Err(Failure::new(
+            "INPUT_CHANGED",
+            "名单、结论或检索依据变化，请重新核对备注交接记录。",
+        ));
+    }
+    Ok((evidence.id.clone(), payload))
+}
+
+/// Only remark and server audit fields may change. Status must remain pending.
+pub fn verify_not_found_note(task: &Task, payload: &Value, snapshot: &Value) -> Result<()> {
+    if payload["schema"] != "sa_not_found_note_v1"
+        || not_found_note_payload(task, &payload["original_sa"])? != *payload
+    {
+        return Err(Failure::new(
+            "INPUT_CHANGED",
+            "原备注范围或依据已变化，未确认保存结果。",
+        ));
+    }
+    let before = complete_row(&payload["original_sa"])?;
+    let after = complete_row(snapshot)?;
+    let allowed = ["remark", "updateTime", "updateUsername"];
+    if after["markStatus"] != "待处理"
+        || after["remark"] != payload["note"]
+        || before.len() != after.len()
+        || before
+            .iter()
+            .any(|(k, v)| !allowed.contains(&k.as_str()) && after.get(k) != Some(v))
+        || snapshot["comparison"] != payload["original_sa"]["comparison"]
+    {
+        return Err(Failure::new("REMOTE_RESULT_UNKNOWN", "独立备注尚未准确保存，或 SA 状态、匹配及其他字段变化；未设置已处理，也不会发送状态操作。"));
+    }
+    Ok(())
+}
+
+pub fn note_status(task: &Task) -> Option<Value> {
+    let (id, payload) = latest_note_plan(task).ok()?;
+    let verified = task.sa_snapshot.as_ref().is_some_and(|snapshot| {
+        verify_not_found_note(task, &payload, snapshot).is_ok()
+            && task.evidence.iter().any(|e| {
+                e.kind == "sa_note_verified"
+                    && serde_json::from_str::<Value>(&e.text).is_ok_and(|saved| {
+                        saved["schema"] == "sa_not_found_note_verified_v1"
+                            && saved["write_sent"] == false
+                            && saved["platform_completed"] == false
+                            && saved["plan_id"] == id
+                            && saved["payload"] == payload
+                            && saved["sa_after"] == *snapshot
+                    })
+            })
+    });
+    Some(
+        json!({"plan_id":id,"note":payload["note"],"verified":verified,
+        "original_remark":payload["original_sa"]["row"]["remark"],"platform_completed":false}),
+    )
+}
+
 /// Freeze the complete intent before sending the single status write.
 pub fn complete_payload(task: &Task, snapshot: &Value) -> Result<Value> {
     complete_row(snapshot)?;

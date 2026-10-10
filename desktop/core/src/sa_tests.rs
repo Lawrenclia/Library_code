@@ -242,6 +242,147 @@ fn complete_snapshot() -> Value {
     result
 }
 
+fn note_fixture() -> (Task, Value) {
+    let mut t = task();
+    t.route = Route::NotFound;
+    t.platform_id.clear();
+    t.evidence.clear();
+    let mut before = complete_snapshot();
+    before["row"]["matchCount"] = json!(0);
+    before["row"]["itemId"] = json!("");
+    before["row"]["remark"] = json!("原备注");
+    before["comparison"] = json!([{"label":"题名","sa":"Paper","library":""}]);
+    t.sa_snapshot = Some(before.clone());
+    t.evidence.push(Evidence { id:"scope".into(),kind:"search_scope".into(),source:"https://example.org/results".into(),
+        text:json!({"schema":"source_search_scope_v1","reported_by":"human","task_id":t.id,"input_hash":t.input_hash,"record_fingerprint":t.record.fingerprint(),
+            "observation":{"channel":"wos_txt","source_url":"https://example.org/results","scope":"核心合集","query":"Paper","field":"title","observed_at":now(),
+                "outcome":"zero_results","total":0,"explanation":"人工记录的实际零结果"}}).to_string(),created:now() });
+    t.evidence.push(Evidence {
+        id: "conclusion".into(),
+        kind: "search_conclusion".into(),
+        source: "检索页".into(),
+        text: "按实际范围仍未定位".into(),
+        created: now(),
+    });
+    t.review = Some(Review {
+        route: Route::NotFound,
+        evidence_id: "conclusion".into(),
+        library_checked: false,
+        platform_id: String::new(),
+        affiliation_confirmed: false,
+        identity_confirmed: false,
+        issues_resolved: false,
+        note: "未查询到该文献；保留原备注".into(),
+    });
+    (t, before)
+}
+
+#[test]
+fn independent_note_requires_full_pending_readback_without_granting_completion() {
+    let (t, before) = note_fixture();
+    let payload = sa::not_found_note_payload(&t, &before).unwrap();
+    assert_eq!(payload["write_sent"], false);
+    assert_eq!(payload["platform_completed"], false);
+    assert!(sa::complete_payload(&t, &before).is_err());
+    let mut after = before.clone();
+    after["row"]["remark"] = payload["note"].clone();
+    after["row"]["updateTime"] = json!("new time");
+    sa::verify_not_found_note(&t, &payload, &after).unwrap();
+    for key in [
+        "markStatus",
+        "gh",
+        "title",
+        "id",
+        "doiValue",
+        "itemId",
+        "reason",
+    ] {
+        let mut changed = after.clone();
+        changed["row"][key] = json!(if key == "markStatus" {
+            "已处理"
+        } else {
+            "changed"
+        });
+        assert!(sa::verify_not_found_note(&t, &payload, &changed).is_err());
+    }
+    let mut changed = after.clone();
+    changed["comparison"][0]["sa"] = json!("Other paper");
+    assert!(sa::verify_not_found_note(&t, &payload, &changed).is_err());
+    assert!(sa::verify_not_found_note(
+        &t,
+        &payload,
+        &json!({"row":{"markStatus":"待处理","remark":payload["note"]}})
+    )
+    .is_err());
+    assert!(sa::verify_not_found_note(&t, &payload, &before).is_err());
+    assert!(!t.record.done);
+    assert_eq!(t.stage, Stage::AwaitingReview);
+}
+
+#[test]
+fn note_handoff_rejects_changed_scope_review_version_and_remote_checkpoint() {
+    let (t, before) = note_fixture();
+    let payload = sa::not_found_note_payload(&t, &before).unwrap();
+    let mut after = before.clone();
+    after["row"]["remark"] = payload["note"].clone();
+    for key in ["input", "record", "review", "scope", "batch", "stage"] {
+        let mut changed = t.clone();
+        match key {
+            "input" => changed.input_hash = "other version".into(),
+            "record" => changed.record.row += 1,
+            "review" => changed.review.as_mut().unwrap().note.push_str("new note"),
+            "scope" => changed.evidence[0].text = "invalid observation".into(),
+            "batch" => changed.batch = Some(json!({"id":"batch-1"})),
+            _ => changed.stage = Stage::Unknown,
+        }
+        assert!(sa::verify_not_found_note(&changed, &payload, &after).is_err());
+    }
+}
+
+#[test]
+fn manual_note_history_survives_restart_and_only_exact_fresh_readback_is_projected() {
+    let (mut t, before) = note_fixture();
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path()).unwrap();
+    store
+        .import(vec![t.record.clone()], t.input_hash.clone())
+        .unwrap();
+    t.revision = store.task(&t.id).unwrap().revision;
+    let payload = sa::not_found_note_payload(&t, &before).unwrap();
+    t.evidence.push(Evidence {
+        id: "plan".into(),
+        kind: "sa_note_handoff".into(),
+        source: "机构库".into(),
+        text: payload.to_string(),
+        created: now(),
+    });
+    store.save(&mut t, "fixture_note_handoff").unwrap();
+    let reopened = Store::new(dir.path()).unwrap();
+    let mut current = reopened.task(&t.id).unwrap();
+    assert_eq!(sa::latest_note_plan(&current).unwrap().0, "plan");
+    assert_eq!(sa::note_status(&current).unwrap()["verified"], false);
+    let mut after = before.clone();
+    after["row"]["remark"] = payload["note"].clone();
+    current.sa_snapshot = Some(after.clone());
+    // Seeing a matching remark alone isn't a saved verification receipt.
+    assert_eq!(sa::note_status(&current).unwrap()["verified"], false);
+    sa::verify_not_found_note(&current, &payload, &after).unwrap();
+    current.evidence.push(Evidence { id:"verified".into(),kind:"sa_note_verified".into(),source:"机构库".into(),
+        text:json!({"schema":"sa_not_found_note_verified_v1","plan_id":"plan","payload":payload,"sa_after":after,"write_sent":false,"platform_completed":false}).to_string(),created:now() });
+    store.save(&mut current, "fixture_note_verified").unwrap();
+    let recovered = Store::new(dir.path()).unwrap().task(&current.id).unwrap();
+    assert_eq!(sa::note_status(&recovered).unwrap()["verified"], true);
+    assert!(!recovered.record.done);
+    assert_eq!(recovered.stage, Stage::AwaitingReview);
+    assert!(recovered.assert_complete().is_err());
+    assert!(!classification::sources(dir.path(), &recovered)
+        .unwrap()
+        .iter()
+        .any(|e| e.id == "plan" || e.id == "verified"));
+    current.sa_snapshot.as_mut().unwrap()["row"]["remark"] = json!("changed later");
+    assert_eq!(sa::note_status(&current).unwrap()["verified"], false);
+}
+
 #[test]
 fn completion_readback_binds_full_original_row_and_proof_after_restart() {
     let mut t = task();

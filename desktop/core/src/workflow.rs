@@ -32,6 +32,8 @@ actions! {
     LibrarySearch => ("library_search", "library", Read),
     SearchWos => ("search_wos", "downloads", Read),
     PrepareIssues => ("prepare_issues", "sa", Prepare),
+    PrepareNote => ("prepare_note", "sa", Prepare),
+    VerifyNote => ("verify_note", "sa", Recover),
     ReviewIssue => ("review_issue", "sa", LocalReview),
     PrepareMetadata => ("prepare_metadata", "metadata", Prepare),
     OpenMetadata => ("open_metadata", "authors", Read),

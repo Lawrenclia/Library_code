@@ -1,6 +1,69 @@
 use super::*;
 
 impl Engine {
+    pub(super) async fn handle_note(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        action: &str,
+        mut t: Task,
+        _extra: Value,
+    ) -> Result<Value> {
+        if self.store.pending_input(id)?.is_some() || !self.store.unresolved(id)?.is_empty() {
+            return Err(Failure::new(
+                "REMOTE_RESULT_UNKNOWN",
+                "先核对名单版本或原待确认操作，不能准备或采用其他备注结果。",
+            ));
+        }
+        // Freeze the existing plan before refreshing the page. Neither action writes remotely.
+        let original = if action == "verify_note" {
+            Some(sa::latest_note_plan(&t)?)
+        } else {
+            None
+        };
+        let snapshot = self.read_sa(app, &mut t).await?;
+        if let Some((plan_id, payload)) = original {
+            let current = sa::latest_note_plan(&t)?;
+            if current.0 != plan_id || current.1 != payload {
+                return Err(Failure::new(
+                    "INPUT_CHANGED",
+                    "备注交接记录已变化，未采用回读。",
+                ));
+            }
+            sa::verify_not_found_note(&t, &payload, &snapshot)?;
+            let receipt = json!({"schema":"sa_not_found_note_verified_v1","plan_id":plan_id,
+                "payload":payload,"sa_after":snapshot,"write_sent":false,"platform_completed":false});
+            if !t
+                .evidence
+                .iter()
+                .any(|e| e.kind == "sa_note_verified" && e.text == receipt.to_string())
+            {
+                t.evidence.push(Evidence {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    kind: "sa_note_verified".into(),
+                    source: "机构库 SA · 独立备注与待处理状态只读回读".into(),
+                    text: receipt.to_string(),
+                    created: now(),
+                });
+                self.store.save(&mut t, "sa_note_verified")?;
+            }
+        } else {
+            let payload = sa::not_found_note_payload(&t, &snapshot)?;
+            // Keep a valid original handoff, even if the platform remark has since changed.
+            if sa::latest_note_plan(&t).is_err() {
+                t.evidence.push(Evidence {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    kind: "sa_note_handoff".into(),
+                    source: "机构库 SA · 未查询到分支的独立备注交接".into(),
+                    text: payload.to_string(),
+                    created: now(),
+                });
+                self.store.save(&mut t, "sa_note_handoff")?;
+            }
+        }
+        self.changed(app);
+        Ok(sa::note_status(&t).unwrap_or(Value::Null))
+    }
     pub(super) fn record_completion(
         task: &mut Task,
         payload: &Value,

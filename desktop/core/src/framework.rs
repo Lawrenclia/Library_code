@@ -66,7 +66,7 @@ pub fn manifest() -> Value {
         "services":[
             {"id":"inputs","label":"名单与版本","description":"读取 Excel、负责人范围、原表快照与旧版迁移。","state":"partial","limitation":"旧分类与准备资料已支持归档和严格绑定；真实目录迁移、部分旧操作恢复待验收或补齐。"},
             {"id":"downloads","label":"来源与原始下载","description":"WOS 自动导出、其他来源内置窗口及原生下载回执，接入 Excel、CSV、TXT。","state":"partial","limitation":"通用来源窗口由用户检索和导出，新增下载框架暂未验证；其他数据库自动检索/导出仍待接入，真实 WOS 下载待验收。"},
-            {"id":"library","label":"本库查询与四分支","description":"正确题名及标识符查库，确认非交大、已有、缺失或未查询到。","state":"partial","limitation":"未查询到分支已保留本地记录和未处理状态，但平台独立备注入口尚未接通；真实登录后的动态页面和业务查询待验收。"},
+            {"id":"library","label":"本库查询与四分支","description":"正确题名及标识符查库，确认非交大、已有、缺失或未查询到。","state":"partial","limitation":"未查询到分支已接入独立备注准备、手动交接和只读回读；自动写备注与真实编辑入口尚待核对，动态页面和业务查询待验收。"},
             {"id":"sa","label":"SA 逐项核验","description":"按匹配数分流，保存每个差异的来源、结论与实时回读。","state":"implemented","limitation":"完成前仍需本条准确 SA 回读。"},
             {"id":"duplicates","label":"重复条目","description":"选择主条目与被合并条目，核对保留字段后合并并回读。","state":"partial","limitation":"完整进程恢复本地模拟已通过；真实平台合并仍待验收。"},
             {"id":"metadata","label":"作者与单位字段","description":"按原始证据编辑角色和完整署名顺序，保留其他元数据。","state":"partial","limitation":"没有实际页面控件的其他字段需逐项适配。"},
@@ -81,7 +81,7 @@ pub fn manifest() -> Value {
         "metadata_providers":[{"id":"crossref","label":"Crossref DOI 登记元数据","lookup":"implemented","key":"doi","archive_format":"json","import_channel":null,"live_verified":false}],
         "operations":operations,
         "flows":[
-            {"id":"zero","label":"匹配 0 条","steps":["取得原始来源","核对论文身份与交大归属","用正确题名和标识符查本库","确认分支"],"outcomes":["非交大：有依据后备注并处理","本库已有：关联实际条目后逐项核验","本库缺失：准备材料，再上传、导入、推送","未查询到：记录检索范围，保留未处理"]},
+            {"id":"zero","label":"匹配 0 条","steps":["取得原始来源","核对论文身份与交大归属","用正确题名和标识符查本库","确认分支"],"outcomes":["非交大：有依据后备注并处理","本库已有：关联实际条目后逐项核验","本库缺失：准备材料，再上传、导入、推送","未查询到：记录检索范围，准备独立备注、手动保存并回读，保留未处理"]},
             {"id":"existing","label":"匹配 1 条","steps":["读取当前 SA 与完整本库记录","逐项核对待处理原因","必要时修改字段或认领","重新回读后完成 SA"],"outcomes":["每个原因分别保存来源与结论","存在未解决差异时不能完成"]},
             {"id":"duplicate","label":"匹配 2 条及以上","steps":["读取重复候选完整字段","核实同一成果并选择主条目","确认保留字段后合并","回读候选、主条目与 SA","继续剩余原因核对"],"outcomes":["仍有第三条匹配时继续核对","合并成功不直接等于 SA 已处理"]}
         ],

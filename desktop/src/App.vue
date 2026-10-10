@@ -31,6 +31,7 @@ import WorkbenchShell from "@/components/WorkbenchShell.vue";
 import WorkflowOverview from "@/components/WorkflowOverview.vue";
 import SourceImporter from "@/components/SourceImporter.vue";
 import SearchScopePanel from "@/components/SearchScopePanel.vue";
+import NotFoundNote from "@/components/NotFoundNote.vue";
 import WosSearchPanel from "@/components/WosSearchPanel.vue";
 import LegacyKeyPanel from "@/components/LegacyKeyPanel.vue";
 import AiQueuePanel from "@/components/AiQueuePanel.vue";
@@ -1908,6 +1909,7 @@ function frameworkBrowser(role: string, entry?: string) {
                 </div>
                 <div class="action-block">
                   <h3><CheckCircle2 class="size-3.5" />回到 SA 完成处理</h3>
+                  <NotFoundNote :task="current" :locked="locked" :run="run" />
                   <Button
                     variant="outline"
                     size="sm"

@@ -96,8 +96,10 @@ impl Engine {
         let queue_paused = download_queue
             .as_ref()
             .is_some_and(|q| q.status.unfinished() && q.status != queue::QueueStatus::Running);
-        let mut tasks = serde_json::to_value(self.store.tasks()?)?;
-        for task in tasks.as_array_mut().unwrap() {
+        let stored_tasks = self.store.tasks()?;
+        let mut tasks = serde_json::to_value(&stored_tasks)?;
+        for (task, stored) in tasks.as_array_mut().unwrap().iter_mut().zip(&stored_tasks) {
+            task["sa_note"] = sa::note_status(stored).unwrap_or(Value::Null);
             task["wos_searches"] = serde_json::to_value(
                 self.store
                     .wos_search_traces(task["id"].as_str().unwrap_or(""))?,
@@ -176,6 +178,9 @@ impl Engine {
             StepAction::PrepareAlias => self.handle_prepare_alias(app, id, action, t, extra).await,
             StepAction::VerifyAlias => self.handle_verify_alias(app, id, action, t, extra).await,
             StepAction::ReadSa => self.handle_read_sa(app, id, action, t, extra).await,
+            StepAction::PrepareNote | StepAction::VerifyNote => {
+                self.handle_note(app, id, action, t, extra).await
+            }
             StepAction::SearchWos => self.handle_search_wos(app, id, action, t, extra).await,
             StepAction::VerifyLegacySa => {
                 self.handle_verify_legacy_sa(app, id, action, t, extra)
