@@ -302,7 +302,9 @@ async function runSACommand(command) {
       const submitting = command.action === "submit_claim";
       const verifying = command.action === "verify_claim";
       if (submitting && command.confirmed !== true) stop("缺少本条作者认领的人工确认");
-      if (row.markStatus !== "待处理") stop("该记录已处理，不自动认领");
+      const legacyCheckpoint = verifying && command.checkpoint_mode === "verified_claim_receipt";
+      if (row.markStatus !== "待处理" && !(legacyCheckpoint && row.markStatus === "已处理"))
+        stop("该记录已处理，不自动认领");
       const ids = String(row.itemId || "").replace(/^,/, "").split(",").filter(Boolean);
       if (Number(row.matchCount) !== 1 || ids.length !== 1) stop("自动认领需要唯一匹配条目");
       const comparison = await showDetail();

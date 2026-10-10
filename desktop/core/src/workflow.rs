@@ -45,6 +45,7 @@ actions! {
     VerifyAlias => ("verify_alias", "authors", Recover),
     VerifySa => ("verify_sa", "sa", Recover),
     VerifyLegacySa => ("verify_legacy_sa", "sa", Recover),
+    VerifyLegacyClaim => ("verify_legacy_claim", "authors", Recover),
     VerifyImport => ("verify_import", "submission", Recover),
     SaveMetadata => ("save_metadata", "metadata", Write),
     MergeDuplicate => ("merge_duplicate", "duplicates", Write),

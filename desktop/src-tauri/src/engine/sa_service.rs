@@ -170,6 +170,56 @@ impl Engine {
         self.changed(app);
         return Ok(snapshot);
     }
+    pub(super) async fn handle_verify_legacy_claim(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        _action: &str,
+        mut task: Task,
+        _extra: Value,
+    ) -> Result<Value> {
+        let attempts = self.store.unresolved(id)?;
+        if attempts.len() != 1
+            || !["legacy_claim", "legacy_sa"]
+                .contains(&attempts[0]["action"].as_str().unwrap_or(""))
+        {
+            return Err(Failure::new(
+                "REMOTE_RESULT_UNKNOWN",
+                "没有唯一待确认的旧认领检查点。",
+            ));
+        }
+        let saved: Value = serde_json::from_str(attempts[0]["data"].as_str().unwrap_or("{}"))?;
+        let hydrated = legacy::hydrate_claim_checkpoint(&self.store, &saved["payload"])?;
+        let payload = &hydrated;
+        let before = self.read_sa(app, &mut task).await?;
+        let command = legacy::claim_readback(&task, payload, &before)?;
+        let result = self
+            .browser
+            .execute(app, "sa", "verify_claim", command, 65)
+            .await?;
+        let after = self.read_sa(app, &mut task).await?;
+        legacy::verify_claim_checkpoint(&task, payload, &before, &result, &after)?;
+        // Claim confirmation does not prove that SA reasons or closure are complete.
+        task.stage = Stage::Claimed;
+        task.running = false;
+        task.last_error = None;
+        task.platform_id = result["item_id"].as_str().unwrap().into();
+        task.evidence.push(Evidence {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: "legacy_claim_verified".into(),
+            source: "旧版原认领回执 · SA、完整作者与学者只读回读".into(),
+            text: json!({"payload":payload,"before":before,"result":result,"after":after,"sa_completed":false}).to_string(),
+            created: now(),
+        });
+        self.store.verify_attempt(
+            &mut task,
+            attempts[0]["id"].as_str().unwrap(),
+            json!({"claim":result,"sa":after}),
+            "legacy_claim_verified",
+        )?;
+        self.changed(app);
+        Ok(json!({"claim":result,"sa":after,"sa_completed":false}))
+    }
     pub(super) async fn handle_verify_sa(
         &self,
         app: &AppHandle,

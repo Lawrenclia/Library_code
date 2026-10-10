@@ -57,7 +57,7 @@ flowchart TD
 
 ## 注册与扩展
 
-`core/src/workflow.rs` 定义 27 个公开任务操作和服务分类：读取、准备、本地核验、恢复、平台写入。Engine 用枚举穷尽分发；新增操作没有接入处理分支会导致编译失败。未知操作在加载或改变任务前拒绝。页面的 `metadata_save`、`duplicate_merge`、`alias_add` 不能当成公开工作流命令调用。
+`core/src/workflow.rs` 定义 28 个公开任务操作和服务分类：读取、准备、本地核验、恢复、平台写入。Engine 用枚举穷尽分发；新增操作没有接入处理分支会导致编译失败。未知操作在加载或改变任务前拒绝。页面的 `metadata_save`、`duplicate_merge`、`alias_add` 不能当成公开工作流命令调用。
 
 `core/src/framework.rs` 提供框架版本、功能边界、6 个浏览器工作区和 3 类业务流程。`catalog.rs` 是 11 个导入渠道的统一注册来源，AI 与前端都从它读取。检索、原始导出、数据库解析、提交、模板准备和本地来源读取分别披露，不把已登记渠道当成已实现驱动。
 
@@ -128,6 +128,8 @@ cargo run --quiet --locked --manifest-path desktop/core/Cargo.toml --example fra
 `node tests/desktop-sources-ui.test.cjs` 验证原文件渠道/编码设置、明确记录/范围/列选择、分页和表头刷新、来源确认、版本清理、恢复入口及异步返回的任务隔离。`node tests/desktop-materials-ui.test.cjs` 验证模板材料和校验展示。这些测试均使用隔离 IPC，未操作真实数据库或平台。
 
 旧版迁移读取标准 `runtime/classification/<signature>/分类结果.json`、`runtime/submission/<signature>/提交准备.json` 和提交准备的 `progress.json`，保留完整来源字段与引用，以及标准伴随文件、草稿和明确引用的 TXT/CSV/XLSX。仅名单字节哈希、Python 论文键、题名、DOI、全部行号和零匹配队列一致时绑定当前任务；不一致的历史完整保存在批次归档。分类断点没有完整名单依据时仅归档原文件，不推断对应任务。历史材料不改变当前任务阶段，不成为 AI/模板的事实来源。
+
+独立旧作者认领迁入 `legacy_claim` 未确认意图，`verify_legacy_claim` 从同一迁移版本的“认领已核验”完整事件恢复目标；此前迁入 `legacy_sa` 的独立认领也可读取原数据库快照，无需迁移第二次。回读要求准确 SA/名单版本、完整作者 ID、学者/工号及全部作者、关系、元数据一致，前后 SA 也须一致。仅记录姓名和顺序的旧意图不能自动确认。恢复仅进入 `Claimed`，不设置 SA 已处理或重发认领；新增恢复代码尚未测试或现场验证。
 
 归档在应用目录 `legacy-files/<sha256>.<ext>`，同时保存原路径、实际文件哈希和大小。预览后原内容改变、重复论文 ID、原导出哈希不符或现存归档被修改时拒绝迁移，SQLite 事务不提交。迁移只扫描标准签名目录及明确引用，单文件 20 MB、总量 256 MB；超限提示缩小范围，不截断。原绝对路径文件缺失时记录缺项，存在但超出所选旧目录时拒绝。不会搜索同名文件猜测来源。
 

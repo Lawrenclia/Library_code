@@ -1407,7 +1407,8 @@ function frameworkBrowser(role: string, entry?: string) {
                 <Button
                   v-if="
                     current.stage === 'unknown' &&
-                    current.pending_action === 'legacy_sa'
+                    current.pending_action === 'legacy_sa' &&
+                    !current.legacy_claim_recovery
                   "
                   size="sm"
                   class="w-full"
@@ -1415,6 +1416,26 @@ function frameworkBrowser(role: string, entry?: string) {
                   @click="step('verify_legacy_sa')"
                   >只读核验旧版 SA 完成记录</Button
                 >
+                <Button
+                  v-if="
+                    current.stage === 'unknown' && current.legacy_claim_recovery
+                  "
+                  size="sm"
+                  class="w-full"
+                  :disabled="locked"
+                  @click="step('verify_legacy_claim')"
+                  >只读核验旧版作者认领</Button
+                >
+                <p
+                  v-if="
+                    current.stage === 'unknown' && current.legacy_claim_recovery
+                  "
+                  class="helper"
+                >
+                  按原日志的完整作者
+                  ID、学者、工号与元数据回读，不重新认领。仅有姓名和顺序的旧意图保留待确认；认领确认后仍需逐项核对
+                  SA，不能直接算作已处理。
+                </p>
                 <div class="action-block">
                   <h3><Users class="size-3.5" />现有条目核对与认领</h3>
                   <Button

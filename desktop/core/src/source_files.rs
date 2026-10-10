@@ -622,6 +622,7 @@ pub fn verified_evidence(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
                     e.kind.as_str(),
                     "alias_verified"
                         | "claim_verified"
+                        | "legacy_claim_verified"
                         | "sa_read"
                         | "material_validation"
                         | "material_export"

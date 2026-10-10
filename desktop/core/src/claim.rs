@@ -83,6 +83,114 @@ fn authors(value: &Value) -> Result<&Vec<Value>> {
     }
     Ok(rows)
 }
+/// A legacy verified receipt is an after-state checkpoint, not a new claim plan.
+pub fn verified_checkpoint(task: &Task, receipt: &Value, live: &Value) -> Result<(u64, Value)> {
+    source_staff(live, &task.record.staff_id)?;
+    let ids = matched_ids(&live["row"])?;
+    let before_row = &receipt["row"];
+    let person = &receipt["person"];
+    let rows = authors(&receipt["authors"])?;
+    let selected: Vec<_> = rows
+        .iter()
+        .filter(|a| a["id"] == receipt["author_id"])
+        .collect();
+    let problem = || {
+        Failure::new(
+            "REMOTE_RESULT_UNKNOWN",
+            "旧认领回执缺少唯一作者 ID、完整工号、学者或完整元数据，不能确认或重新认领。",
+        )
+    };
+    if receipt["verified"] != true
+        || receipt["claimed"] != true
+        || ids.len() != 1
+        || receipt["item_id"] != ids[0]
+        || receipt["staff_id"] != task.record.staff_id
+        || before_row["saLzkId"] != task.id
+        || before_row["gh"] != task.record.staff_id
+        || before_row["titleValue"].as_str().map(norm) != Some(norm(&task.record.title))
+        || matched_ids(before_row)? != ids
+        || person["id"].as_str().is_none_or(str::is_empty)
+        || person["wno"] != task.record.staff_id
+        || receipt["scholar_id"] != person["id"]
+        || person["name"].as_str().is_none_or(|s| s.trim().is_empty())
+        || person["names"]
+            .as_array()
+            .is_none_or(|v| v.is_empty() || v.iter().any(|n| !n.is_string()))
+        || selected.len() != 1
+        || rows
+            .iter()
+            .filter(|a| a["scholarId"] == person["id"])
+            .count()
+            != 1
+    {
+        return Err(problem());
+    }
+    let target = selected[0];
+    if target["scholarId"] != person["id"]
+        || target["fullname"] != receipt["author"]
+        || target["order"] != receipt["order"]
+        || target["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["scholarId"] == person["id"] && r["status"].as_u64().unwrap() < 6)
+    {
+        return Err(problem());
+    }
+    let metadata = receipt["metadata"]["author"]
+        .as_array()
+        .ok_or_else(problem)?;
+    if metadata.len() != rows.len()
+        || metadata.iter().zip(rows).any(|(m, a)| {
+            ["id", "order", "fullname"]
+                .iter()
+                .any(|key| m[*key] != a[*key])
+                || m["scholarId"].as_str().unwrap_or("") != a["scholarId"].as_str().unwrap()
+                || m.get("scholarId")
+                    .is_some_and(|v| !v.is_null() && !v.is_string())
+                || m.get("data").is_some()
+        })
+    {
+        return Err(problem());
+    }
+    Ok((
+        target["index"].as_u64().ok_or_else(problem)?,
+        json!({"item_id":receipt["item_id"],"staff_id":task.record.staff_id,"sa_text":source(live)?,"person":person,"authors":rows,"metadata":receipt["metadata"]}),
+    ))
+}
+pub fn assert_checkpoint_result(
+    task: &Task,
+    receipt: &Value,
+    prepared: &Value,
+    result: &Value,
+    live: &Value,
+) -> Result<()> {
+    let (_, expected) = verified_checkpoint(task, receipt, live)?;
+    authors(&result["authors"])?;
+    if expected != *prepared
+        || result["verified"] != true
+        || result["claimed"] != true
+        || [
+            "item_id",
+            "staff_id",
+            "scholar_id",
+            "author_id",
+            "author",
+            "order",
+            "authors",
+            "metadata",
+            "person",
+        ]
+        .iter()
+        .any(|key| result[*key] != receipt[*key])
+    {
+        return Err(Failure::new(
+            "REMOTE_RESULT_UNKNOWN",
+            "当前认领关系、学者或完整元数据与旧回执不同；保留原检查点，不重新提交。",
+        ));
+    }
+    Ok(())
+}
 pub fn payload(task: &Task, live: &Value, prepared: &Value, index: u64) -> Result<Value> {
     identity(task, live)?;
     source_staff(live, &task.record.staff_id)?;

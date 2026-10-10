@@ -27,6 +27,7 @@ export interface Task {
   stage: string;
   running: boolean;
   pending_action?: string | null;
+  legacy_claim_recovery?: boolean;
   pending_input?: InputProposal | null;
   record: {
     row: number;

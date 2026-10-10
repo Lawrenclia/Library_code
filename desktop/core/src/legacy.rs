@@ -356,6 +356,169 @@ pub fn write_history(row: &Value) -> bool {
             .as_str()
             .is_some_and(|s| s.contains("认领") || s.contains("批准") || s == "已完成")
 }
+/// Preserve a complete verified claim receipt from the same journal row/version.
+/// A name/order-only intent is insufficient to reconstruct an original author ID.
+pub fn claim_checkpoint(snapshot: &Value, id: &str) -> Result<Option<Value>> {
+    let mut found = Vec::new();
+    for source in snapshot["sources"].as_array().into_iter().flatten() {
+        if source["imports"] == true {
+            continue;
+        }
+        for row in source["snapshot"]["rows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|r| r["sa_id"] == id)
+        {
+            if row["state"] != "认领已核验" {
+                continue;
+            }
+            let matches: Vec<_> = source["snapshot"]["events"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|e| {
+                    e["record_key"] == row["record_key"]
+                        && e["action"] == row["state"]
+                        && e["time"] == row["updated"]
+                })
+                .collect();
+            if matches.len() != 1 {
+                return Err(Failure::new(
+                    "MIGRATION_CONFLICT",
+                    "旧认领已核验日志没有唯一同版本完整事件；先核对历史。",
+                ));
+            }
+            let raw = matches[0]["detail"]
+                .as_str()
+                .ok_or_else(|| Failure::new("MIGRATION_INVALID", "旧认领回执不是文本。"))?;
+            let receipt: Value = serde_json::from_str(raw)
+                .map_err(|_| Failure::new("MIGRATION_INVALID", "旧认领回执不是完整 JSON。"))?;
+            found.push(json!({"schema":"legacy_claim_checkpoint_v1","source":source["path"],"record_key":row["record_key"],"event":matches[0],"receipt":receipt}));
+        }
+    }
+    if found.len() > 1 {
+        return Err(Failure::new(
+            "MIGRATION_CONFLICT",
+            "同一 SA 有多个旧认领回执，请先核对。",
+        ));
+    }
+    Ok(found.pop())
+}
+pub fn is_claim_checkpoint(payload: &Value) -> bool {
+    payload["legacy_rows"].as_array().is_some_and(|rows| {
+        !rows.is_empty()
+            && rows.iter().all(|r| {
+                ["认领待提交", "认领已核验"].contains(&r["state"].as_str().unwrap_or(""))
+                    && !r["data"].is_object()
+            })
+    })
+}
+/// Older desktop migrations used legacy_sa for every journal write. Recover
+/// their immutable intent from the archived migration, without migrating again.
+pub fn hydrate_claim_checkpoint(store: &Store, payload: &Value) -> Result<Value> {
+    if !is_claim_checkpoint(payload) {
+        return Err(Failure::new(
+            "REMOTE_RESULT_UNKNOWN",
+            "该旧检查点不是独立认领记录，请使用对应回读步骤。",
+        ));
+    }
+    let fingerprint = payload["legacy_migration"]
+        .as_str()
+        .ok_or_else(|| Failure::new("MIGRATION_INVALID", "旧认领意图没有迁移来源。"))?;
+    let id = payload["sa_id"]
+        .as_str()
+        .ok_or_else(|| Failure::new("MIGRATION_INVALID", "旧认领意图没有 SA ID。"))?;
+    let archived = store
+        .legacy_snapshot(fingerprint)?
+        .ok_or_else(|| Failure::new("MIGRATION_INVALID", "原迁移归档已缺失。"))?;
+    let rows = rows_for(&archived, id);
+    if payload["legacy_rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| !rows.contains(&r))
+    {
+        return Err(Failure::new(
+            "MIGRATION_CONFLICT",
+            "原认领意图与保存的迁移版本不同。",
+        ));
+    }
+    let checkpoint = claim_checkpoint(&archived, id)?;
+    let expected = json!(checkpoint);
+    if payload["claim_checkpoint"].is_object() && payload["claim_checkpoint"] != expected {
+        return Err(Failure::new(
+            "MIGRATION_CONFLICT",
+            "旧认领回执与原迁移归档不同。",
+        ));
+    }
+    let mut result = payload.clone();
+    result["claim_checkpoint"] = expected;
+    Ok(result)
+}
+fn claim_snapshot_identity(task: &Task, payload: &Value, live: &Value) -> Result<()> {
+    let row = &live["row"];
+    if payload["sa_id"] != task.id
+        || payload["input_hash"] != task.input_hash
+        || payload["input_matches"] != true
+        || row["saLzkId"] != task.id
+        || row["gh"] != task.record.staff_id
+        || row["titleValue"].as_str().map(norm) != Some(norm(&task.record.title))
+        || !["待处理", "已处理"].contains(&row["markStatus"].as_str().unwrap_or(""))
+        || task.record.matches != 1
+        || matched_ids(row)?.len() != 1
+        || matched_ids(row)?
+            != matched_ids(
+                &json!({"matchCount":task.record.matches,"itemId":task.record.item_ids}),
+            )?
+    {
+        return Err(Failure::new(
+            "INPUT_CHANGED",
+            "旧认领检查点、名单和实时 SA 不一致，保持待确认。",
+        ));
+    }
+    Ok(())
+}
+pub fn claim_readback(task: &Task, payload: &Value, live: &Value) -> Result<Value> {
+    claim_snapshot_identity(task, payload, live)?;
+    let checkpoint = &payload["claim_checkpoint"];
+    if checkpoint["schema"] != "legacy_claim_checkpoint_v1" {
+        return Err(Failure::new(
+            "REVIEW_REQUIRED",
+            "旧日志缺少完整已核验认领回执，不能仅凭姓名与顺序确认，也不会重发认领。",
+        ));
+    }
+    let receipt = &checkpoint["receipt"];
+    let (index, prepared) = crate::claim::verified_checkpoint(task, receipt, live)?;
+    Ok(
+        json!({"sa_id":task.id,"expected":live["row"],"staff_id":task.record.staff_id,
+        "roster_staff_id":task.record.staff_id,"sa_text":prepared["sa_text"],"prepared":prepared,
+        "author_index":index,"checkpoint_mode":"verified_claim_receipt"}),
+    )
+}
+pub fn verify_claim_checkpoint(
+    task: &Task,
+    payload: &Value,
+    before: &Value,
+    result: &Value,
+    after: &Value,
+) -> Result<()> {
+    claim_snapshot_identity(task, payload, after)?;
+    if before != after {
+        return Err(Failure::new(
+            "TASK_CHANGED",
+            "旧认领只读核验期间 SA 发生变化，保持待确认。",
+        ));
+    }
+    let request = claim_readback(task, payload, before)?;
+    crate::claim::assert_checkpoint_result(
+        task,
+        &payload["claim_checkpoint"]["receipt"],
+        &request["prepared"],
+        result,
+        after,
+    )
+}
 pub fn verify_sa_checkpoint(task: &Task, payload: &Value, snapshot: &Value) -> Result<()> {
     let row = &snapshot["row"];
     if payload["sa_id"] != task.id

@@ -349,6 +349,18 @@ impl Store {
         let rows = query.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
+    pub fn legacy_snapshot(&self, fingerprint: &str) -> Result<Option<Value>> {
+        let db = self.connect()?;
+        let raw: Option<String> = db
+            .query_row(
+                "SELECT data FROM legacy_migrations WHERE fingerprint=?",
+                [fingerprint],
+                |r| r.get(0),
+            )
+            .optional()?;
+        raw.map(|v| serde_json::from_str(&v).map_err(Into::into))
+            .transpose()
+    }
     pub fn apply_legacy(&self, plan: &crate::legacy::Plan) -> Result<Value> {
         let mut db = self.connect()?;
         let tx = db.transaction()?;
@@ -511,7 +523,16 @@ impl Store {
                         "push_intent" | "pushed" => "import_push",
                         _ => "import_submit",
                     })
-                    .unwrap_or("legacy_sa");
+                    .unwrap_or_else(|| {
+                        if writes.iter().all(|r| {
+                            ["认领待提交", "认领已核验"]
+                                .contains(&r["state"].as_str().unwrap_or(""))
+                        }) {
+                            "legacy_claim"
+                        } else {
+                            "legacy_sa"
+                        }
+                    });
                 let pending:u32=tx.query_row("SELECT count(*) FROM attempts WHERE task_id=? AND state IN ('intent','unknown')",[&task.id],|r|r.get(0))?;
                 if pending > 0 {
                     return Err(Failure::new(
@@ -519,7 +540,12 @@ impl Store {
                         "已有待确认的工作台操作；未迁移任何任务。",
                     ));
                 }
-                let payload = json!({"sa_id":task.id,"legacy_migration":plan.preview.fingerprint,"legacy_rows":writes,"input_matches":!changed,"input_hash":task.input_hash,"instructions":format!("SA补充-{}",task.id),"candidate":task.artifact.as_ref().map(|a|&a.candidate),"batch":task.batch});
+                let checkpoint = if action == "legacy_claim" {
+                    crate::legacy::claim_checkpoint(&plan.snapshot, &task.id)?
+                } else {
+                    None
+                };
+                let payload = json!({"sa_id":task.id,"legacy_migration":plan.preview.fingerprint,"legacy_rows":writes,"input_matches":!changed,"input_hash":task.input_hash,"instructions":format!("SA补充-{}",task.id),"candidate":task.artifact.as_ref().map(|a|&a.candidate),"batch":task.batch,"claim_checkpoint":checkpoint});
                 tx.execute(
                     "INSERT INTO attempts VALUES(?,?,?,?,?,?)",
                     params![

@@ -102,6 +102,12 @@ impl Engine {
             };
             task["pending_input"] =
                 serde_json::to_value(self.store.pending_input(task["id"].as_str().unwrap())?)?;
+            task["legacy_claim_recovery"] = (attempts.len() == 1
+                && ["legacy_claim", "legacy_sa"]
+                    .contains(&attempts[0]["action"].as_str().unwrap_or(""))
+                && serde_json::from_str::<Value>(attempts[0]["data"].as_str().unwrap_or("{}"))
+                    .is_ok_and(|p| legacy::is_claim_checkpoint(&p["payload"])))
+            .into();
         }
         Ok(
             json!({"tasks":tasks,"root":self.store.root.to_string_lossy(),"running":self.active.load(Ordering::SeqCst),"running_service":running_service,"paused":self.pause.load(Ordering::SeqCst)||queue_paused||material_batch.as_ref().is_some_and(|q|q.status.unfinished()&&q.status!=queue::QueueStatus::Running)||ai_queue.as_ref().is_some_and(|q|q.status.unfinished()&&q.status!=queue::QueueStatus::Running),"download_queue":download_queue,"ai_queue":ai_queue,"material_batch":material_batch,"browsers":self.browser.states(app),"policy":PUSH_POLICY,"framework":framework::manifest(),"legacy_materials":library_core::legacy_materials::summary(&self.store.legacy_snapshots()?)}),
@@ -165,6 +171,10 @@ impl Engine {
             StepAction::SearchWos => self.handle_search_wos(app, id, action, t, extra).await,
             StepAction::VerifyLegacySa => {
                 self.handle_verify_legacy_sa(app, id, action, t, extra)
+                    .await
+            }
+            StepAction::VerifyLegacyClaim => {
+                self.handle_verify_legacy_claim(app, id, action, t, extra)
                     .await
             }
             StepAction::VerifySa => self.handle_verify_sa(app, id, action, t, extra).await,
