@@ -3,6 +3,7 @@ pub mod alias;
 pub mod catalog;
 pub mod claim;
 pub mod classification;
+pub mod doi_sources;
 pub mod download;
 pub mod files;
 pub mod framework;
@@ -35,6 +36,8 @@ mod ai_queue_tests;
 mod alias_tests;
 #[cfg(test)]
 mod claim_tests;
+#[cfg(test)]
+mod doi_source_tests;
 #[cfg(test)]
 mod download_tests;
 #[cfg(test)]

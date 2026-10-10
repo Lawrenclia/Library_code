@@ -679,11 +679,13 @@ pub fn read_original_export(
 /// One factual-source gate for both API requests and later material exports.
 pub fn verified_evidence(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
     let current = verify_for_ai(root, task)?;
+    let doi_sources = crate::doi_sources::verify(root, task)?;
     Ok(task
         .evidence
         .iter()
         .filter(|e| {
             (e.kind != "external_metadata" || current.contains(&e.id))
+                && (e.kind != crate::doi_sources::KIND || doi_sources.contains(&e.id))
                 && !matches!(
                     e.kind.as_str(),
                     "alias_verified"
@@ -691,6 +693,7 @@ pub fn verified_evidence(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
                         | "legacy_claim_verified"
                         | "source_download"
                         | "source_reuse_origin"
+                        | "doi_lookup"
                         | "sa_read"
                         | "material_validation"
                         | "material_export"

@@ -78,6 +78,7 @@ pub fn manifest() -> Value {
         ],
         "browsers":BROWSERS,
         "channels":crate::catalog::channels(),
+        "metadata_providers":[{"id":"crossref","label":"Crossref DOI 登记元数据","lookup":"implemented","key":"doi","archive_format":"json","import_channel":null,"live_verified":false}],
         "operations":operations,
         "flows":[
             {"id":"zero","label":"匹配 0 条","steps":["取得原始来源","核对论文身份与交大归属","用正确题名和标识符查本库","确认分支"],"outcomes":["非交大：有依据后备注并处理","本库已有：关联实际条目后逐项核验","本库缺失：准备材料，再上传、导入、推送","未查询到：记录检索范围，保留未处理"]},

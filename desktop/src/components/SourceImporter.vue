@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Upload, RefreshCw } from "@lucide/vue";
 import SourceBrowserPanel from "@/components/SourceBrowserPanel.vue";
+import DoiSourcePanel from "@/components/DoiSourcePanel.vue";
 const props = defineProps<{
   task: Task;
   locked: boolean;
@@ -243,6 +244,7 @@ async function attach() {
       先取得数据库原始 Excel / CSV /
       TXT。选择准确记录后保存全部字段；本地来源读取不表示数据库自动导出或平台导入已完成。
     </p>
+    <DoiSourcePanel :task="task" :locked="locked" :run="run" />
     <label class="field"
       >来源渠道<select
         v-model="channel"
@@ -394,9 +396,7 @@ async function attach() {
         class="text-[11px] leading-5 text-muted-foreground"
       >
         来源 SA
-        {{
-          data.draft.origin.task_id
-        }}
+        {{ data.draft.origin.task_id }}
         的原文件快照。已保留原绑定记录及全部字段，请填写本条对应依据；如需选择其他记录，请重新选择原文件。
       </p>
       <label class="field"

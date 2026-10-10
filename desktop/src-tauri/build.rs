@@ -16,6 +16,7 @@ fn main() {
             "run_step",
             "adopt_file",
             "preview_source_file",
+            "lookup_doi_source",
             "source_reuse_options",
             "preview_reused_source",
             "source_file_page",

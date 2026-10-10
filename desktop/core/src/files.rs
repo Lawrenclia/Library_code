@@ -537,6 +537,11 @@ pub fn export_report_with_materials(
             .map(|s| (s.archive_path.clone(), s.sha256.clone()))
             .chain(a.map(|a| (a.path.clone(), a.candidate.sha256.clone())))
             .chain(
+                crate::doi_sources::current_receipts(t)
+                    .into_iter()
+                    .map(|s| (s.archive_path, s.sha256)),
+            )
+            .chain(
                 t.evidence
                     .iter()
                     .filter(|e| e.kind == "source_download")

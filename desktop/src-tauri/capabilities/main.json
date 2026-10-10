@@ -16,6 +16,7 @@
     "allow-run-step",
     "allow-adopt-file",
     "allow-preview-source-file",
+    "allow-lookup-doi-source",
     "allow-source-reuse-options",
     "allow-preview-reused-source",
     "allow-source-file-page",
