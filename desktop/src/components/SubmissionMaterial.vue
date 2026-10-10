@@ -3,7 +3,7 @@ import { ref, watch } from "vue";
 import type { Task, SubmissionOptions, SubmissionPrepared } from "@/types";
 import type { DesktopCommand } from "@/services/desktop";
 import { Button } from "@/components/ui/button";
-import { Files, RefreshCw } from "@lucide/vue";
+import { Files, RefreshCw, Download } from "@lucide/vue";
 const props = defineProps<{
   task: Task;
   locked: boolean;
@@ -17,6 +17,7 @@ const options = ref<SubmissionOptions | null>(null);
 const selected = ref("");
 const prepared = ref<SubmissionPrepared | null>(null);
 const stale = ref(false);
+const exported = ref<{ path: string; sha256: string } | null>(null);
 const names: Record<string, string> = {
   original: "原始数据库导出",
   original_pending: "原格式文件已保留，待渠道核验",
@@ -30,6 +31,7 @@ watch(
     selected.value = "";
     prepared.value = null;
     stale.value = false;
+    exported.value = null;
   },
 );
 watch(
@@ -72,8 +74,43 @@ async function prepare() {
   )
     return;
   prepared.value = result;
+  exported.value = null;
   stale.value = false;
   options.value = { ...scope, task_revision: result.task_revision };
+}
+async function exportBundle() {
+  const saved = prepared.value;
+  if (!saved || stale.value) return;
+  const id = props.task.id;
+  const result = await props.run<{
+    cancelled?: boolean;
+    path?: string;
+    sha256?: string;
+    prepared?: SubmissionPrepared;
+  }>(
+    "export_submission_bundle",
+    { id, packetId: saved.packet.id, taskRevision: saved.task_revision },
+    "本篇资料包已保存，包含选定文件、来源表及操作说明；未执行平台提交。",
+  );
+  if (
+    !result ||
+    result.cancelled ||
+    !result.prepared ||
+    !result.path ||
+    !result.sha256 ||
+    props.task.id !== id ||
+    result.prepared.packet.id !== saved.packet.id ||
+    props.task.revision !== result.prepared.task_revision
+  )
+    return;
+  prepared.value = result.prepared;
+  if (options.value)
+    options.value = {
+      ...options.value,
+      task_revision: result.prepared.task_revision,
+    };
+  exported.value = { path: result.path, sha256: result.sha256 };
+  stale.value = false;
 }
 </script>
 <template>
@@ -179,6 +216,25 @@ async function prepare() {
         <p class="break-all">SHA256：{{ prepared.packet.material.sha256 }}</p>
         <p class="break-all">来源：{{ prepared.packet.material.audit }}</p>
       </details>
+      <Button
+        variant="outline"
+        size="sm"
+        class="my-2"
+        :disabled="locked || stale"
+        @click="exportBundle"
+      >
+        <Download class="size-3" />导出本篇资料包
+      </Button>
+      <p class="text-muted-foreground">
+        ZIP 包含已保存的本篇材料、材料来源、来源
+        Excel、提交信息和操作说明。待渠道核验的原始文件完整保留，可能包含其他记录；导出不会推进平台状态。
+      </p>
+      <div v-if="exported" class="space-y-1 rounded-md bg-muted/40 p-2">
+        <p class="break-all">最近保存：{{ exported.path }}</p>
+        <p class="break-all font-mono text-[10px] text-muted-foreground">
+          SHA256：{{ exported.sha256 }}
+        </p>
+      </div>
       <p v-if="prepared.can_upload && !stale" class="text-primary">
         已满足当前本地上传条件。下一步确认本条上传；程序会再次查询本库并回读
         SA。

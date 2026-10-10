@@ -45,6 +45,7 @@ fn main() {
             "cancel_material_batch",
             "submission_options",
             "prepare_submission",
+            "export_submission_bundle",
             "browser_result",
         ]),
     ))

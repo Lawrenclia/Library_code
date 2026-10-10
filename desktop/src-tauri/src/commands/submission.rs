@@ -1,7 +1,7 @@
 use super::local;
 use crate::engine::Engine;
 use library_core::*;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::{AppHandle, State, WebviewWindow};
 
 #[tauri::command]
@@ -25,6 +25,36 @@ pub(crate) fn prepare_submission(
     local(&window)?;
     let _lease = state.acquire()?;
     let result = library_core::submission::prepare(&state.store, &id, &recipe, task_revision);
+    state.changed(&app);
+    result
+}
+
+#[tauri::command]
+pub(crate) async fn export_submission_bundle(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, Engine>,
+    id: String,
+    packet_id: String,
+    task_revision: i64,
+) -> Result<Value> {
+    local(&window)?;
+    let _lease = state.acquire()?;
+    let file = rfd::AsyncFileDialog::new()
+        .add_filter("本篇资料包", &["zip"])
+        .set_file_name("本篇资料包.zip")
+        .save_file()
+        .await;
+    let Some(file) = file else {
+        return Ok(json!({"cancelled":true}));
+    };
+    let result = library_core::submission_bundle::export(
+        &state.store,
+        &id,
+        &packet_id,
+        task_revision,
+        file.path(),
+    );
     state.changed(&app);
     result
 }

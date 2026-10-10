@@ -201,6 +201,25 @@ fn prepared(store: &Store, task: &Task, packet: &Packet) -> Value {
     let issues = gates(store, task, packet);
     json!({"packet":packet,"task_revision":task.revision,"can_upload":issues.is_empty(),"issues":issues,"platform_verified":false})
 }
+pub(crate) fn bundle_scope(
+    store: &Store,
+    id: &str,
+    packet_id: &str,
+    revision: i64,
+) -> Result<(Task, Packet, Value)> {
+    let task = store.task(id)?;
+    eligible(store, &task)?;
+    if task.revision != revision {
+        return Err(fail("资料已更新，请刷新当前材料后导出。"));
+    }
+    let packet = current(store, id)?.ok_or_else(|| fail("先明确选择并保存本篇提交材料。"))?;
+    if packet.id != packet_id {
+        return Err(fail("所选提交材料已变化，请刷新后导出。"));
+    }
+    validate(store, &task, &packet)?;
+    let status = prepared(store, &task, &packet);
+    Ok((task, packet, status))
+}
 pub fn options(store: &Store, id: &str) -> Result<Value> {
     let task = store.task(id)?;
     let facts = materials::facts(&store.root, &task)?;

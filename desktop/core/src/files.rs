@@ -719,6 +719,21 @@ pub fn export_report_with_materials(
     materials: &[crate::material_batch::Batch],
     path: &Path,
 ) -> Result<()> {
+    let mut book = report_workbook(tasks, queues, legacy, ai, materials)?;
+    book.save(path).map_err(Failure::storage)?;
+    Ok(())
+}
+pub(crate) fn report_bytes(tasks: &[Task]) -> Result<Vec<u8>> {
+    let mut book = report_workbook(tasks, &[], &[], &[], &[])?;
+    book.save_to_buffer().map_err(Failure::storage)
+}
+fn report_workbook(
+    tasks: &[Task],
+    queues: &[crate::queue::DownloadQueue],
+    legacy: &[serde_json::Value],
+    ai: &[crate::ai_queue::AiQueue],
+    materials: &[crate::material_batch::Batch],
+) -> Result<rust_xlsxwriter::Workbook> {
     use rust_xlsxwriter::Workbook;
     let mut book = Workbook::new();
     let sheet = book.add_worksheet();
@@ -1514,8 +1529,7 @@ pub fn export_report_with_materials(
             .set_column_width(col, 50.)
             .map_err(Failure::storage)?;
     }
-    book.save(path).map_err(Failure::storage)?;
-    Ok(())
+    Ok(book)
 }
 
 #[cfg(test)]

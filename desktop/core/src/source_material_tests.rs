@@ -105,6 +105,118 @@ fn whole_file_and_selected_record_survive_handoff_without_ai_or_ready_upload() {
     assert_eq!(again["packet"]["id"], prepared["packet"]["id"]);
     assert_eq!(store.task("s1").unwrap().revision, after.revision);
 }
+
+#[test]
+fn complete_submission_bundle_preserves_original_file_report_and_does_not_advance_platform() {
+    use calamine::Reader;
+    use std::io::{Cursor, Read};
+    let (_dir, store) = fixture();
+    let raw = "Title,DOI,Abstract\nPaper,10.1234/test,Full abstract\nDifferent paper,10.1234/other,Other record\n";
+    let original = bind(&store, "ei", "csv", raw);
+    let task = store.task("s1").unwrap();
+    let saved = submission::prepare(
+        &store,
+        "s1",
+        &format!("source-export:{}", original.evidence_id),
+        task.revision,
+    )
+    .unwrap();
+    let packet_id = saved["packet"]["id"].as_str().unwrap();
+    let before = store.task("s1").unwrap();
+    let bundle = submission_bundle::build(&store, "s1", packet_id, before.revision).unwrap();
+    assert_eq!(bundle.manifest["can_upload"], false);
+    assert_eq!(bundle.manifest["platform_verified"], false);
+    assert_eq!(
+        bundle.manifest["original_source_selection"]["receipt"]["selection"]["row"],
+        2
+    );
+    let mut archive = zip::ZipArchive::new(Cursor::new(bundle.bytes)).unwrap();
+    assert_eq!(archive.len(), 5);
+    let mut report_bytes = vec![];
+    for entry in bundle.manifest["files"].as_array().unwrap() {
+        let name = entry["name"].as_str().unwrap();
+        let mut bytes = vec![];
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(entry["sha256"], hash(&bytes));
+        assert_eq!(entry["bytes"], bytes.len());
+        if name == "本篇材料.csv" {
+            assert_eq!(bytes, raw.as_bytes());
+        }
+        if name == "本篇任务与来源.xlsx" {
+            report_bytes = bytes.clone();
+        }
+        if name == "操作说明.txt" {
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(text.contains("可能包含其他记录"));
+            assert!(text.contains("自动上传驱动尚未接通"));
+            assert!(
+                !text.contains(PUSH_POLICY),
+                "other channels do not inherit WOS options"
+            );
+            assert!(text.contains("SA补充-s1"));
+        }
+    }
+    let mut report: calamine::Xlsx<_> = calamine::Xlsx::new(Cursor::new(report_bytes)).unwrap();
+    assert!(report
+        .worksheet_range("任务与来源")
+        .unwrap()
+        .get_value((1, 10))
+        .unwrap()
+        .to_string()
+        .contains("导出范围"));
+    assert_eq!(store.task("s1").unwrap().revision, before.revision);
+    let outside = tempfile::tempdir().unwrap();
+    let destination = outside.path().join("bundle.zip");
+    let exported =
+        submission_bundle::export(&store, "s1", packet_id, before.revision, &destination).unwrap();
+    assert_eq!(exported["sha256"], hash(&fs::read(&destination).unwrap()));
+    let after = store.task("s1").unwrap();
+    assert_eq!(after.stage, before.stage);
+    assert_eq!(after.route, before.route);
+    assert!(!after.record.done && after.batch.is_none());
+    assert!(after.review.is_none() && after.platform_id.is_empty());
+    assert!(store.unresolved("s1").unwrap().is_empty());
+    assert_eq!(
+        fs::read(&original.receipt.archive_path).unwrap(),
+        raw.as_bytes()
+    );
+    submission::validate(
+        &store,
+        &after,
+        &submission::current(&store, "s1").unwrap().unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn bundle_rejects_wrong_packet_stale_revision_and_changed_material_before_export() {
+    let (_dir, store) = fixture();
+    let original = bind(&store, "cscd", "txt", "Paper\nFull source record\n");
+    let task = store.task("s1").unwrap();
+    let saved = submission::prepare(
+        &store,
+        "s1",
+        &format!("source-export:{}", original.evidence_id),
+        task.revision,
+    )
+    .unwrap();
+    let packet_id = saved["packet"]["id"].as_str().unwrap();
+    let task = store.task("s1").unwrap();
+    assert!(submission_bundle::build(&store, "s1", "another-packet", task.revision).is_err());
+    assert!(submission_bundle::build(&store, "s1", packet_id, task.revision - 1).is_err());
+    fs::write(
+        saved["packet"]["material"]["path"].as_str().unwrap(),
+        "Other paper",
+    )
+    .unwrap();
+    assert!(submission_bundle::build(&store, "s1", packet_id, task.revision).is_err());
+    assert!(store.unresolved("s1").unwrap().is_empty());
+    assert_eq!(store.task("s1").unwrap().revision, task.revision);
+}
 #[test]
 fn explicit_export_choice_is_frozen_in_batch_and_reused_after_store_reopen() {
     let (dir, store) = fixture();

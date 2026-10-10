@@ -25,6 +25,7 @@ pub mod source_files;
 pub mod source_reuse;
 pub mod store;
 pub mod submission;
+pub mod submission_bundle;
 pub mod template_rules;
 pub mod templates;
 pub mod versions;

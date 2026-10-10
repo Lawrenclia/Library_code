@@ -1,0 +1,11 @@
+# Registered for generation during the next build; no build is run now.
+
+[[permission]]
+identifier = "allow-export-submission-bundle"
+description = "Enables local export of the selected submission bundle."
+commands.allow = ["export_submission_bundle"]
+
+[[permission]]
+identifier = "deny-export-submission-bundle"
+description = "Denies export of the selected submission bundle."
+commands.deny = ["export_submission_bundle"]
