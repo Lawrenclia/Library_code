@@ -1,10 +1,11 @@
-# Registered for generation during the next build; no build is run now.
+# Automatically generated - DO NOT EDIT!
+
 [[permission]]
 identifier = "allow-import-legacy-api-key"
-description = "Enables local import of the explicitly selected legacy API key."
+description = "Enables the import_legacy_api_key command without any pre-configured scope."
 commands.allow = ["import_legacy_api_key"]
 
 [[permission]]
 identifier = "deny-import-legacy-api-key"
-description = "Denies import of the selected legacy API key."
+description = "Denies the import_legacy_api_key command without any pre-configured scope."
 commands.deny = ["import_legacy_api_key"]

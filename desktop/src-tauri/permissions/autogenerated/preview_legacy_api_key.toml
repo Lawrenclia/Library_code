@@ -1,10 +1,11 @@
-# Registered for generation during the next build; no build is run now.
+# Automatically generated - DO NOT EDIT!
+
 [[permission]]
 identifier = "allow-preview-legacy-api-key"
-description = "Enables explicit selection of the old encrypted API key file."
+description = "Enables the preview_legacy_api_key command without any pre-configured scope."
 commands.allow = ["preview_legacy_api_key"]
 
 [[permission]]
 identifier = "deny-preview-legacy-api-key"
-description = "Denies selection of the old encrypted API key file."
+description = "Denies the preview_legacy_api_key command without any pre-configured scope."
 commands.deny = ["preview_legacy_api_key"]

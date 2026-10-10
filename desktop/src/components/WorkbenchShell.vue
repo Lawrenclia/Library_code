@@ -123,7 +123,7 @@ onMounted(() => document.documentElement.classList.toggle("dark", dark.value));
         <div
           class="flex justify-between px-2 text-[10px] text-muted-foreground group-data-[collapsible=icon]:hidden"
         >
-          <span>本地自动保存</span><span>v0.1.1 测试版</span>
+          <span>本地自动保存</span><span>v0.1.2 测试版</span>
         </div></SidebarFooter
       ><SidebarRail />
     </Sidebar>
