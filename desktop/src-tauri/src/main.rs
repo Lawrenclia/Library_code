@@ -2,6 +2,8 @@
 mod adapters;
 mod ai;
 #[cfg(feature = "smoke-test")]
+mod ai_smoke;
+#[cfg(feature = "smoke-test")]
 mod alias_smoke;
 mod browser;
 #[cfg(feature = "smoke-test")]
