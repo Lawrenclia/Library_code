@@ -6,6 +6,12 @@
 
 ## 当前版本
 
+### GitHub Windows EXE 首轮构建成功（2026-10-10）
+
+[Actions #1](https://github.com/Lawrenclia/Library_code/actions/runs/38063069025) 的全部步骤成功结束，编译源码 `b6f8bb437457d5cc7adfc692eeb130d7a4359330`。产物 `Windows-EXE-0.1.3-b6f8bb43` 已上传，含安装包、版本信息和 SHA256 清单。下载后直接读取 ZIP，确认安装包 6,445,536 字节，实际 SHA256 `B0BDBDC4DA58C12980E2C087350DD5FAD1E3E88E6DB8358959619B81D01BD1FF` 与 `build-info.json` 一致；版本信息中的源码提交、文件名及大小也一致。
+
+这里只确认云端构建和交付文件，不安装启动、不运行测试、不访问真实网站。不能据此将原规范第 7 节的业务验收标为通过。主分支已登记手动入口，重编译步骤见 [GitHub 编译说明](GITHUB_ACTIONS_BUILD.md)。
+
 ### 0.1.3 CNKI 获取接入（2026-10-10）
 
 源码 `ab0ad47` 增加按名单题名打开 CNKI、当前单篇详情的会话题录获取、完整响应归档与来源绑定；支持 EndNote/RefWorks 标记 TXT、XLSX 与二进制 XLS。整理 TXT 只供事实引用和模板填写，不作为原始上传文件候选。代理和不支持页面可以在内置网页手动原始导出，下载由现有原生回执接收。

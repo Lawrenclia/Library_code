@@ -1,5 +1,9 @@
 # 当前源码与安装包交付状态
 
+GitHub Windows EXE 首轮构建已成功结束：[Actions #1](https://github.com/Lawrenclia/Library_code/actions/runs/38063069025)。源码为 `b6f8bb437457d5cc7adfc692eeb130d7a4359330`，产物 `Windows-EXE-0.1.3-b6f8bb43` 包含安装 EXE、`build-info.json` 和 `SHA256SUMS.txt`。已下载并读取压缩包，安装 EXE 为 6,445,536 字节，实际 SHA256 与包内记录一致：`B0BDBDC4DA58C12980E2C087350DD5FAD1E3E88E6DB8358959619B81D01BD1FF`。该哈希属于 GitHub 构建，下面的本地构建是另一份文件，不应混用哈希。未安装或启动云端程序，业务测试与现场验收仍未执行。
+
+主分支提交 `f97de7feb9ce822eba95fefe52b630897807a670` 只加入编译入口与说明；新版源码保留在 `feature/wos-download-workflow`。可直接在 [Windows EXE](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml) 点击 **Run workflow**，默认编译该开发分支。下载和重编译步骤见 [GitHub 编译说明](GITHUB_ACTIONS_BUILD.md)。
+
 新增 0.1.3：CNKI 内置浏览器题录获取的业务源码为 `ab0ad47`，自测步骤见 [0.1.3 说明](TAURI_TESTING_0_1_3.md)。支持官方详情页会话获取及内置网页原始下载，保留完整字段、原始响应和来源；平台 CNKI 自动上传/导入/推送仍未实现。以下 0.1.2 文件版本及原业务验收清单保留为此前记录；业务验证仍未执行。
 
 0.1.3 前端生产构建、Rust release 编译和 NSIS 打包完成，未执行测试或真实网站操作。交付文件为 `D:\Library\releases\0.1.3\机构知识库工作台_0.1.3_x64-setup.exe`，6,525,659 字节，SHA256 `1C00F1B52F829F9505A8B451A613AFB4031A463EB74081C3FABD4F38C0B84B90`，实际构建源码 `ab0ad478d03ddccde755b590f7deb69f317e7dc0`。

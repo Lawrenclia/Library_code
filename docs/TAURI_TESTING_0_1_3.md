@@ -2,6 +2,8 @@
 
 本版增加 CNKI 内置浏览器获取题录，包含 0.1.2 的已有功能。只编译打包，未运行测试或操作真实网站。
 
+也可从 [GitHub Actions 首轮构建](https://github.com/Lawrenclia/Library_code/actions/runs/38063069025) 的 **Artifacts** 下载 `Windows-EXE-0.1.3-b6f8bb43`，解压后安装其中的 EXE。后续源码可通过 [Windows EXE](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml) 手动编译，步骤见 [GitHub 编译说明](GITHUB_ACTIONS_BUILD.md)。不需要使用开发者电脑上的 `D:\Library` 路径。
+
 1. 自行退出旧工作台，安装 `D:\Library\releases\0.1.3\机构知识库工作台_0.1.3_x64-setup.exe`；界面应显示 **v0.1.3 测试版**。程序不会自动安装或关闭旧窗口。
 2. 选择需要补充来源的论文，在「来源」选择 CNKI，点击「按名单题名打开 CNKI」。首次使用不用填写官方入口。
 3. 在内置窗口完成登录、机构访问或验证码。按实际题名、作者和年份核对结果，打开单篇论文详情。

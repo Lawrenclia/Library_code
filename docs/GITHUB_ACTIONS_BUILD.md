@@ -2,6 +2,8 @@
 
 无需在自己电脑安装 Rust、Node.js，也不需要填写 AI API token 或网站账号。
 
+首轮已经编译并上传成功：打开 [Actions #1](https://github.com/Lawrenclia/Library_code/actions/runs/38063069025)，下载 `Windows-EXE-0.1.3-b6f8bb43`。压缩包内安装 EXE 为 6,445,536 字节，SHA256 为 `B0BDBDC4DA58C12980E2C087350DD5FAD1E3E88E6DB8358959619B81D01BD1FF`。这是首轮的固定源码版本；需要后续更新时按下方步骤重新编译。
+
 1. 打开 [Windows EXE 工作流](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml)。
 2. 点击 **Run workflow**，工作流分支保持 **main**。
 3. `source_ref` 默认是 **feature/wos-download-workflow**，即当前 Tauri 新版源码；也可填包含 `desktop` 的其他分支、标签或提交 SHA。
