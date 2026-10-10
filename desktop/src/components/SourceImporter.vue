@@ -213,13 +213,14 @@ async function reuse(choice: SourceReuseChoice) {
   );
   accept(result, id, revision);
 }
-async function preview() {
+async function preview(resave = false) {
   const { id, revision } = props.task;
   const result = await props.run<SourcePage>(
     "preview_source_file",
     {
       id,
       channel: channel.value,
+      resave,
       options: {
         encoding: encoding.value,
         delimiter: delimiter.value,
@@ -426,8 +427,17 @@ const conflictNames: Record<string, string> = {
       variant="outline"
       size="sm"
       :disabled="locked || !channels.length"
-      @click="preview"
+      @click="preview(false)"
       ><Upload />选择原始来源文件</Button
+    >
+    <Button
+      v-if="channel === 'cnki'"
+      class="w-full"
+      variant="outline"
+      size="sm"
+      :disabled="locked"
+      @click="preview(true)"
+      >选择 CNKI Excel 并另存为 XLSX</Button
     >
     <Button
       class="w-full"
@@ -516,6 +526,17 @@ const conflictNames: Record<string, string> = {
       <p class="break-all font-mono text-[10px] text-muted-foreground">
         SHA-256：{{ data.draft.sha256 }}
       </p>
+      <div
+        v-if="data.draft.resave"
+        class="space-y-1 rounded border p-2 text-[11px] leading-5"
+      >
+        <p>
+          已另存完整表格，原下载文件保留。请继续选择准确论文记录并核对关键字段。
+        </p>
+        <p class="break-all">原件：{{ data.draft.resave.original_path }}</p>
+        <p class="break-all">另存：{{ data.draft.resave.saved_path }}</p>
+        <p>另存不会确认论文身份、交大归属或平台导入成功。</p>
+      </div>
       <div
         v-if="data.draft.options?.export_response"
         class="space-y-1 rounded border p-2 text-[11px] leading-5"

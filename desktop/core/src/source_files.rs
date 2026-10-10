@@ -50,6 +50,8 @@ pub struct Draft {
     pub options: ReadOptions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::source_reuse::Origin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resave: Option<crate::cnki_excel::Resave>,
 }
 struct Table {
     name: String,
@@ -105,6 +107,8 @@ pub struct Receipt {
     pub institution_verified: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::source_reuse::Origin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resave: Option<crate::cnki_excel::Resave>,
 }
 /// A bound database export, retaining the complete file and selected record.
 /// Container verification does not prove suitability for platform import.
@@ -142,7 +146,7 @@ fn bytes(path: &Path) -> Result<Vec<u8>> {
     }
     Ok(raw)
 }
-fn decode(raw: &[u8], option: &str) -> Result<(String, String)> {
+pub(crate) fn decode(raw: &[u8], option: &str) -> Result<(String, String)> {
     let encoding = match option {
         "utf-8" => encoding_rs::UTF_8,
         "gb18030" => encoding_rs::GB18030,
@@ -179,7 +183,7 @@ pub fn read(path: &Path, format: &str, options: &ReadOptions) -> Result<Document
             if format == "xls"
                 && !raw.starts_with(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])
             {
-                return Err(fail("此 XLS 不是二进制 Excel，可能是网页表格。请用 Excel 打开并另存为 XLSX，再选择新文件；原下载保留。"));
+                return Err(fail("此 XLS 是网页表格或不支持的 Excel。CNKI 可点击‘另存为 XLSX’；其他情况请用 Excel 核对后另存，原下载保留。"));
             }
             if format == "xlsx" {
                 let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&raw))
@@ -398,6 +402,7 @@ pub fn prepare(
         format,
         options,
         origin: None,
+        resave: None,
     })
 }
 fn owned(root: &Path, path: &str, sha: &str, format: &str) -> Result<PathBuf> {
@@ -427,10 +432,72 @@ pub fn check_draft(root: &Path, task: &Task, draft: &Draft) -> Result<Document> 
         ));
     }
     let path = owned(root, &draft.path, &draft.sha256, &draft.format)?;
+    crate::cnki_excel::verify(root, draft.resave.as_ref(), &path)?;
     crate::source_reuse::verify_draft(root, task, draft)?;
     read(&path, &draft.format, &draft.options)
 }
 impl Document {
+    pub(crate) fn from_tables(tables: Vec<(String, Vec<Vec<String>>)>) -> Self {
+        Self {
+            tables: tables
+                .into_iter()
+                .map(|(name, rows)| Table {
+                    name,
+                    rows,
+                    start_row: 0,
+                    start_col: 0,
+                    formulas: BTreeMap::new(),
+                })
+                .collect(),
+            encoding: "HTML".into(),
+            text_mode: false,
+        }
+    }
+    pub(crate) fn content(&self) -> Value {
+        json!(self
+            .tables
+            .iter()
+            .map(|t| {
+                let cells: Vec<_> = t
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(ri, row)| {
+                        row.iter()
+                            .enumerate()
+                            .filter(|(_, value)| !value.is_empty())
+                            .map(move |(ci, value)| {
+                                json!([t.start_row + ri as u32, t.start_col + ci as u32, value])
+                            })
+                    })
+                    .collect();
+                json!({"sheet":t.name,"cells":cells})
+            })
+            .collect::<Vec<_>>())
+    }
+    pub(crate) fn resave_bytes(&self) -> Result<Vec<u8>> {
+        let mut book = rust_xlsxwriter::Workbook::new();
+        for t in &self.tables {
+            if !t.formulas.is_empty() {
+                return Err(fail(
+                    "Excel 包含公式，不能自动转成静态原始元数据。请核对后在 Excel 另存。",
+                ));
+            }
+            let sheet = book.add_worksheet();
+            sheet.set_name(&t.name).map_err(Failure::storage)?;
+            for (ri, row) in t.rows.iter().enumerate() {
+                for (ci, value) in row.iter().enumerate() {
+                    let col = u16::try_from(t.start_col as usize + ci)
+                        .map_err(|_| fail("Excel 列数超出范围。"))?;
+                    // Explicit strings preserve leading zeros and never turn text into formulas.
+                    sheet
+                        .write_string(t.start_row + ri as u32, col, value)
+                        .map_err(Failure::storage)?;
+                }
+            }
+        }
+        book.save_to_buffer().map_err(Failure::storage)
+    }
     /// Locate candidates in the entire selected table. Never bind or select one.
     pub fn locate(&self, task: &Task, draft: &Draft, mapping: &Selection) -> Result<Value> {
         if self.text_mode || draft.origin.is_some() {
@@ -748,6 +815,7 @@ pub fn bind(
         binding_note: note,
         institution_verified: false,
         origin: draft.origin.clone(),
+        resave: draft.resave.clone(),
     };
     crate::source_reuse::verify_receipt(root, task, &receipt)?;
     Ok(Evidence {
@@ -805,6 +873,7 @@ pub fn verify_for_ai(root: &Path, task: &Task) -> Result<std::collections::BTree
             &receipt.format,
         )?;
         let document = read(&path, &receipt.format, &receipt.options)?;
+        crate::cnki_excel::verify(root, receipt.resave.as_ref(), &path)?;
         let (fields, text, title, doi, wos) =
             document.extract(&receipt.format, &receipt.selection)?;
         if fields != receipt.fields

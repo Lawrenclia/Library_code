@@ -6,13 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: '要编译的分支、标签或提交（新版代码在 feature/wos-download-workflow）'
+        description: '要编译的分支、标签或提交（默认编译主分支）'
         required: true
-        default: feature/wos-download-workflow
+        default: main
         type: string
   push:
     branches:
-      - feature/wos-download-workflow
+      - main
     paths:
       - 'desktop/**'
       - '.github/workflows/windows-exe.yml'

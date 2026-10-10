@@ -96,6 +96,7 @@ pub(crate) async fn preview_source_file(
     id: String,
     channel: String,
     options: ReadOptions,
+    resave: Option<bool>,
 ) -> Result<Value> {
     local(&window)?;
     let _lease = state.acquire()?;
@@ -109,7 +110,25 @@ pub(crate) async fn preview_source_file(
     else {
         return Ok(json!({"cancelled":true}));
     };
-    let draft = source_files::prepare(&state.store.root, &task, &channel, file.path(), options)?;
+    let draft = if resave.unwrap_or(false) {
+        if channel != "cnki" {
+            return Err(Failure::new("SOURCE_INVALID", "另存仅用于 CNKI Excel。"));
+        }
+        let name = file
+            .path()
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        cnki_excel::normalize(
+            &state.store.root,
+            &task,
+            file.path(),
+            &name,
+            &options.encoding,
+        )?
+    } else {
+        source_files::prepare(&state.store.root, &task, &channel, file.path(), options)?
+    };
     let document = source_files::check_draft(&state.store.root, &task, &draft)?;
     let result = document.page(&draft, None, 0, 0)?;
     remember(&state, draft)?;

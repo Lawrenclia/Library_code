@@ -418,6 +418,16 @@ export interface MaterialValidation {
   cancelled?: boolean;
 }
 export interface SourceDraft {
+  resave?: {
+    original_path: string;
+    original_sha256: string;
+    original_name: string;
+    original_format: string;
+    saved_path: string;
+    saved_sha256: string;
+    recipe: string;
+    content_hash: string;
+  };
   options: {
     encoding: string;
     delimiter: string;

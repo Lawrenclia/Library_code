@@ -244,6 +244,7 @@ pub fn prepare(
         sha256: r.sha256,
         format: r.format,
         options: r.options,
+        resave: r.resave,
         origin: Some(Origin {
             task_id: donor.id.clone(),
             input_hash: donor.input_hash.clone(),

@@ -6,6 +6,8 @@ Tauri 2 + Rust + SQLite 桌面工作台。界面使用 shadcn-vue 官方开源�
 
 实际验证结果与剩余目标见 [验收记录](../docs/TAURI_VERIFICATION.md)。
 
+**0.1.4 增加 CNKI Excel 应用内另存。** 在来源下载记录或本地文件入口选择另存为 XLSX，保留原件、完整单元格和回执；绑定后继续选择记录、核对来源及调用 API AI。含无法完整保留的内容时提示人工另存，不丢弃字段。新版合入主分支后，GitHub Actions 默认编译 `main`。步骤见 [0.1.4 自测说明](../docs/TAURI_TESTING_0_1_4.md)。CNKI 自动上传仍未接通，业务测试仍暂缓。
+
 **0.1.3 增加 CNKI 内置浏览器题录获取，源码 `ab0ad47`。** 按名单题名打开官方入口，用户登录并选择论文详情后获取完整题录；保留原始响应、完整字段与来源，供 API AI 分类和填表。网页原始 Excel/TXT 下载继续直接保存在工作目录，增加二进制 XLS 及 EndNote/RefWorks TXT 解析。使用顺序见 [0.1.3 自测说明](../docs/TAURI_TESTING_0_1_3.md)，具体边界见 [CNKI 获取说明](../docs/CNKI_BROWSER_DOWNLOAD.md)。CNKI 自动平台导入仍未接通，业务运行待用户自测。
 
 0.1.3 安装包已编译打包：`D:\Library\releases\0.1.3\机构知识库工作台_0.1.3_x64-setup.exe`，6,525,659 字节，SHA256 `1C00F1B52F829F9505A8B451A613AFB4031A463EB74081C3FABD4F38C0B84B90`。未运行测试、未安装启动、未操作真实网站；旧包保留。

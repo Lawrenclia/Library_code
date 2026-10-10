@@ -196,7 +196,7 @@ async function cnki(action: "search" | "capture", window?: SourceWindowState) {
     windowAction.value = "";
   }
 }
-async function preview(download: SourceDownload) {
+async function preview(download: SourceDownload, resave = false) {
   const id = props.task.id,
     channel = props.channel;
   const page = await props.run<SourcePage>(
@@ -204,6 +204,7 @@ async function preview(download: SourceDownload) {
     {
       id,
       downloadId: download.id,
+      resave,
       options: {
         encoding: props.encoding,
         delimiter: props.delimiter,
@@ -369,6 +370,18 @@ async function preview(download: SourceDownload) {
           <p class="break-all">{{ d.page_url }}</p>
           <p class="break-all">SHA256：{{ d.sha256 || "未确认" }}</p>
         </details>
+        <Button
+          v-if="channel === 'cnki' && /\.(xls|xlsx)$/i.test(d.path)"
+          size="sm"
+          variant="outline"
+          :disabled="
+            locked ||
+            d.state !== 'completed' ||
+            d.session.input_hash !== task.input_hash
+          "
+          @click="preview(d, true)"
+          >另存为 XLSX 并选择论文记录</Button
+        >
         <Button
           size="sm"
           variant="outline"

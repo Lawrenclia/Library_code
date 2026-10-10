@@ -28,6 +28,7 @@ pub fn channels() -> Value {
             "source_browser":if cnki {"builtin_entry"} else {"configured_manual"},
             "browser_export_response":if cnki {"implemented"} else {"unimplemented"},
             "native_source_download":"implemented",
+            "excel_resave":if cnki {"implemented"} else {"unimplemented"},
             "export":if native {"implemented"} else {"unimplemented"},
             "parse":if native {"implemented"} else if cnki {"endnote_refworks_excel"} else {"unimplemented"},
             "submit":if native {"implemented"} else {"unimplemented"},

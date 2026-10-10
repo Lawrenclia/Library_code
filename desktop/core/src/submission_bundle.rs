@@ -70,6 +70,12 @@ pub(crate) fn build(store: &Store, id: &str, packet_id: &str, revision: i64) -> 
             export.receipt.selection.end_row,
             export.receipt.source_url
         ));
+        if let Some(resave) = &export.receipt.resave {
+            instructions.push_str(&format!(
+                "CNKI Excel 已另存为 XLSX，原件完整保留。原件 SHA256：{}\n另存 SHA256：{}\n本包附原始下载与另存回执；须核对实际渠道接受的格式和字段。\n\n",
+                resave.original_sha256, resave.saved_sha256
+            ));
+        }
     }
     instructions.push_str("本地待办事项：\n");
     let issues = prepared["issues"]
@@ -98,6 +104,22 @@ pub(crate) fn build(store: &Store, id: &str, packet_id: &str, revision: i64) -> 
         ),
         ("操作说明.txt".into(), instructions.into_bytes()),
     ];
+    if let Some(resave) = original.as_ref().and_then(|e| e.receipt.resave.as_ref()) {
+        cnki_excel::verify(
+            &store.root,
+            Some(resave),
+            Path::new(&original.as_ref().unwrap().receipt.archive_path),
+        )?;
+        let raw = read_file(Path::new(&resave.original_path), MAX_ENTRY)?;
+        if hash(&raw) != resave.original_sha256 {
+            return Err(fail("CNKI 原件在打包期间变化。"));
+        }
+        entries.push((format!("CNKI原始下载.{}", resave.original_format), raw));
+        entries.push((
+            "CNKI另存回执.json".into(),
+            serde_json::to_vec_pretty(resave)?,
+        ));
+    }
     if entries
         .iter()
         .any(|(_, bytes)| bytes.len() as u64 > MAX_ENTRY)

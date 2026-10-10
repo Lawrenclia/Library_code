@@ -6,6 +6,12 @@
 
 ## 当前版本
 
+### 0.1.4 CNKI Excel 应用内另存（2026-10-10）
+
+Rust `cnki_excel.rs` 接入本地文件选择和已完成的原生下载，读取 XLSX、二进制 XLS 及 HTML 表格 XLS，按文本保存完整单元格及位置，重新读取对照后保存另存回执。原件及另存文件分别归档，绑定、AI、来源复用和材料准备核对两份文件及回执，提交资料包附完整原件。无法完整处理的合并/嵌套 HTML 表格、非文本内容、公式、Excel 日期/错误类型与超限字段提示人工另存。没有自动确认论文身份、交大归属或平台成功，CNKI 自动上传仍待接通。
+
+前端生产构建、Rust release 编译与 NSIS 打包成功，未运行测试、安装启动或操作真实网站。安装包 `D:\Library\releases\0.1.4\机构知识库工作台_0.1.4_x64-setup.exe`，6,793,753 字节，SHA256 `54ED9D4B775F5A2C1519D58B2D01F1F15ED2EFB965FD0A410EC0D212B580FEB3`。旧包保留；使用顺序见 [0.1.4 自测说明](TAURI_TESTING_0_1_4.md)。该构建证据不替代第 7 节的业务、暂停恢复或真实平台验收。
+
 ### GitHub Windows EXE 首轮构建成功（2026-10-10）
 
 [Actions #1](https://github.com/Lawrenclia/Library_code/actions/runs/38063069025) 的全部步骤成功结束，编译源码 `b6f8bb437457d5cc7adfc692eeb130d7a4359330`。产物 `Windows-EXE-0.1.3-b6f8bb43` 已上传，含安装包、版本信息和 SHA256 清单。下载后直接读取 ZIP，确认安装包 6,445,536 字节，实际 SHA256 `B0BDBDC4DA58C12980E2C087350DD5FAD1E3E88E6DB8358959619B81D01BD1FF` 与 `build-info.json` 一致；版本信息中的源码提交、文件名及大小也一致。

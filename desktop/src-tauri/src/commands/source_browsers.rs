@@ -180,6 +180,7 @@ pub(crate) fn preview_source_download(
     id: String,
     download_id: String,
     options: ReadOptions,
+    resave: Option<bool>,
 ) -> Result<Value> {
     local(&window)?;
     let _lease = state.acquire()?;
@@ -191,20 +192,40 @@ pub(crate) fn preview_source_download(
     }
     let receipt = state.store.source_download_for_preview(&id, &download_id)?;
     let task = state.store.task(&id)?;
-    let mut draft = source_files::prepare(
-        &state.store.root,
-        &task,
-        &receipt.session.site.channel,
-        std::path::Path::new(&receipt.path),
-        options,
-    )?;
-    if draft.sha256 != receipt.sha256.as_deref().unwrap_or("") {
+    let mut draft = if resave.unwrap_or(false) {
+        if receipt.session.site.channel != "cnki" {
+            return Err(Failure::new("SOURCE_INVALID", "另存仅用于 CNKI Excel。"));
+        }
+        cnki_excel::normalize(
+            &state.store.root,
+            &task,
+            std::path::Path::new(&receipt.path),
+            &receipt.original_name,
+            &options.encoding,
+        )?
+    } else {
+        source_files::prepare(
+            &state.store.root,
+            &task,
+            &receipt.session.site.channel,
+            std::path::Path::new(&receipt.path),
+            options,
+        )?
+    };
+    let original_hash = draft
+        .resave
+        .as_ref()
+        .map(|r| r.original_sha256.as_str())
+        .unwrap_or(&draft.sha256);
+    if original_hash != receipt.sha256.as_deref().unwrap_or("") {
         return Err(Failure::new(
             "SOURCE_DOWNLOAD_INVALID",
             "读取期间原始下载变化。",
         ));
     }
-    draft.original_name = receipt.original_name;
+    if draft.resave.is_none() {
+        draft.original_name = receipt.original_name;
+    }
     let document = source_files::check_draft(&state.store.root, &task, &draft)?;
     let page = document.page(
         &draft,
