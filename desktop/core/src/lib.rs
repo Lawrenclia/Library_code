@@ -53,6 +53,10 @@ mod queue_tests;
 #[cfg(test)]
 mod sa_tests;
 #[cfg(test)]
+mod source_download_tests;
+#[cfg(test)]
+mod source_material_tests;
+#[cfg(test)]
 mod workflow_tests;
 
 use std::time::{SystemTime, UNIX_EPOCH};

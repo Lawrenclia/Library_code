@@ -41,7 +41,7 @@ pub(crate) fn open_source_browser(
     let session = state.store.source_session(&id, &channel)?;
     state
         .browser
-        .open_source(&app, &state.store, session.clone(), state.active.clone())?;
+        .open_source(&app, &state.store, session.clone())?;
     Ok(json!({"session":session,"automated_export":false,"platform_verified":false}))
 }
 #[tauri::command]

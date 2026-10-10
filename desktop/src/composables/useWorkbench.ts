@@ -1022,6 +1022,14 @@ export function useWorkbench() {
         }),
       );
       unlisteners.push(
+        await listen("source-download-started", () => {
+          error.value = false;
+          message.value =
+            "正在下载原始来源。下载结束并保存回执后，才能开始其他操作；关闭下载窗口会保留为未确认。";
+          refresh().catch(() => {});
+        }),
+      );
+      unlisteners.push(
         await listen<{ success: boolean; error?: Failure }>(
           "source-download-event",
           (e) => {

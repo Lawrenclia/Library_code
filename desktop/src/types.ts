@@ -184,7 +184,8 @@ export interface Workspace {
   tasks: Task[];
   root: string;
   running: boolean;
-  running_service?: "general" | "download" | "ai" | "materials" | null;
+  running_service?:
+    "general" | "download" | "ai" | "materials" | "source_download" | null;
   paused: boolean;
   download_queue?: DownloadQueue | null;
   ai_queue?: AiQueue | null;

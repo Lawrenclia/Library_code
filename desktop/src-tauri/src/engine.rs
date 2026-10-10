@@ -63,6 +63,9 @@ impl Engine {
     pub fn acquire_materials(&self) -> Result<Lease> {
         self.acquire_kind(4)
     }
+    pub fn acquire_source_download(&self) -> Result<Lease> {
+        self.acquire_kind(5)
+    }
     fn acquire_kind(&self, kind: u8) -> Result<Lease> {
         if self
             .active
@@ -87,6 +90,7 @@ impl Engine {
             2 => Some("download"),
             3 => Some("ai"),
             4 => Some("materials"),
+            5 => Some("source_download"),
             _ => None,
         };
         let queue_paused = download_queue

@@ -45,7 +45,7 @@ const labels: Record<string, string> = {
   requested: "下载中",
   completed: "文件下载完成，待选择记录",
   failed: "下载失败",
-  interrupted: "重启前未确认完成",
+  interrupted: "下载结束未确认",
 };
 watch(
   () => [props.task.id, props.channel],

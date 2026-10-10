@@ -360,6 +360,22 @@ impl Store {
         Ok(receipt)
     }
     pub fn interrupt_source_downloads(&self) -> Result<()> {
+        self.interrupt_source_downloads_inner(
+            None,
+            "重启前没有下载结束回执，不能扫描目录推断成功。请先核对原文件。",
+        )
+    }
+    pub fn interrupt_source_download_ids(&self, ids: &[String]) -> Result<()> {
+        self.interrupt_source_downloads_inner(
+            Some(ids),
+            "来源窗口已关闭，尚无文件下载完成回执；保留原请求与文件，不自动重下或推断成功。",
+        )
+    }
+    fn interrupt_source_downloads_inner(
+        &self,
+        ids: Option<&[String]>,
+        message: &str,
+    ) -> Result<()> {
         let mut db = self.connect()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut q = tx.prepare("SELECT data FROM source_downloads WHERE state='requested'")?;
@@ -369,10 +385,11 @@ impl Store {
         drop(q);
         for raw in raws {
             let mut receipt: Receipt = serde_json::from_str(&raw)?;
+            if ids.is_some_and(|ids| !ids.contains(&receipt.id)) {
+                continue;
+            }
             receipt.state = "interrupted".into();
-            receipt.error = Some(fail(
-                "重启前没有下载结束回执，不能扫描目录推断成功。请先核对原文件。",
-            ));
+            receipt.error = Some(fail(message));
             tx.execute(
                 "UPDATE source_downloads SET state=?,data=? WHERE id=?",
                 params![receipt.state, serde_json::to_string(&receipt)?, receipt.id],

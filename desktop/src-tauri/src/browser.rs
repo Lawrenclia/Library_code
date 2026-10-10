@@ -44,6 +44,7 @@ struct Capture {
 pub struct Browser {
     pending: Arc<Mutex<HashMap<String, Pending>>>,
     capture: Arc<Mutex<Option<Capture>>>,
+    pub(crate) source_transfers: Arc<Mutex<HashMap<String, crate::source_browser::Transfer>>>,
     #[cfg(feature = "smoke-test")]
     lost_upload_reply: Arc<std::sync::atomic::AtomicBool>,
 }
