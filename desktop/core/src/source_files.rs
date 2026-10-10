@@ -626,6 +626,8 @@ pub fn verified_evidence(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
                         | "material_validation"
                         | "legacy_material"
                         | "legacy_history"
+                        | "ai_classification"
+                        | "roster_input"
                 )
         })
         .cloned()
@@ -967,7 +969,7 @@ mod tests {
         let eligible = verified_evidence(dir.path(), &t).unwrap();
         assert_eq!(eligible.len(), 1);
         assert_eq!(eligible[0].id, id);
-        let suggestion = json!({"channel":"general","evidence_ids":[id],"missing":[],"fields":{"Title":{"value":"Paper","evidence_ids":[id]}}});
+        let suggestion = json!({"type":"期刊论文","confidence":"中","reason":"来源支持","channel_reason":"需确认实际模板","channel":"general","evidence_ids":[id],"missing":[],"fields":{"Title":{"value":"Paper","evidence_ids":[id]}}});
         let schema = json!({"columns":["Title"]});
         assert!(crate::catalog::validate_ai(&suggestion, &eligible, Some(&schema)).is_ok());
         let mut forged = t.clone();

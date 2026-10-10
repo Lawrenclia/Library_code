@@ -1329,7 +1329,8 @@ function frameworkBrowser(role: string, entry?: string) {
                     v-if="
                       e.kind === 'external_metadata' ||
                       e.kind === 'legacy_material' ||
-                      e.kind === 'legacy_history'
+                      e.kind === 'legacy_history' ||
+                      e.kind === 'ai_classification'
                     "
                     class="text-xs leading-6"
                   >
@@ -1337,7 +1338,9 @@ function frameworkBrowser(role: string, entry?: string) {
                       {{
                         e.kind === "external_metadata"
                           ? "查看完整来源字段与绑定记录"
-                          : "旧版历史资料 · 待复核，展开查看完整记录"
+                          : e.kind === "ai_classification"
+                            ? "AI 分类记录 · 查看完整建议与来源"
+                            : "旧版历史资料 · 待复核，展开查看完整记录"
                       }}
                     </summary>
                     <p class="break-all whitespace-pre-wrap">{{ e.text }}</p>
@@ -1796,7 +1799,7 @@ function frameworkBrowser(role: string, entry?: string) {
                   <h3 class="text-xs font-medium">基于来源的分类与补全</h3>
                   <p class="mt-2 text-[11px] leading-6 text-muted-foreground">
                     AI
-                    整理类型、推荐渠道并填写有依据的字段。实际归属和平台操作由核验流程确认。
+                    可先依据名单分类，再结合原始来源补全字段。仅名单依据的建议置信度为低，推荐渠道仍需确认收录和文件。实际归属和平台操作由核验流程确认。
                   </p>
                 </div>
                 <label class="field"
@@ -1813,9 +1816,7 @@ function frameworkBrowser(role: string, entry?: string) {
                 ><Button
                   class="w-full"
                   size="sm"
-                  :disabled="
-                    locked || !api.configured || !current.evidence.length
-                  "
+                  :disabled="locked || !api.configured"
                   @click="classify"
                   ><Sparkles />调用 API 分类 / 填写</Button
                 >
@@ -1825,13 +1826,39 @@ function frameworkBrowser(role: string, entry?: string) {
                 <template v-if="current.classification"
                   ><div class="rounded-lg border p-3">
                     <p class="text-xs font-medium">
-                      {{ current.classification.type }}
+                      {{ current.classification.type || "成果类型待判定" }}
                     </p>
                     <p class="mt-2 text-[11px] leading-6 text-muted-foreground">
                       {{ current.classification.reason }}
                     </p>
                     <p class="mt-2 text-[10px]">
-                      推荐渠道：{{ current.classification.channel }}
+                      建议渠道：{{
+                        workspace.framework?.channels.find(
+                          (c) => c.id === current?.classification?.channel,
+                        )?.label ||
+                        current.classification.channel ||
+                        "待判定"
+                      }}
+                      · 待核实收录和文件
+                    </p>
+                    <p class="mt-2 text-[11px] leading-6">
+                      模型置信度：{{
+                        current.classification.confidence ||
+                        "旧结果未记录，请重新分类"
+                      }}
+                      · 建议待复核
+                    </p>
+                    <p class="mt-2 text-[11px] leading-6 text-muted-foreground">
+                      {{ current.classification.channel_reason }}
+                    </p>
+                    <p
+                      v-if="
+                        Array.isArray(current.classification.missing) &&
+                        current.classification.missing.length
+                      "
+                      class="mt-2 text-xs leading-6"
+                    >
+                      仍需补充：{{ current.classification.missing.join("、") }}
                     </p>
                   </div>
                   <div
@@ -1914,7 +1941,7 @@ function frameworkBrowser(role: string, entry?: string) {
                   </div>
                 </template>
                 <p v-else class="helper">
-                  保存来源后可调用。没有证据支持的内容保持待补充。
+                  可直接使用名单开始分类；没有原始来源支持的作者、单位和出版信息保持待补充。
                 </p></template
               >
             </div>

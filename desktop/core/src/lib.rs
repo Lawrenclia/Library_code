@@ -1,6 +1,7 @@
 pub mod alias;
 pub mod catalog;
 pub mod claim;
+pub mod classification;
 pub mod download;
 pub mod files;
 pub mod framework;

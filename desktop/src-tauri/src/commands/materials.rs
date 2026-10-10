@@ -95,8 +95,13 @@ pub(crate) async fn fill_template(
             "AI 填写建议属于其他模板，请针对当前模板重新生成。",
         ));
     }
-    let sources = library_core::source_files::verified_evidence(&state.store.root, &task)?;
-    library_core::catalog::validate_ai(&classification, &sources, Some(&json!(template)))?;
+    let sources = library_core::classification::sources(&state.store.root, &task)?;
+    library_core::classification::validate_saved(
+        &task,
+        &classification,
+        &sources,
+        &json!(template),
+    )?;
     let fields: std::collections::BTreeMap<String, String> = classification["fields"]
         .as_object()
         .ok_or_else(|| Failure::new("AI_RESULT_INVALID", "缺少已核验字段。"))?

@@ -493,6 +493,10 @@ pub fn export_report_with_history(
         "批次",
         "失败原因",
         "核验结论",
+        "AI 模型置信度",
+        "AI 分类理由",
+        "渠道建议与确认条件",
+        "AI 建议状态",
     ];
     for (i, h) in headers.iter().enumerate() {
         sheet
@@ -551,6 +555,19 @@ pub fn export_report_with_history(
                 .as_ref()
                 .map(|r| r.note.clone())
                 .unwrap_or_default(),
+            ai.and_then(|v| v["confidence"].as_str())
+                .unwrap_or("未记录")
+                .into(),
+            ai.and_then(|v| v["reason"].as_str()).unwrap_or("").into(),
+            ai.and_then(|v| v["channel_reason"].as_str())
+                .unwrap_or("")
+                .into(),
+            if ai.is_some() {
+                "建议待复核"
+            } else {
+                "未分类"
+            }
+            .into(),
         ];
         for (col, v) in fields.iter().enumerate() {
             sheet
@@ -614,9 +631,17 @@ pub fn export_report_with_history(
     sources.set_column_width(6, 80.).map_err(Failure::storage)?;
     let fields = book.add_worksheet();
     fields.set_name("AI 字段来源").map_err(Failure::storage)?;
-    for (col, label) in ["SA ID", "模板 ID", "字段名", "填写值", "引用来源 ID"]
-        .iter()
-        .enumerate()
+    for (col, label) in [
+        "SA ID",
+        "模板 ID",
+        "字段名",
+        "填写值",
+        "引用来源 ID",
+        "片段序号",
+        "完整填写值 SHA256",
+    ]
+    .iter()
+    .enumerate()
     {
         fields
             .write_string(0, col as u16, *label)
@@ -627,19 +652,33 @@ pub fn export_report_with_history(
         if let Some(ai) = &t.classification {
             if let Some(values) = ai["fields"].as_object() {
                 for (name, field) in values {
-                    let values = [
-                        t.id.clone(),
-                        ai["template_id"].as_str().unwrap_or("").into(),
-                        name.clone(),
-                        field["value"].as_str().unwrap_or("").into(),
-                        field["evidence_ids"].to_string(),
-                    ];
-                    for (col, value) in values.iter().enumerate() {
-                        fields
-                            .write_string(row, col as u16, value)
-                            .map_err(Failure::storage)?;
+                    let text = field["value"].as_str().unwrap_or("");
+                    let chars: Vec<_> = text.chars().collect();
+                    let chunks = if chars.is_empty() {
+                        vec![String::new()]
+                    } else {
+                        chars
+                            .chunks(15000)
+                            .map(|c| c.iter().collect())
+                            .collect::<Vec<String>>()
+                    };
+                    for (part, chunk) in chunks.into_iter().enumerate() {
+                        let values = [
+                            t.id.clone(),
+                            ai["template_id"].as_str().unwrap_or("").into(),
+                            name.clone(),
+                            chunk,
+                            field["evidence_ids"].to_string(),
+                            (part + 1).to_string(),
+                            hash(text.as_bytes()),
+                        ];
+                        for (col, value) in values.iter().enumerate() {
+                            fields
+                                .write_string(row, col as u16, value)
+                                .map_err(Failure::storage)?;
+                        }
+                        row += 1;
                     }
-                    row += 1;
                 }
             }
         }
