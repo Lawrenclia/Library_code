@@ -43,6 +43,32 @@ const current = computed(() => {
   }
   return null;
 });
+const lastFailure = computed(() => {
+  // A failed refresh must remain visible even when an older source is still saved.
+  const evidence = [...props.task.evidence]
+    .reverse()
+    .find((e) => e.kind === "doi_lookup" || e.kind === "doi_metadata");
+  if (evidence?.kind !== "doi_lookup") return null;
+  try {
+    const value = JSON.parse(evidence.text) as {
+      schema: string;
+      request: { task_id: string; doi: string; task_revision: number };
+      error: { code: string; message: string };
+    };
+    if (
+      value.schema !== "doi_lookup_v1" ||
+      value.request?.task_id !== props.task.id ||
+      typeof value.request.doi !== "string" ||
+      !Number.isSafeInteger(value.request.task_revision) ||
+      typeof value.error?.code !== "string" ||
+      typeof value.error.message !== "string"
+    )
+      return null;
+    return value;
+  } catch {
+    return null;
+  }
+});
 async function lookup(refresh = false) {
   await props.run<{ evidence: Evidence; reused: boolean }>(
     "lookup_doi_source",
@@ -77,6 +103,25 @@ async function lookup(refresh = false) {
         @click="lookup(true)"
         >重新查询</Button
       >
+    </div>
+    <div
+      v-if="lastFailure"
+      class="space-y-1 rounded-md bg-amber-50 p-2 text-[11px] text-amber-800"
+      role="status"
+    >
+      <p>最近一次记录的查询未绑定新来源：{{ lastFailure.error.message }}</p>
+      <p class="break-all">
+        查询 DOI：{{ lastFailure.request.doi }} · 查询时任务版本：{{
+          lastFailure.request.task_revision
+        }}
+      </p>
+      <p>
+        该记录可能属于历史名单，版本详情见来源报告的“DOI
+        检索记录”。未找到登记记录不能证明论文不存在。
+      </p>
+      <p v-if="current">
+        已有来源仍保留，使用前程序会重新核验原文件和当前名单。
+      </p>
     </div>
     <template v-if="current">
       <p class="break-all text-xs">

@@ -149,3 +149,66 @@ fn failed_lookup_is_a_search_receipt_never_paper_absence_or_ai_fact() {
     let receipt: Value = serde_json::from_str(&after.evidence.last().unwrap().text).unwrap();
     assert_eq!(receipt["paper_not_found"], false);
 }
+
+#[test]
+fn lookup_report_preserves_long_fields_history_and_saved_source_after_refresh_failure() {
+    use calamine::Reader;
+    let (_dir, store) = fixture();
+    let title = "Original title 🙂 ".repeat(2500);
+    let request = doi_sources::request(&store, "doi-task").unwrap();
+    let saved = doi_sources::attach(&store, &request, &response("10.1234/paper", &title)).unwrap();
+    let source_id = saved["evidence"]["id"].as_str().unwrap();
+    let message = "Registry connection failed; keep original source. ".repeat(1000);
+    let request = doi_sources::request(&store, "doi-task").unwrap();
+    doi_sources::record_failure(
+        &store,
+        &request,
+        &Failure::new("DOI_LOOKUP_FAILED", &message),
+    )
+    .unwrap();
+    let mut task = store.task("doi-task").unwrap();
+    let failure_id = task.evidence.last().unwrap().id.clone();
+    let source: doi_sources::Receipt =
+        serde_json::from_str(saved["evidence"]["text"].as_str().unwrap()).unwrap();
+    // Reporting is an audit of saved records, not a hidden file validation step.
+    fs::remove_file(&source.archive_path).unwrap();
+    let path = store.root.join("doi-audit.xlsx");
+    files::export_report(&[task.clone()], &path).unwrap();
+    let mut book = calamine::open_workbook_auto(&path).unwrap();
+    let sheet = book.worksheet_range("DOI 检索记录").unwrap();
+    let join = |id: &str, col: usize| {
+        sheet
+            .rows()
+            .skip(1)
+            .filter(|r| r[3].to_string() == id)
+            .map(|r| r[col].to_string())
+            .collect::<String>()
+    };
+    assert_eq!(join(source_id, 8), json!([title]).to_string());
+    assert_eq!(join(&failure_id, 13), message);
+    let first = sheet
+        .rows()
+        .skip(1)
+        .find(|r| r[3].to_string() == source_id)
+        .unwrap();
+    assert_eq!(first[14].to_string(), "是");
+    assert!(first[15].to_string().starts_with("是"));
+    assert!(sheet
+        .rows()
+        .skip(1)
+        .filter(|r| r[3].to_string() == failure_id)
+        .all(|r| !r[7].to_string().contains("论文不存在")));
+    task.record.title = "New roster title".into();
+    files::export_report(&[task], &path).unwrap();
+    let mut book = calamine::open_workbook_auto(&path).unwrap();
+    let sheet = book.worksheet_range("DOI 检索记录").unwrap();
+    for id in [source_id, failure_id.as_str()] {
+        let first = sheet
+            .rows()
+            .skip(1)
+            .find(|r| r[3].to_string() == id)
+            .unwrap();
+        assert_eq!(first[14].to_string(), "否，历史名单");
+        assert_eq!(first[15].to_string(), "否");
+    }
+}

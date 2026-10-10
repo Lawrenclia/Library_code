@@ -81,7 +81,7 @@ pub fn request(store: &Store, id: &str) -> Result<Request> {
         doi: value,
     })
 }
-fn current(task: &Task, request: &Request) -> bool {
+pub(crate) fn current(task: &Task, request: &Request) -> bool {
     request.task_id == task.id
         && request.input_hash == task.input_hash
         && request.record_fingerprint == task.record.fingerprint()

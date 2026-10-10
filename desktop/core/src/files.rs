@@ -413,6 +413,210 @@ pub fn archive(root: &Path, raw: &[u8]) -> Result<std::path::PathBuf> {
     }
     Ok(path)
 }
+/// This sheet summarizes saved evidence; it does not verify files or query the provider.
+fn export_doi_lookup_report(book: &mut rust_xlsxwriter::Workbook, tasks: &[Task]) -> Result<()> {
+    if !tasks.iter().any(|t| {
+        t.evidence
+            .iter()
+            .any(|e| matches!(e.kind.as_str(), "doi_metadata" | "doi_lookup"))
+    }) {
+        return Ok(());
+    }
+    let sheet = book.add_worksheet();
+    sheet.set_name("DOI 检索记录").map_err(Failure::storage)?;
+    for (col, label) in [
+        "当前原表行号",
+        "当前负责人",
+        "SA ID",
+        "来源 ID",
+        "记录时间",
+        "查询 DOI",
+        "查询地址",
+        "记录结果",
+        "返回题名",
+        "登记来源缺项（非模板必填结论）",
+        "原响应文件",
+        "原响应 SHA256",
+        "失败代码",
+        "失败原因",
+        "是否对应当前名单",
+        "是否最新已保存来源",
+        "查询时任务版本",
+        "查询时名单哈希",
+        "查询时记录指纹",
+        "完整依据 SHA256",
+        "片段序号",
+        "说明",
+    ]
+    .iter()
+    .enumerate()
+    {
+        sheet
+            .write_string(0, col as u16, *label)
+            .map_err(Failure::storage)?;
+    }
+    let mut row = 1;
+    for task in tasks {
+        let latest = task
+            .evidence
+            .iter()
+            .rev()
+            .find(|e| {
+                if e.kind != crate::doi_sources::KIND {
+                    return false;
+                }
+                serde_json::from_str::<crate::doi_sources::Receipt>(&e.text)
+                    .ok()
+                    .is_some_and(|r| {
+                        r.schema == "crossref_source_v1"
+                            && crate::doi_sources::current(task, &r.request)
+                    })
+            })
+            .map(|e| e.id.as_str());
+        for evidence in task
+            .evidence
+            .iter()
+            .filter(|e| matches!(e.kind.as_str(), "doi_metadata" | "doi_lookup"))
+        {
+            let value =
+                serde_json::from_str::<serde_json::Value>(&evidence.text).unwrap_or_default();
+            let request =
+                serde_json::from_value::<crate::doi_sources::Request>(value["request"].clone())
+                    .ok();
+            let receipt = if evidence.kind == crate::doi_sources::KIND {
+                serde_json::from_value::<crate::doi_sources::Receipt>(value.clone())
+                    .ok()
+                    .filter(|r| r.schema == "crossref_source_v1")
+            } else {
+                None
+            };
+            let failed = evidence.kind == "doi_lookup"
+                && value["schema"] == "doi_lookup_v1"
+                && request.is_some()
+                && serde_json::from_value::<Failure>(value["error"].clone()).is_ok();
+            let text = |key: &str| value[key].as_str().unwrap_or("").to_string();
+            let values = [
+                task.record.row.to_string(),
+                task.record.owner.clone(),
+                task.id.clone(),
+                evidence.id.clone(),
+                evidence.created.to_string(),
+                request.as_ref().map(|r| r.doi.clone()).unwrap_or_default(),
+                evidence.source.clone(),
+                if receipt.is_some() {
+                    "来源已保存（本报告未重新验证文件）"
+                } else if failed {
+                    "查询失败，未绑定新来源"
+                } else {
+                    "记录格式异常，请核对原始来源依据"
+                }
+                .into(),
+                receipt
+                    .as_ref()
+                    .map(|r| r.metadata["title"].to_string())
+                    .unwrap_or_default(),
+                receipt
+                    .as_ref()
+                    .map(|r| serde_json::to_string(&r.missing))
+                    .transpose()?
+                    .unwrap_or_default(),
+                receipt
+                    .as_ref()
+                    .map(|r| r.archive_path.clone())
+                    .unwrap_or_default(),
+                receipt
+                    .as_ref()
+                    .map(|r| r.sha256.clone())
+                    .unwrap_or_default(),
+                if failed {
+                    value["error"]["code"].as_str().unwrap_or("").into()
+                } else {
+                    String::new()
+                },
+                if failed {
+                    value["error"]["message"].as_str().unwrap_or("").into()
+                } else {
+                    String::new()
+                },
+                request
+                    .as_ref()
+                    .map(|r| {
+                        if crate::doi_sources::current(task, r) {
+                            "是"
+                        } else {
+                            "否，历史名单"
+                        }
+                    })
+                    .unwrap_or("未识别")
+                    .into(),
+                if receipt.is_some() && latest == Some(evidence.id.as_str()) {
+                    "是（声明记录，使用前仍须核验）"
+                } else {
+                    "否"
+                }
+                .into(),
+                request
+                    .as_ref()
+                    .map(|r| r.task_revision.to_string())
+                    .unwrap_or_default(),
+                request
+                    .as_ref()
+                    .map(|r| r.input_hash.clone())
+                    .unwrap_or_default(),
+                request
+                    .as_ref()
+                    .map(|r| r.record_fingerprint.clone())
+                    .unwrap_or_default(),
+                hash(evidence.text.as_bytes()),
+                String::new(),
+                if failed {
+                    "仅描述该次登记查询；不能证明论文不存在或未被其他数据库收录。".into()
+                } else if let Some(r) = &receipt {
+                    if r.matches_input_title {
+                        "题名与查询时名单一致；身份、单位、模板必填和机构库状态须分别核对。".into()
+                    } else {
+                        "题名与查询时名单不同，请核对原始来源；未自动确认论文身份。".into()
+                    }
+                } else {
+                    format!("完整内容保留在原始来源依据；schema={}", text("schema"))
+                },
+            ];
+            // Every value survives Excel's cell limit; align parts under the same evidence ID.
+            let chunks: Vec<Vec<String>> = values
+                .iter()
+                .map(|v| {
+                    let chars: Vec<_> = v.chars().collect();
+                    if chars.is_empty() {
+                        vec![String::new()]
+                    } else {
+                        chars.chunks(15000).map(|c| c.iter().collect()).collect()
+                    }
+                })
+                .collect();
+            let count = chunks.iter().map(Vec::len).max().unwrap_or(1);
+            for part in 0..count {
+                for (col, cells) in chunks.iter().enumerate() {
+                    let value = if col == 20 {
+                        (part + 1).to_string()
+                    } else if col == 2 || col == 3 || col == 19 {
+                        values[col].clone()
+                    } else {
+                        cells.get(part).cloned().unwrap_or_default()
+                    };
+                    sheet
+                        .write_string(row, col as u16, value)
+                        .map_err(Failure::storage)?;
+                }
+                row += 1;
+            }
+        }
+    }
+    sheet.set_freeze_panes(1, 0).map_err(Failure::storage)?;
+    for col in [6, 8, 9, 10, 13, 21] {
+        sheet.set_column_width(col, 55.).map_err(Failure::storage)?;
+    }
+    Ok(())
+}
 pub fn export_report(tasks: &[Task], path: &Path) -> Result<()> {
     export_report_with_queues(tasks, &[], path)
 }
@@ -670,6 +874,7 @@ pub fn export_report_with_materials(
     }
     sources.set_freeze_panes(1, 0).map_err(Failure::storage)?;
     sources.set_column_width(6, 80.).map_err(Failure::storage)?;
+    export_doi_lookup_report(&mut book, tasks)?;
     let fields = book.add_worksheet();
     fields.set_name("AI 字段来源").map_err(Failure::storage)?;
     for (col, label) in [
