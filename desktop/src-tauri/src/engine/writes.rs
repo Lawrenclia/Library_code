@@ -122,6 +122,7 @@ impl Engine {
                 ("scholar", p, t.stage.clone())
             }
             "import_upload" => {
+                library_core::submission::check_upload(&self.store, &t)?;
                 t.import_ready()?;
                 if !matches!(t.stage, Stage::Ready | Stage::Downloaded) {
                     return Err(Failure::new("INVALID_TRANSITION", "当前任务不能再次上传。"));
@@ -190,6 +191,8 @@ impl Engine {
                     return Err(Failure::new("FILE_INVALID", "归档文件已变化。"));
                 }
                 let mut p = common;
+                p["submission_packet"] =
+                    serde_json::to_value(library_core::submission::current(&self.store, id)?)?;
                 p["content"] = base64::engine::general_purpose::STANDARD.encode(raw).into();
                 p["contentSha"] = artifact.candidate.sha256.clone().into();
                 ("import", p, Stage::Uploaded)

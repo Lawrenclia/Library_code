@@ -32,6 +32,7 @@ import WorkflowOverview from "@/components/WorkflowOverview.vue";
 import SourceImporter from "@/components/SourceImporter.vue";
 import AiQueuePanel from "@/components/AiQueuePanel.vue";
 import MaterialBatchPanel from "@/components/MaterialBatchPanel.vue";
+import SubmissionMaterial from "@/components/SubmissionMaterial.vue";
 import LegacyMaterials from "@/components/LegacyMaterials.vue";
 import TaskTable from "@/components/TaskTable.vue";
 import { Button } from "@/components/ui/button";
@@ -1735,6 +1736,12 @@ function frameworkBrowser(role: string, entry?: string) {
                 </div>
                 <div class="action-block">
                   <h3><Database class="size-3.5" />缺失成果补充</h3>
+                  <SubmissionMaterial
+                    v-if="current.record.matches === 0"
+                    :task="current"
+                    :locked="locked"
+                    :run="run"
+                  />
                   <div
                     class="mb-2 flex items-center gap-1 text-[10px] text-muted-foreground"
                   >

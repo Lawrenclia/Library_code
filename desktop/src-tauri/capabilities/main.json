@@ -35,6 +35,8 @@
     "allow-prepare-material-batch",
     "allow-resume-material-batch",
     "allow-cancel-material-batch",
+    "allow-submission-options",
+    "allow-prepare-submission",
     "allow-resume-queue",
     "allow-cancel-queue"
   ]

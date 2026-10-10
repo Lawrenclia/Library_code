@@ -31,6 +31,8 @@ export type DesktopCommand =
   | "prepare_material_batch"
   | "resume_material_batch"
   | "cancel_material_batch"
+  | "submission_options"
+  | "prepare_submission"
   | "templates"
   | "register_template"
   | "fill_template";

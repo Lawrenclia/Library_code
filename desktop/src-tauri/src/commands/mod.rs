@@ -5,6 +5,7 @@ pub mod material_batches;
 pub mod materials;
 pub mod models;
 pub mod sources;
+pub mod submission;
 pub mod tasks;
 pub mod workspace;
 

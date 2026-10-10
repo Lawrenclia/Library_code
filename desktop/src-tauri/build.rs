@@ -33,6 +33,8 @@ fn main() {
             "prepare_material_batch",
             "resume_material_batch",
             "cancel_material_batch",
+            "submission_options",
+            "prepare_submission",
             "browser_result",
         ]),
     ))

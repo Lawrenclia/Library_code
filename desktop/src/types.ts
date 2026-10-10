@@ -326,6 +326,35 @@ export interface MaterialProblem {
   reason: string;
   rule_source: string;
 }
+export interface SubmissionPrepared {
+  packet: {
+    id: string;
+    sa_id: string;
+    channel: string;
+    channel_label: string;
+    work_type: string | null;
+    organisation: string;
+    instructions: string;
+    material: { path: string; sha256: string; kind: string; audit: string };
+  };
+  task_revision: number;
+  can_upload: boolean;
+  issues: Failure[];
+}
+export interface SubmissionOptions {
+  sa_id: string;
+  task_revision: number;
+  choices: {
+    recipe: string;
+    kind: string;
+    path: string;
+    sha256: string;
+    usable: boolean;
+    issue: Failure | null;
+    validation?: MaterialValidation;
+  }[];
+  prepared: SubmissionPrepared | null;
+}
 export interface MaterialValidation {
   path: string;
   task_revision?: number;

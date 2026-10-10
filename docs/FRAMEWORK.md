@@ -49,6 +49,7 @@ flowchart TD
 | 存储与恢复 | `core/src/store.rs`、`queue.rs`、`download.rs`、`versions.rs`、`legacy.rs`：事务、原始意图、输入、回执和恢复条件 |
 | 文件、模板、AI | `core/src/files.rs`、`source_files.rs`、`templates.rs`、`template_rules.rs`、`catalog.rs` 与 `src-tauri/src/ai.rs`：原文件接入、Excel、实际模板规则、渠道和 API 引用验证 |
 | 批量材料 | `core/src/materials.rs`、`material_batch.rs`、`commands/material_batches.rs` 与 `MaterialBatchPanel.vue`：冻结零匹配范围、原始导出优先、模板产品、来源与文件回执、暂停恢复 |
+| 提交准备 | `core/src/submission.rs`、`commands/submission.rs` 与 `SubmissionMaterial.vue`：本篇材料选择、渠道/机构/说明、来源版本绑定、业务前置条件与现有 WOS 写入边界衔接；新增代码暂未验证 |
 | 前端服务 | `src/services/desktop.ts`：闭合的本地命令类型；`composables/useWorkbench.ts`：任务、表单、确认和事件 |
 | 前端页面 | `WorkflowOverview.vue`：流程、来源能力、连接与实时数量；`App.vue`：任务详情、材料与设置；`TaskTable.vue`、`WorkbenchShell.vue`：列表和导航 |
 
@@ -77,6 +78,14 @@ flowchart TD
 `materials/products/<recipe SHA256>` 中的 `intent.json`、`prepared.json`、产品和 `来源.json` 分别记录冻结事实、发布前回执、原字节/模板结果和完整字段来源。发布前复查资料、实际模板与验证结论；恢复时检查原回执、哈希及实际填写单元格。未填写的可选列也清空示例值。发布后游标更新前退出，可以复用同一文件和保存审计，不生成第二份或重复增加证据；被修改的产品、来源记录或回执保留并拒绝采纳。
 
 批次退出或完成时生成 `materials/batches/<批次 ID>/材料与来源.xlsx`。材料文件索引包含原行号、题名、类型、文件与回执路径、哈希、缺项、格式问题、待核对要求和失败原因；完整原范围与结果按 15000 字符分段并附完整 SHA256。全局来源报告同时保留全部历史材料范围。整理不调用 API、不发送平台写入、不提升业务阶段；原始导出、字段通过和草稿都仍需后续业务核对。这里验证的是核心数据库/文件重开恢复及隔离前端，尚未宣称材料批次已通过完整原生程序强制退出测试。
+
+### 本篇提交材料准备（代码阶段，暂未验证）
+
+新增本地 `submission_options` 和 `prepare_submission` IPC，在论文的“平台操作”页明确选择材料。已核验 Artifact 可以直接准备当前版本的原始材料副本；已生成模板依据 `material_validation` 产品审计选择，旧版本、草稿、改动文件或缺失来源不能当作可提交材料。选择结果包括完整原名单、输入/来源/建议版本、产品回执与文件哈希、渠道、成果类型建议、所属机构和 `SA补充-<SA ID>` 导入说明。
+
+提交准备记录作为 `submission_packet_v1` 保存到原任务证据，与任务保存共用事务；最新一份准备记录是后续选择依据，不建立第二套上传状态。它不进入 AI 原文来源，避免准备记录反过来充当自身的事实证据。界面可刷新当前可用材料、明确选择文件、查看完整文件/来源位置及仍缺少的业务条件。后端按当前资料版本核对，任务切换或版本更新后前端不沿用旧选择。
+
+准备只生成本地交接记录，不上传或提升阶段。WOS TXT 的现有上传边界核对所选材料与当前 Artifact；原准备记录一并归入平台写入意图，上传仍执行本库重查和 SA 回读。通用模板对应 `general` 渠道，页面驱动未接通时明确返回待接入条件；生成 Excel 和字段通过都不当作平台已接收。按用户要求本阶段没有运行测试、类型检查或安装包构建，也未读取到真实机构导入窗口；本层的编译、交互和恢复均待后续验证。
 
 ### 原始文件接入
 

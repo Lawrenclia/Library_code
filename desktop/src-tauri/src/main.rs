@@ -73,6 +73,8 @@ fn main() {
             commands::material_batches::prepare_material_batch,
             commands::material_batches::resume_material_batch,
             commands::material_batches::cancel_material_batch,
+            commands::submission::submission_options,
+            commands::submission::prepare_submission,
             commands::browsers::browser_result
         ])
         .run(tauri::generate_context!())
