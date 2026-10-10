@@ -34,6 +34,28 @@ fn setup() -> (tempfile::TempDir, Store) {
         .unwrap();
     (dir, store)
 }
+// Cursor tests must also supply an actual archived/parsed source before a
+// successful outcome; a string label alone is no longer a download receipt.
+fn saved_download(store: &Store, id: &str) {
+    let raw = b"TI\tAU\tAF\tSO\tPY\tC1\tUT\tDI\r\nPaper\tTest, A\tAlice Test\tJournal\t2026\tShanghai Jiao Tong Univ\tWOS:000123456789012\t10.1234/test\r\n";
+    let mut task = store.task(id).unwrap();
+    task.artifact = Some(Artifact {
+        path: files::archive(&store.root, raw)
+            .unwrap()
+            .to_string_lossy()
+            .into(),
+        source: "WOS".into(),
+        record_url: "https://webofscience.clarivate.cn/wos/woscc/full-record/WOS:000123456789012"
+            .into(),
+        downloaded: 1,
+        candidate: files::parse_wos(raw).unwrap(),
+        identity_confirmed: true,
+    });
+    files::ensure_metadata_evidence(&mut task).unwrap();
+    task.stage = Stage::Downloaded;
+    task.running = false;
+    store.save(&mut task, "fixture_actual_download").unwrap();
+}
 #[test]
 fn scope_order_and_history_are_frozen_until_explicitly_cancelled() {
     let (_dir, store) = setup();
@@ -102,6 +124,7 @@ fn ordinary_failures_commit_with_cursor_and_do_not_stop_after_three() {
         .outcomes
         .iter()
         .all(|o| o.error.as_ref().unwrap().code == "NO_RESULT"));
+    saved_download(&reopened, "3");
     reopened
         .finish_download_target(&q.id, "3", "downloaded", None, None)
         .unwrap();
@@ -117,6 +140,7 @@ fn ordinary_failures_commit_with_cursor_and_do_not_stop_after_three() {
 fn channel_failure_retains_current_target_after_restart() {
     let (dir, store) = setup();
     let q = store.start_download_queue("one", false).unwrap();
+    saved_download(&store, "a");
     store
         .finish_download_target(&q.id, "a", "downloaded", None, None)
         .unwrap();
@@ -164,6 +188,7 @@ fn pause_during_current_result_stops_before_next_target() {
     let (_dir, store) = setup();
     let q = store.start_download_queue("one", false).unwrap();
     store.request_download_pause().unwrap();
+    saved_download(&store, "a");
     store
         .finish_download_target(&q.id, "a", "downloaded", None, None)
         .unwrap();
@@ -175,6 +200,7 @@ fn pause_during_current_result_stops_before_next_target() {
         .is_err());
     store.resume_download_queue(&q.id).unwrap();
     store.request_download_pause().unwrap();
+    saved_download(&store, "d");
     store
         .finish_download_target(&q.id, "d", "downloaded", None, None)
         .unwrap();
@@ -401,4 +427,248 @@ fn report_retains_cancelled_scope_original_fields_and_long_failure_without_trunc
     assert!(sheet
         .rows()
         .any(|r| r[0].to_string() == queues[1].id && r[2].to_string() == "跳过论文"));
+}
+#[test]
+fn late_download_failure_preserves_advanced_platform_stages_and_full_original_error() {
+    for stage in [
+        Stage::Uploaded,
+        Stage::Imported,
+        Stage::Pushed,
+        Stage::Claimed,
+        Stage::Completed,
+        Stage::Unknown,
+    ] {
+        let (dir, store) = setup();
+        let q = store.start_download_queue("one", false).unwrap();
+        let mut advanced = store.task("a").unwrap();
+        advanced.stage = stage.clone();
+        advanced.record.done = stage == Stage::Completed;
+        advanced.platform_id = "existing-platform-item".into();
+        store
+            .save(&mut advanced, "fixture_platform_advanced")
+            .unwrap();
+        let before = serde_json::to_value(&advanced).unwrap();
+        let actual = Failure::new("PAGE_TIMEOUT", "original search response arrived late");
+        let outcome = store
+            .record_download_failure(&q.id, "a", actual.clone())
+            .unwrap();
+        assert_eq!(outcome.cursor, 1);
+        assert_eq!(outcome.status, QueueStatus::Running);
+        assert_eq!(outcome.outcomes[0].status, "scope_changed");
+        assert_eq!(
+            outcome.outcomes[0].error.as_ref().unwrap().message,
+            actual.message
+        );
+        assert_eq!(
+            outcome.outcomes[0].scope_error.as_ref().unwrap().code,
+            "QUEUE_TARGET_CHANGED"
+        );
+        assert_eq!(
+            serde_json::to_value(store.task("a").unwrap()).unwrap(),
+            before
+        );
+        let reopened = Store::new(dir.path()).unwrap();
+        reopened.recover().unwrap();
+        assert_eq!(
+            serde_json::to_value(reopened.task("a").unwrap()).unwrap(),
+            before
+        );
+        let saved = reopened.download_queue(&q.id).unwrap();
+        assert_eq!(saved.targets[0].input_hash, "input");
+        assert_eq!(
+            saved.outcomes[0].error.as_ref().unwrap().code,
+            "PAGE_TIMEOUT"
+        );
+    }
+}
+#[test]
+fn raw_failure_update_cannot_replace_metadata_review_or_platform_identity() {
+    let (_dir, store) = setup();
+    let q = store.start_download_queue("one", false).unwrap();
+    let original = store.task("a").unwrap();
+    let error = Failure::new("NO_RESULT", "actual zero results");
+    let mut forged = original.clone();
+    forged.stage = Stage::AwaitingReview;
+    forged.last_error = Some(error.clone());
+    forged.platform_id = "invented-new-id".into();
+    assert_eq!(
+        store
+            .finish_download_target(&q.id, "a", "review", Some(error.clone()), Some(&mut forged))
+            .unwrap_err()
+            .code,
+        "QUEUE_TARGET_CHANGED"
+    );
+    assert!(store
+        .block_download_queue(&q.id, error, Some(&mut forged))
+        .is_err());
+    assert_eq!(store.download_queue(&q.id).unwrap().cursor, 0);
+    assert!(store.download_queue(&q.id).unwrap().outcomes.is_empty());
+    assert_eq!(
+        serde_json::to_value(store.task("a").unwrap()).unwrap(),
+        serde_json::to_value(original).unwrap()
+    );
+}
+#[test]
+fn original_failure_and_roster_conflict_survive_restart_without_overwriting_task_or_wrong_cursor() {
+    let (dir, store) = setup();
+    let q = store.start_download_queue("one", false).unwrap();
+    let mut incoming = store.task("a").unwrap().record;
+    incoming.title = "Changed roster title".into();
+    store.import(vec![incoming], "new-input".into()).unwrap();
+    let before = serde_json::to_value(store.task("a").unwrap()).unwrap();
+    let saved = store
+        .record_download_failure(
+            &q.id,
+            "a",
+            Failure::new("AUTH_REQUIRED", "real original access failure"),
+        )
+        .unwrap();
+    assert_eq!(saved.status, QueueStatus::Blocked);
+    assert_eq!(saved.cursor, 1);
+    assert_eq!(saved.targets[saved.cursor].id, "d");
+    assert_eq!(saved.outcomes[0].status, "scope_changed");
+    assert_eq!(
+        serde_json::to_value(store.task("a").unwrap()).unwrap(),
+        before
+    );
+    let reopened = Store::new(dir.path()).unwrap();
+    reopened.recover().unwrap();
+    reopened.resume_download_queue(&q.id).unwrap();
+    assert_eq!(
+        reopened
+            .record_download_failure(
+                &q.id,
+                "a",
+                Failure::new("NO_RESULT", "late duplicate callback")
+            )
+            .unwrap_err()
+            .code,
+        "QUEUE_CHANGED"
+    );
+    assert!(reopened.task("d").unwrap().last_error.is_none());
+    assert_eq!(reopened.download_queue(&q.id).unwrap().cursor, 1);
+    let (tasks, queues) = reopened.report_snapshot().unwrap();
+    let path = dir.path().join("failure-scope-report.xlsx");
+    files::export_report_with_queues(&tasks, &queues, &path).unwrap();
+    use calamine::{open_workbook_auto, Reader};
+    let mut book = open_workbook_auto(path).unwrap();
+    let sheet = book.worksheet_range("下载队列结果").unwrap();
+    let full = sheet
+        .rows()
+        .skip(1)
+        .filter(|r| r[0].to_string() == q.id && r[5].to_string() == "a")
+        .map(|r| r[14].to_string())
+        .collect::<String>();
+    let audit: serde_json::Value = serde_json::from_str(&full).unwrap();
+    assert_eq!(audit["outcome"]["error"]["code"], "AUTH_REQUIRED");
+    assert_eq!(
+        audit["outcome"]["scope_error"]["code"],
+        "QUEUE_TARGET_CHANGED"
+    );
+    assert_eq!(audit["target"]["record"]["title"], "Paper");
+}
+#[test]
+fn completion_requires_actual_archive_full_fields_and_no_unconfirmed_native_receipt() {
+    let (_dir, store) = setup();
+    let q = store.start_download_queue("one", false).unwrap();
+    assert_eq!(
+        store
+            .finish_download_target(&q.id, "a", "downloaded", None, None)
+            .unwrap_err()
+            .code,
+        "DOWNLOAD_RESULT_UNKNOWN"
+    );
+    saved_download(&store, "a");
+    let mut original = store.task("a").unwrap();
+    let before = original.revision;
+    let mut forged = original.clone();
+    forged.artifact.as_mut().unwrap().candidate.authors = "forged cached authors".into();
+    store
+        .save(&mut forged, "fixture_changed_cached_fields")
+        .unwrap();
+    assert_eq!(
+        store
+            .finish_download_target(&q.id, "a", "downloaded", None, None)
+            .unwrap_err()
+            .code,
+        "FILE_INVALID"
+    );
+    original.revision = forged.revision;
+    original.stage = Stage::Downloading;
+    original.running = true;
+    store.save(&mut original, "fixture_native_pending").unwrap();
+    let receipt = store
+        .prepare_native_download(&original, &original.artifact.as_ref().unwrap().record_url)
+        .unwrap();
+    original.stage = Stage::Downloaded;
+    original.running = false;
+    store
+        .save(&mut original, "fixture_existing_file_and_pending_receipt")
+        .unwrap();
+    assert_eq!(
+        store
+            .finish_download_target(&q.id, "a", "downloaded", None, None)
+            .unwrap_err()
+            .code,
+        "DOWNLOAD_RESULT_UNKNOWN"
+    );
+    store.abandon_unrequested_download(&receipt.id).unwrap();
+    store
+        .finish_download_target(&q.id, "a", "downloaded", None, None)
+        .unwrap();
+    assert_eq!(store.download_queue(&q.id).unwrap().cursor, 1);
+    assert_eq!(store.task("a").unwrap().revision, original.revision);
+    assert!(original.revision > before);
+}
+#[test]
+fn atomic_failure_entry_keeps_ordinary_failures_running_and_channel_failure_at_original_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path()).unwrap();
+    store
+        .import(
+            (0..4)
+                .map(|i| record(&i.to_string(), "one", false))
+                .collect(),
+            "input".into(),
+        )
+        .unwrap();
+    let q = store.start_download_queue("one", false).unwrap();
+    for i in 0..3 {
+        let id = i.to_string();
+        let updated = store
+            .record_download_failure(&q.id, &id, Failure::new("NO_RESULT", "actual zero result"))
+            .unwrap();
+        assert_eq!(updated.status, QueueStatus::Running);
+        assert_eq!(updated.cursor, i + 1);
+        let task = store.task(&id).unwrap();
+        assert_eq!(task.stage, Stage::AwaitingReview);
+        let audit: serde_json::Value =
+            serde_json::from_str(&task.evidence.last().unwrap().text).unwrap();
+        assert_eq!(audit["target"]["input_hash"], "input");
+        assert_eq!(audit["target"]["id"], id);
+    }
+    let blocked = store
+        .record_download_failure(
+            &q.id,
+            "3",
+            Failure::new("AUTH_REQUIRED", "channel unavailable"),
+        )
+        .unwrap();
+    assert_eq!(blocked.status, QueueStatus::Blocked);
+    assert_eq!(blocked.cursor, 3);
+    let reopened = Store::new(dir.path()).unwrap();
+    reopened.recover().unwrap();
+    assert_eq!(
+        reopened.download_queue(&q.id).unwrap().status,
+        QueueStatus::Blocked
+    );
+    reopened.resume_download_queue(&q.id).unwrap();
+    saved_download(&reopened, "3");
+    reopened
+        .finish_download_target(&q.id, "3", "downloaded", None, None)
+        .unwrap();
+    assert_eq!(
+        reopened.download_queue(&q.id).unwrap().status,
+        QueueStatus::Completed
+    );
 }

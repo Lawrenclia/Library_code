@@ -304,6 +304,7 @@ export interface DownloadQueue {
     id: string;
     status: string;
     error: { code: string; message: string } | null;
+    scope_error?: Failure | null;
     finished: number;
   }[];
   pause_requested: boolean;

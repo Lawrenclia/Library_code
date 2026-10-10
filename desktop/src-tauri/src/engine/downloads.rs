@@ -208,40 +208,26 @@ impl Engine {
                         self.store.pause_download_queue(queue_id)?;
                         break;
                     }
-                    self.store
-                        .finish_download_target(queue_id, id, "downloaded", None, None)?;
+                    if let Err(error) =
+                        self.store
+                            .finish_download_target(queue_id, id, "downloaded", None, None)
+                    {
+                        // A file may change after the native callback. An ordinary
+                        // validation failure still belongs to this one target;
+                        // scope changes must preserve the newer business state.
+                        let saved = self.store.record_download_failure(queue_id, id, error)?;
+                        if saved.status == queue::QueueStatus::Blocked {
+                            self.pause.store(true, Ordering::SeqCst);
+                            break;
+                        }
+                    }
                 }
                 Err(error) => {
-                    let mut t = self.store.task(id)?;
-                    t.running = false;
-                    t.last_error = Some(error.clone());
-                    t.stage = Stage::AwaitingReview;
-                    t.evidence.push(Evidence {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        kind: "search_result".into(),
-                        source: "WOS".into(),
-                        text: json!({"error":error,"queue_id":queue_id,
-                            "input_fingerprint":target.fingerprint,"target":t.record})
-                        .to_string(),
-                        created: now(),
-                    });
-                    if error.channel()
-                        || matches!(error.code.as_str(), "REMOTE_RESULT_UNKNOWN" | "BUSY")
-                    {
-                        self.store
-                            .block_download_queue(queue_id, error, Some(&mut t))?;
+                    let saved = self.store.record_download_failure(queue_id, id, error)?;
+                    if saved.status == queue::QueueStatus::Blocked {
                         self.pause.store(true, Ordering::SeqCst);
                         break;
                     }
-                    // Task failure and cursor advance commit together. A restart
-                    // never re-runs already recorded zero/ambiguous outcomes.
-                    self.store.finish_download_target(
-                        queue_id,
-                        id,
-                        "review",
-                        Some(error),
-                        Some(&mut t),
-                    )?;
                 }
             }
             self.changed(app);

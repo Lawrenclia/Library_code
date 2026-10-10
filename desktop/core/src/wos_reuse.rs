@@ -141,8 +141,11 @@ impl Store {
         }
         checked(&task.record, task.artifact.as_ref().unwrap())?;
         let restored_evidence = files::ensure_metadata_evidence(&mut task)?;
-        let interrupted =
-            task.running || matches!(task.stage, Stage::Searching | Stage::Downloading);
+        let interrupted = task.running
+            || matches!(
+                task.stage,
+                Stage::Pending | Stage::Searching | Stage::Downloading
+            );
         if reused || interrupted {
             task.running = false;
             task.stage = Stage::Downloaded;

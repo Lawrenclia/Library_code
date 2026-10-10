@@ -559,8 +559,13 @@ function frameworkBrowser(role: string, entry?: string) {
                   ? "文件已保存"
                   : result.status === "not_executed"
                     ? "任务变化，未执行"
-                    : "待核验"
+                    : result.status === "scope_changed"
+                      ? "任务已变化，结果未采用"
+                      : "待核验"
               }}<span v-if="result.error"> · {{ result.error.message }}</span>
+              <span v-if="result.scope_error">
+                · {{ result.scope_error.message }}</span
+              >
             </li>
           </ul>
         </details>

@@ -1,6 +1,6 @@
 //! Frozen download scope and durable progress. This queue never submits imports.
 use crate::{now, Failure, Record, Result, Route, Stage, Store, Task};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -44,6 +44,8 @@ pub struct QueueOutcome {
     pub id: String,
     pub status: String,
     pub error: Option<Failure>,
+    #[serde(default)]
+    pub scope_error: Option<Failure>,
     pub finished: u64,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +141,106 @@ fn current_target(queue: &DownloadQueue, id: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+fn guarded_task(tx: &Connection, queue: &DownloadQueue) -> Result<Task> {
+    let target = queue
+        .targets
+        .get(queue.cursor)
+        .ok_or_else(|| Failure::new("QUEUE_CHANGED", "队列原范围位置变化。"))?;
+    let task: Task = serde_json::from_str(&tx.query_row::<String, _, _>(
+        "SELECT data FROM tasks WHERE id=?",
+        [&target.id],
+        |r| r.get(0),
+    )?)?;
+    let fenced: u32 = tx.query_row(
+        "SELECT (SELECT count(*) FROM pending_inputs WHERE task_id=?1)+(SELECT count(*) FROM attempts WHERE task_id=?1 AND state IN ('intent','unknown'))",
+        [&target.id], |r| r.get(0),
+    )?;
+    if !target.matches_task(&task)
+        || fenced > 0
+        || task.record.done
+        || task.record.matches != 0
+        || task.record.owner != queue.owner
+        || !matches!(task.route, Route::ZeroReview | Route::Missing)
+        || !matches!(
+            task.stage,
+            Stage::Pending
+                | Stage::Searching
+                | Stage::Downloading
+                | Stage::Downloaded
+                | Stage::Ready
+                | Stage::AwaitingReview
+        )
+        || task
+            .last_error
+            .as_ref()
+            .is_some_and(|e| e.code == "INPUT_CHANGED")
+    {
+        return Err(Failure::new(
+            "QUEUE_TARGET_CHANGED",
+            "执行期间任务名单、业务分支或平台阶段变化；仅保留原队列结果，不覆盖当前任务。",
+        ));
+    }
+    Ok(task)
+}
+fn save_failure(
+    tx: &Transaction<'_>,
+    queue: &DownloadQueue,
+    proposed: &Task,
+    error: &Failure,
+) -> Result<Task> {
+    current_target(queue, &proposed.id)?;
+    let current = guarded_task(tx, queue)?;
+    if proposed.revision != current.revision {
+        return Err(Failure::new(
+            "TASK_CHANGED",
+            "失败回写前任务修订已变化，未覆盖任务或推进队列。",
+        ));
+    }
+    // Failure may add search audit and show an error. It cannot modify roster,
+    // artifact, classification, review, platform IDs, issue decisions or history.
+    let mut preserved = proposed.clone();
+    preserved.stage = current.stage.clone();
+    preserved.running = current.running;
+    preserved.last_error = current.last_error.clone();
+    preserved.evidence = current.evidence.clone();
+    let expected_stage = if matches!(current.stage, Stage::Downloaded | Stage::Ready) {
+        current.stage.clone()
+    } else {
+        Stage::AwaitingReview
+    };
+    if serde_json::to_value(&preserved)? != serde_json::to_value(&current)?
+        || proposed.running
+        || proposed.stage != expected_stage
+        || serde_json::to_value(&proposed.last_error)? != serde_json::to_value(Some(error))?
+        || proposed.evidence.len() < current.evidence.len()
+        || serde_json::to_value(&proposed.evidence[..current.evidence.len()])?
+            != serde_json::to_value(&current.evidence)?
+        || proposed.evidence[current.evidence.len()..]
+            .iter()
+            .any(|e| e.kind != "search_result")
+    {
+        return Err(Failure::new(
+            "QUEUE_TARGET_CHANGED",
+            "下载失败载荷包含其他任务状态变化，未覆盖当前任务。",
+        ));
+    }
+    Store::write_task(tx, proposed, "search_failed")
+}
+fn advance(queue: &mut DownloadQueue, channel_blocked: bool) {
+    queue.cursor += 1;
+    queue.status = if queue.cursor == queue.targets.len() {
+        QueueStatus::Completed
+    } else if channel_blocked {
+        QueueStatus::Blocked
+    } else if queue.pause_requested {
+        QueueStatus::Paused
+    } else {
+        QueueStatus::Running
+    };
+}
+fn blocks_download_channel(error: &Failure) -> bool {
+    error.channel() || matches!(error.code.as_str(), "REMOTE_RESULT_UNKNOWN" | "BUSY")
 }
 impl Store {
     /// A consistent read-only view for the task/source/queue Excel report.
@@ -350,13 +452,7 @@ impl Store {
         }
         let saved = if let Some(t) = task.as_deref() {
             current_target(&queue, &t.id)?;
-            if !queue.targets[queue.cursor].matches_task(t) {
-                return Err(Failure::new(
-                    "QUEUE_TARGET_CHANGED",
-                    "原下载队列与当前名单版本不一致，未覆盖任务；请核对原范围。",
-                ));
-            }
-            Some(Self::write_task(&tx, t, "search_failed")?)
+            Some(save_failure(&tx, &queue, t, &error)?)
         } else {
             None
         };
@@ -384,17 +480,66 @@ impl Store {
         let tx = db.transaction()?;
         let mut queue = read_queue(&tx, id)?;
         current_target(&queue, target_id)?;
+        if status == "downloaded" {
+            if error.is_some() || task.is_some() {
+                return Err(Failure::new(
+                    "FILE_INVALID",
+                    "成功下载结果不能同时携带失败或替换任务载荷。",
+                ));
+            }
+            let current = guarded_task(&tx, &queue)?;
+            let pending: u32 = tx.query_row(
+                "SELECT count(*) FROM native_downloads WHERE task_id=? AND state IN ('armed','requested','completed')",
+                [target_id], |r| r.get(0),
+            )?;
+            if current.running
+                || !matches!(
+                    current.stage,
+                    Stage::Downloaded | Stage::Ready | Stage::AwaitingReview
+                )
+                || current.artifact.is_none()
+                || pending > 0
+            {
+                return Err(Failure::new(
+                    "DOWNLOAD_RESULT_UNKNOWN",
+                    "没有已归档并核验的原文件，或原下载仍待确认；未记成功或推进队列。",
+                ));
+            }
+            crate::files::read_metadata_candidate(&current)?;
+            if crate::files::verified_metadata_ids(&current)?.is_empty() {
+                return Err(Failure::new(
+                    "EVIDENCE_REQUIRED",
+                    "原始文件缺少完整来源记录，未记下载成功。",
+                ));
+            }
+        }
+        if status == "review" && task.is_none() {
+            guarded_task(&tx, &queue)?;
+            if error.is_none() {
+                return Err(Failure::new(
+                    "INPUT_INVALID",
+                    "待核验结果缺少实际检索错误。",
+                ));
+            }
+        }
         let saved = if let Some(t) = task.as_deref() {
             if t.id != target_id {
                 return Err(Failure::new("QUEUE_CHANGED", "队列与任务不一致。"));
             }
-            if !queue.targets[queue.cursor].matches_task(t) {
+            if status != "review" {
                 return Err(Failure::new(
-                    "QUEUE_TARGET_CHANGED",
-                    "逐篇结果不属于原队列名单版本，未覆盖当前任务或推进队列。",
+                    "INPUT_INVALID",
+                    "未执行结果不能回写失败任务。",
                 ));
             }
-            Some(Self::write_task(&tx, t, "search_failed")?)
+            Some(save_failure(
+                &tx,
+                &queue,
+                t,
+                error
+                    .as_ref()
+                    .ok_or_else(|| Failure::new("INPUT_INVALID", "失败回写缺少实际错误。"))?,
+            )?)
         } else {
             None
         };
@@ -402,23 +547,82 @@ impl Store {
             id: target_id.into(),
             status: status.into(),
             error,
+            scope_error: None,
             finished: now(),
         });
-        queue.cursor += 1;
         queue.last_error = None;
-        queue.status = if queue.cursor == queue.targets.len() {
-            QueueStatus::Completed
-        } else if queue.pause_requested {
-            QueueStatus::Paused
-        } else {
-            QueueStatus::Running
-        };
+        advance(&mut queue, false);
         save_queue(&tx, &mut queue, "queue_target_finished")?;
         tx.commit()?;
         if let (Some(t), Some(next)) = (task, saved) {
             *t = next;
         }
         Ok(())
+    }
+    /// The live callback passes the original queue/target and actual error.
+    /// Current business state is reread in this single transaction.
+    pub fn record_download_failure(
+        &self,
+        id: &str,
+        target_id: &str,
+        error: Failure,
+    ) -> Result<DownloadQueue> {
+        let mut db = self.connect()?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut queue = read_queue(&tx, id)?;
+        current_target(&queue, target_id)?;
+        let target = queue
+            .targets
+            .get(queue.cursor)
+            .cloned()
+            .ok_or_else(|| Failure::new("QUEUE_CHANGED", "下载失败不对应原范围位置。"))?;
+        let blocked = blocks_download_channel(&error);
+        match guarded_task(&tx, &queue) {
+            Ok(mut task) => {
+                if !matches!(task.stage, Stage::Downloaded | Stage::Ready) {
+                    task.stage = Stage::AwaitingReview;
+                }
+                task.running = false;
+                task.last_error = Some(error.clone());
+                task.evidence.push(crate::Evidence {
+                    id: uuid::Uuid::new_v4().to_string(), kind: "search_result".into(), source: "WOS".into(),
+                    text: json!({"schema":"download_failure_v1","queue_id":queue.id,"target":target,
+                        "error":error,"current_revision":task.revision,"input_hash":task.input_hash}).to_string(),
+                    created: now(),
+                });
+                save_failure(&tx, &queue, &task, &error)?;
+                queue.last_error = if blocked { Some(error.clone()) } else { None };
+                if blocked {
+                    queue.status = QueueStatus::Blocked;
+                } else {
+                    queue.outcomes.push(QueueOutcome {
+                        id: target.id,
+                        status: "review".into(),
+                        error: Some(error.clone()),
+                        scope_error: None,
+                        finished: now(),
+                    });
+                    advance(&mut queue, false);
+                }
+            }
+            Err(scope) if scope.code == "QUEUE_TARGET_CHANGED" => {
+                // The search may actually have been sent. This is not labelled
+                // 'not executed', and both original error and scope conflict survive.
+                queue.outcomes.push(QueueOutcome {
+                    id: target.id,
+                    status: "scope_changed".into(),
+                    error: Some(error.clone()),
+                    scope_error: Some(scope),
+                    finished: now(),
+                });
+                queue.last_error = if blocked { Some(error.clone()) } else { None };
+                advance(&mut queue, blocked);
+            }
+            Err(other) => return Err(other),
+        }
+        save_queue(&tx, &mut queue, "queue_failure_recorded")?;
+        tx.commit()?;
+        Ok(queue)
     }
     pub(crate) fn recover_download_queue(&self) -> Result<()> {
         let mut db = self.connect()?;
