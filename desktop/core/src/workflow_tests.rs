@@ -165,6 +165,25 @@ fn upload_recovery_requires_original_task_file_and_success_receipt() {
         "filename":"SA-WOS-sa1.txt","size":14,"dataset_label":"上海交通大学","dataset_id":"institution1",
         "server_name":"original-object.txt","response":{"success":true,"data":{"name":"original-object.txt"}}});
     validate_upload_readback(&result, &payload, 14).unwrap();
+    // Newly created intents pin the original length as well as SHA; old intents
+    // remain recoverable only through the same complete live upload receipt.
+    let mut pinned = payload.clone();
+    pinned["content_size"] = json!(14);
+    validate_upload_readback(&result, &pinned, 14).unwrap();
+    for size in [json!(0), json!(15), json!(-1), json!("14"), json!(null)] {
+        pinned["content_size"] = size;
+        assert_eq!(
+            validate_upload_readback(&result, &pinned, 14)
+                .unwrap_err()
+                .code,
+            "REMOTE_RESULT_UNKNOWN"
+        );
+    }
+    let old_marker = json!({"uploaded":true,"sha256":"a".repeat(64),"dataset_id":"institution1","filename":"SA-WOS-sa1.txt"});
+    assert!(
+        validate_upload_readback(&old_marker, &payload, 14).is_err(),
+        "a small success marker must be read back before import"
+    );
     for (key, value) in [
         ("verified", json!(false)),
         ("uploaded", json!(false)),

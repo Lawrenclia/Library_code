@@ -186,13 +186,11 @@ impl Engine {
                         ));
                     }
                 }
-                let raw = std::fs::read(&artifact.path)?;
-                if hash(&raw) != artifact.candidate.sha256 {
-                    return Err(Failure::new("FILE_INVALID", "归档文件已变化。"));
-                }
+                let raw = files::read_import_archive(&t, &common)?;
                 let mut p = common;
                 p["submission_packet"] =
                     serde_json::to_value(library_core::submission::current(&self.store, id)?)?;
+                p["content_size"] = json!(raw.len());
                 p["content"] = base64::engine::general_purpose::STANDARD.encode(raw).into();
                 p["contentSha"] = artifact.candidate.sha256.clone().into();
                 ("import", p, Stage::Uploaded)
@@ -204,6 +202,11 @@ impl Engine {
                 }
                 let mut p = common;
                 p["upload"] = t.batch.clone().unwrap_or(Value::Null);
+                let raw = files::read_import_archive(&t, &p)?;
+                p["contentSha"] = t.artifact.as_ref().unwrap().candidate.sha256.clone().into();
+                p["content_size"] = json!(raw.len());
+                validate_upload_readback(&p["upload"], &p, raw.len())?;
+                p["content"] = base64::engine::general_purpose::STANDARD.encode(raw).into();
                 ("import", p, Stage::Unknown)
             }
             "import_push" => {
@@ -395,25 +398,26 @@ impl Engine {
                     self.changed(app);
                     return Err(t.last_error.unwrap());
                 }
-                if action == "import_upload"
-                    && (d["uploaded"] != true
-                        || d["sha256"] != t.artifact.as_ref().unwrap().candidate.sha256)
-                {
-                    t.running = false;
-                    t.stage = Stage::Unknown;
-                    t.last_error = Some(Failure::new(
-                        "REMOTE_RESULT_UNKNOWN",
-                        "上传结果不一致，需要核验。",
-                    ));
-                    self.store.finish_attempt(
-                        &mut t,
-                        &attempt,
-                        "unknown",
-                        d.clone(),
-                        "result_unknown",
-                    )?;
-                    self.changed(app);
-                    return Err(t.last_error.unwrap());
+                if action == "import_upload" {
+                    let checked = files::read_import_archive(&t, &audit)
+                        .and_then(|raw| validate_upload_readback(&d, &audit, raw.len()));
+                    if let Err(error) = checked {
+                        t.running = false;
+                        t.stage = Stage::Unknown;
+                        t.last_error = Some(Failure::new(
+                            "REMOTE_RESULT_UNKNOWN",
+                            format!("{}；上传结果待核验，不能重复提交。", error.message),
+                        ));
+                        self.store.finish_attempt(
+                            &mut t,
+                            &attempt,
+                            "unknown",
+                            d.clone(),
+                            "result_unknown",
+                        )?;
+                        self.changed(app);
+                        return Err(t.last_error.unwrap());
+                    }
                 }
                 if action == "merge_duplicate" {
                     let checked = match self.read_sa(app, &mut t).await {

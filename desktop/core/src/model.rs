@@ -203,6 +203,8 @@ pub fn validate_upload_readback(result: &Value, payload: &Value, size: usize) ->
         || result["sha256"] != sha
         || result["filename"] != format!("SA-WOS-{sa_id}.txt")
         || result["size"].as_u64() != Some(size as u64)
+        || (payload.get("content_size").is_some()
+            && payload["content_size"].as_u64() != Some(size as u64))
         || size == 0
         || size > 524288
         || result["dataset_label"] != "上海交通大学"

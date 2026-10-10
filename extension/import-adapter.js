@@ -100,8 +100,11 @@ async function runImportCommand(command) {
       return items;
     };
     if(command.action==="import_scan")return {ok:true,data:{batches:await scan()}};
-    if(command.action==='import_check' && command.expect_upload===true) {
-      // Read the existing upload only. Never reopen a drawer, assign a file, or submit.
+    let uploadedReceiptStillCurrent=()=>false;
+    const readUploadedFile = async () => {
+      // One read-only receipt gate for the initial upload and later recovery.
+      // Never reopen a drawer, assign a file, or submit from this helper.
+      uploadedReceiptStillCurrent=()=>false;
       const state=drawer.__saImport;
       if(drawer.drawer && state?.sa_id===command.sa_id && state.submitted!==true){
         if(state.sha256!==candidate.sha256 || state.instructions!==command.instructions ||
@@ -136,10 +139,22 @@ async function runImportCommand(command) {
           fail('原上传字节或成功回执不一致，保持结果未知');
         // Restore only the page-side checkpoint used by the next explicit import.
         state.uploaded=true;state.serverName=file.response.data.name;
+        // Carry a local synchronous guard across the helper's promise boundary.
+        // These references never leave this command or enter the IPC receipt.
+        uploadedReceiptStillCurrent=()=>validForm() && state.uploaded===true &&
+          input.files?.length===1 && input.files[0]===originalFile &&
+          drawer.fileList.length===1 && drawer.fileList[0]===file && file.status==='success' &&
+          file.name===filename && file.size===bytes.length &&
+          JSON.stringify(file.response)===response && state.serverName===file.response.data.name;
         return {ok:true,data:{verified:true,uploaded:true,sa_id:command.sa_id,instructions:command.instructions,
           sha256:candidate.sha256,dataset_id:institution.id,dataset_label:tree.label,filename,size:bytes.length,
           server_name:state.serverName,response:JSON.parse(response)}};
       }
+      return null;
+    };
+    if(command.action==='import_check' && command.expect_upload===true) {
+      const upload=await readUploadedFile();
+      if(upload){if(!uploadedReceiptStillCurrent())fail('原上传回执返回前窗口变化，保持结果未知');return upload;}
       const batches=await scan();
       if(!batches.length)return {ok:false,code:'REMOTE_RESULT_UNKNOWN',submitted:false,
         error:'原上传窗口已关闭或重载，未找到可验证批次。保持结果未知，请人工核对平台，不重新上传。'};
@@ -175,7 +190,9 @@ async function runImportCommand(command) {
          file.response.success===false || (file.response.success!==true && file.response.code!==200))fail("上传响应未确认成功");
       drawer.__saImport.uploaded=true; drawer.__saImport.serverName=file.response.data.name;
       drawer.__saImport.datasetId=institution.id;
-      return {ok:true,data:{uploaded:true,sha256:candidate.sha256,dataset_id:institution.id,filename}};
+      const receipt=await readUploadedFile();
+      if(!receipt || !uploadedReceiptStillCurrent())fail('上传窗口已关闭或变化，结果待核验，不能重复上传');
+      return receipt;
     }
     if(command.action==="import_submit") {
       const state=drawer.__saImport;
@@ -183,8 +200,14 @@ async function runImportCommand(command) {
         drawer.form.datasetId!==state.datasetId || drawer.form.instructions!==command.instructions ||
         command.upload?.dataset_id!==state.datasetId || command.upload?.sha256!==state.sha256 || drawer.fileList.length!==1 ||
         drawer.fileList[0].response?.data?.name!==state.serverName)fail("上传窗口已变更/丢失或已提交，请人工核验");
+      const matchesUpload=receipt=>receipt?.data?.verified===true && drawer.__saImport===state && uploadedReceiptStillCurrent() &&
+        ['sa_id','instructions','filename','sha256','size','dataset_id','dataset_label','server_name']
+          .every(key=>receipt.data[key]===command.upload?.[key]);
+      if(!matchesUpload(await readUploadedFile()))fail('原上传回执与当前文件不一致，请先只读核验');
       if((await scan()).length)fail("提交前发现已有批次，停止重复导入");
       // Guard immediately after the asynchronous scan, not only before it.
+      // Reread actual File bytes as well as the saved server object; no second upload.
+      if(!matchesUpload(await readUploadedFile()))fail('扫描期间原上传文件或成功回执变化，未提交导入');
       if(!drawer.drawer || drawer.form.instructions!==command.instructions || drawer.form.datasetId!==state.datasetId ||
           drawer.fileList[0]?.response?.data?.name!==state.serverName)fail("扫描期间上传表单被修改");
       check();state.submitted=true;submitted=true;drawer.onSubmit();

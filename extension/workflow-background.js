@@ -108,7 +108,7 @@ async function dispatchWorkflow(command,pair) {
     return result;
   };
   if(role==="importTabId") {
-    if(command.action==="import_upload" || (command.action==='import_check'&&command.expect_upload===true)){
+    if(command.action==="import_upload" || command.action==="import_submit" || (command.action==='import_check'&&command.expect_upload===true)){
       if(typeof command.content!=="string" || command.content.length>700000)throw new Error("TXT 文件大小异常");
       const bytes=Uint8Array.from(atob(command.content),c=>c.charCodeAt(0));
       const hash=[...new Uint8Array(await crypto.subtle.digest("SHA-256",bytes))].map(x=>x.toString(16).padStart(2,"0")).join("");
