@@ -406,6 +406,21 @@ export interface SourceDownload {
 export interface SourceBrowserState {
   sites: SourceSite[];
   downloads: SourceDownload[];
+  windows?: SourceWindowState[];
+}
+export interface SourceWindowState {
+  label: string;
+  channel: string;
+  channel_label: string;
+  session_id: string;
+  input_hash: string;
+  current_record: boolean;
+  current_site: boolean;
+  title: string;
+  url: string | null;
+  popup: boolean;
+  downloading: boolean;
+  created: number;
 }
 export interface SourcePage {
   draft: SourceDraft;

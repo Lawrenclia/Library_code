@@ -23,6 +23,8 @@
     "allow-source-browser-state",
     "allow-save-source-site",
     "allow-open-source-browser",
+    "allow-focus-source-browser",
+    "allow-close-source-browser",
     "allow-preview-source-download",
     "allow-export-report",
     "allow-open-folder",

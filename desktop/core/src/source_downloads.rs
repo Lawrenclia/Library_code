@@ -145,6 +145,15 @@ impl Store {
             return Err(fail("先处理待确认版本或平台操作，再下载新来源。"));
         }
         let site = validate_site(session.site.clone())?;
+        let configured = self
+            .source_sites()?
+            .into_iter()
+            .find(|s| s.channel == site.channel);
+        if !configured.is_some_and(|current| json!(current) == json!(site)) {
+            return Err(fail(
+                "数据库入口或下载来源配置已变化，请按已保存配置重新打开本篇窗口。",
+            ));
+        }
         let page = web_url(page.as_str())?;
         let event_origin = if event.scheme() == "blob" {
             Url::parse(&event.as_str()[5..])

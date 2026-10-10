@@ -608,8 +608,15 @@ export function useWorkbench() {
     success = "操作已完成。",
   ): Promise<T | undefined> {
     const pausing = command === "pause_queue" || command === "pause_ai_queue";
-    if (pending.value && !pausing) return;
-    if (!pausing) pending.value = true;
+    const parallelControl =
+      pausing ||
+      [
+        "source_browser_state",
+        "focus_source_browser",
+        "close_source_browser",
+      ].includes(command);
+    if (pending.value && !parallelControl) return;
+    if (!parallelControl) pending.value = true;
     error.value = false;
     message.value = pausing ? "正在请求暂停…" : "正在执行，请保持工作页打开…";
     try {
@@ -626,7 +633,7 @@ export function useWorkbench() {
       error.value = true;
       message.value = describe(e);
     } finally {
-      if (!pausing) pending.value = false;
+      if (!parallelControl) pending.value = false;
       await refresh().catch(() => {});
     }
   }

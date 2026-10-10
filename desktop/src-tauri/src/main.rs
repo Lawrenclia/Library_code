@@ -62,6 +62,8 @@ fn main() {
             commands::source_browsers::source_browser_state,
             commands::source_browsers::save_source_site,
             commands::source_browsers::open_source_browser,
+            commands::source_browsers::focus_source_browser,
+            commands::source_browsers::close_source_browser,
             commands::source_browsers::preview_source_download,
             commands::workspace::export_report,
             commands::workspace::open_folder,

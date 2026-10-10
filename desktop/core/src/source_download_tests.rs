@@ -149,10 +149,17 @@ fn origin_configuration_is_idempotent_and_session_cannot_follow_a_changed_record
         .request_source_download(&session, &page, &event, Path::new("file.txt"))
         .is_err());
     let mut changed = store.task("s1").unwrap();
+    let mut saved = store.source_sites().unwrap().remove(0);
+    saved.entry_url = "https://example.org/new-search".into();
+    store.save_source_site(saved).unwrap();
+    assert!(store
+        .request_source_download(&session, &page, &event, Path::new("file.csv"))
+        .is_err());
+    let current_session = store.source_session("s1", "ei").unwrap();
     changed.record.staff_id = "002".into();
     store.save(&mut changed, "changed_input_fixture").unwrap();
     assert!(store
-        .request_source_download(&session, &page, &event, Path::new("file.csv"))
+        .request_source_download(&current_session, &page, &event, Path::new("file.csv"))
         .is_err());
     assert!(store.source_downloads("s1").unwrap().is_empty());
 }

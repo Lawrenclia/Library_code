@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   Task,
   SourceBrowserState,
   SourceDownload,
   SourcePage,
+  SourceWindowState,
 } from "@/types";
-import type { DesktopCommand } from "@/services/desktop";
+import { callDesktop, type DesktopCommand } from "@/services/desktop";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -26,6 +28,33 @@ const emit = defineEmits<{ preview: [page: SourcePage, url: string] }>();
 const state = ref<SourceBrowserState | null>(null),
   entry = ref(""),
   origins = ref("");
+const loading = ref(false),
+  windowAction = ref("");
+let queued = false,
+  resetQueued = false,
+  disposed = false;
+const windows = computed(() => state.value?.windows || []);
+const unlisteners: UnlistenFn[] = [];
+onMounted(() => {
+  for (const event of [
+    "source-windows-changed",
+    "source-download-started",
+    "source-download-event",
+  ]) {
+    void listen(event, () => {
+      if (state.value && !disposed) void load(false, true);
+    })
+      .then((unlisten) => {
+        if (disposed) unlisten();
+        else unlisteners.push(unlisten);
+      })
+      .catch(() => {});
+  }
+});
+onUnmounted(() => {
+  disposed = true;
+  unlisteners.forEach((unlisten) => unlisten());
+});
 const downloads = computed(
   () =>
     state.value?.downloads.filter(
@@ -55,19 +84,64 @@ watch(
     origins.value = "";
   },
 );
-async function load() {
+async function load(resetConfig = true, quiet = false) {
+  if (loading.value) {
+    queued = true;
+    resetQueued ||= resetConfig;
+    return;
+  }
+  loading.value = true;
   const id = props.task.id,
     channel = props.channel;
-  const result = await props.run<SourceBrowserState>(
-    "source_browser_state",
-    { id },
-    "已读取来源入口与原始下载记录。",
-  );
-  if (!result || props.task.id !== id || props.channel !== channel) return;
-  state.value = result;
-  const site = result.sites.find((s) => s.channel === channel);
-  entry.value = site?.entry_url || "";
-  origins.value = site?.download_origins.join("\n") || "";
+  try {
+    const result = quiet
+      ? await callDesktop<SourceBrowserState>("source_browser_state", {
+          id,
+        }).catch(() => undefined)
+      : await props.run<SourceBrowserState>(
+          "source_browser_state",
+          { id },
+          "已读取来源入口与原始下载记录。",
+        );
+    if (
+      !result ||
+      disposed ||
+      props.task.id !== id ||
+      props.channel !== channel
+    )
+      return;
+    state.value = result;
+    if (resetConfig) {
+      const site = result.sites.find((s) => s.channel === channel);
+      entry.value = site?.entry_url || "";
+      origins.value = site?.download_origins.join("\n") || "";
+    }
+  } finally {
+    loading.value = false;
+    if (queued && !disposed) {
+      const reset = resetQueued;
+      queued = false;
+      resetQueued = false;
+      void load(reset, true);
+    }
+  }
+}
+async function manage(window: SourceWindowState, close: boolean) {
+  if (windowAction.value) return;
+  const id = props.task.id;
+  windowAction.value = window.label;
+  try {
+    await props.run(
+      close ? "close_source_browser" : "focus_source_browser",
+      { id, label: window.label },
+      close
+        ? "已请求关闭本篇来源窗口；未确认下载保留原文件与请求。"
+        : "已切回本篇来源窗口；请核对实际网页与登录状态。",
+    );
+    if (props.task.id === id) await load(false, true);
+  } finally {
+    windowAction.value = "";
+  }
 }
 async function save() {
   const id = props.task.id,
@@ -92,8 +166,9 @@ async function open() {
   await props.run(
     "open_source_browser",
     { id: props.task.id, channel: props.channel },
-    "来源窗口已打开。请自行完成登录、检索与原始导出；下载由应用保存。",
+    "已打开或切回本篇来源窗口。请自行完成登录、检索与原始导出；下载由应用保存。",
   );
+  await load(false, true);
 }
 async function preview(download: SourceDownload) {
   const id = props.task.id,
@@ -120,7 +195,7 @@ async function preview(download: SourceDownload) {
   <section class="space-y-2 rounded-lg border p-3" aria-label="内置来源浏览器">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <p class="text-xs font-medium">数据库原始下载</p>
-      <Button size="sm" variant="outline" :disabled="locked" @click="load"
+      <Button size="sm" variant="outline" :disabled="loading" @click="load()"
         >读取入口与下载记录</Button
       >
     </div>
@@ -159,12 +234,66 @@ async function preview(download: SourceDownload) {
           size="sm"
           :disabled="locked || !savedSite || changedSite"
           @click="open"
-          >打开本篇来源窗口</Button
+          >打开或切回本篇来源窗口</Button
         >
       </div>
       <p v-if="changedSite" class="text-[11px] text-muted-foreground">
         先保存入口与下载来源，再打开窗口。
       </p>
+      <div
+        v-if="windows.length"
+        class="space-y-2 border-t pt-2"
+        aria-label="本篇来源窗口"
+      >
+        <p class="text-[11px] text-muted-foreground">
+          本篇已打开的窗口（包含其他渠道）。网页打开不代表登录或访问权限已经确认。
+        </p>
+        <div
+          v-for="window in windows"
+          :key="window.label"
+          class="space-y-1 rounded-md border p-2 text-[11px]"
+        >
+          <p>
+            {{ window.channel_label }} ·
+            {{ window.popup ? "登录或来源弹窗" : "来源窗口"
+            }}<span v-if="window.downloading"> · 正在下载</span>
+          </p>
+          <p>{{ window.title }}</p>
+          <p class="break-all text-muted-foreground">
+            {{ window.url || "地址暂不可读取" }}
+          </p>
+          <p
+            v-if="!window.current_record"
+            class="text-amber-700 dark:text-amber-400"
+          >
+            窗口属于旧名单记录，请按当前名单重新打开后下载。
+          </p>
+          <p
+            v-if="!window.current_site"
+            class="text-amber-700 dark:text-amber-400"
+          >
+            窗口的入口或下载来源配置已改变，请使用已保存配置重新打开后下载。
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              :disabled="!!windowAction"
+              @click="manage(window, false)"
+              >切回网页</Button
+            >
+            <Button
+              size="sm"
+              variant="outline"
+              :disabled="!!windowAction"
+              @click="manage(window, true)"
+              >{{
+                window.downloading ? "关闭并保留未确认下载" : "关闭窗口"
+              }}</Button
+            >
+          </div>
+        </div>
+      </div>
       <div
         v-for="d in downloads"
         :key="d.id"

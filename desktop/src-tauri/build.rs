@@ -21,6 +21,8 @@ fn main() {
             "source_browser_state",
             "save_source_site",
             "open_source_browser",
+            "focus_source_browser",
+            "close_source_browser",
             "preview_source_download",
             "export_report",
             "open_folder",

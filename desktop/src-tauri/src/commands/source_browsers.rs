@@ -11,12 +11,16 @@ use tauri::{AppHandle, State, WebviewWindow};
 #[tauri::command]
 pub(crate) fn source_browser_state(
     window: WebviewWindow,
+    app: AppHandle,
     state: State<Engine>,
     id: String,
 ) -> Result<Value> {
     local(&window)?;
-    state.store.task(&id)?;
-    Ok(json!({"sites":state.store.source_sites()?,"downloads":state.store.source_downloads(&id)?}))
+    let task = state.store.task(&id)?;
+    let sites = state.store.source_sites()?;
+    Ok(
+        json!({"sites":sites,"downloads":state.store.source_downloads(&id)?,"windows":state.browser.source_window_states(&app,&task,&sites)?}),
+    )
 }
 #[tauri::command]
 pub(crate) fn save_source_site(
@@ -39,10 +43,31 @@ pub(crate) fn open_source_browser(
     local(&window)?;
     let _lease = state.acquire()?;
     let session = state.store.source_session(&id, &channel)?;
-    state
-        .browser
-        .open_source(&app, &state.store, session.clone())?;
-    Ok(json!({"session":session,"automated_export":false,"platform_verified":false}))
+    state.browser.open_source(&app, &state.store, session)
+}
+#[tauri::command]
+pub(crate) fn focus_source_browser(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<Engine>,
+    id: String,
+    label: String,
+) -> Result<Value> {
+    local(&window)?;
+    state.store.task(&id)?;
+    state.browser.manage_source_window(&app, &id, &label, false)
+}
+#[tauri::command]
+pub(crate) fn close_source_browser(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<Engine>,
+    id: String,
+    label: String,
+) -> Result<Value> {
+    local(&window)?;
+    state.store.task(&id)?;
+    state.browser.manage_source_window(&app, &id, &label, true)
 }
 #[tauri::command]
 pub(crate) fn preview_source_download(
