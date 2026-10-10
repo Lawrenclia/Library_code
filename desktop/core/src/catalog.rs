@@ -23,6 +23,8 @@ pub fn channels() -> Value {
         channel["capabilities"] = json!({
             "search":if native {"implemented"} else {"unimplemented"},
             "local_source":"implemented",
+            "source_browser":"configured_manual",
+            "native_source_download":"implemented",
             "export":if native {"implemented"} else {"unimplemented"},
             "parse":if native {"implemented"} else {"unimplemented"},
             "submit":if native {"implemented"} else {"unimplemented"},

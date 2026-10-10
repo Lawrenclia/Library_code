@@ -22,6 +22,7 @@ impl Store {
         db.execute_batch("CREATE TABLE IF NOT EXISTS ai_queues(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,created INTEGER NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS one_pending_ai_queue ON ai_queues((1)) WHERE status IN ('running','paused','blocked','interrupted');")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS material_batches(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,created INTEGER NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS one_pending_material_batch ON material_batches((1)) WHERE status IN ('running','paused','blocked','interrupted');")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS native_downloads(id TEXT PRIMARY KEY,task_id TEXT NOT NULL,state TEXT NOT NULL,data TEXT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS one_pending_native_download ON native_downloads(task_id) WHERE state IN ('armed','requested','completed');")?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS source_downloads(id TEXT PRIMARY KEY,task_id TEXT NOT NULL,state TEXT NOT NULL,data TEXT NOT NULL);")?;
         Ok(s)
     }
     pub(crate) fn connect(&self) -> Result<Connection> {
@@ -756,6 +757,7 @@ impl Store {
         Ok(())
     }
     pub fn recover(&self) -> Result<()> {
+        self.interrupt_source_downloads()?;
         self.connect()?.execute(
             "UPDATE attempts SET state='unknown' WHERE state='intent'",
             [],

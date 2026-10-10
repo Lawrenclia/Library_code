@@ -44,6 +44,7 @@ flowchart TD
 | 重复条目 | `engine/duplicate_service.rs`：候选准备、完整原主条目和依据绑定、合并回读 |
 | 导入与写入 | `engine/submission_service.rs`：原文件和批次恢复；`engine/writes.rs`：统一写入边界，完整载荷、持久意图、执行、回读和原子保存 |
 | 浏览器执行 | `src-tauri/src/browser.rs`：原生窗口、独立资料目录、导航与来源限制、命令关联、超时、Requested/Finished 下载事件 |
+| 其他来源窗口 | `core/src/source_downloads.rs`、`src-tauri/src/source_browser.rs`、`commands/source_browsers.rs` 与 `SourceBrowserPanel.vue`：配置实际网站、固定本篇归属、管理原生下载和接入明确记录选择；新增代码暂未验证 |
 | 页面驱动 | `src-tauri/src/adapters.rs`：绑定角色、脚本与处理函数；WOS/SA/导入复用 `extension` 驱动，其他驱动位于 `src-tauri/browser` |
 | 核心业务 | `core/src/model.rs`、`issues.rs`、`sa.rs`、`claim.rs`、`alias.rs`、`metadata.rs`、`merge.rs`、`library.rs`：规则和来源校验，不依赖窗口或 Tauri |
 | 存储与恢复 | `core/src/store.rs`、`queue.rs`、`download.rs`、`versions.rs`、`legacy.rs`：事务、原始意图、输入、回执和恢复条件 |
@@ -92,6 +93,14 @@ flowchart TD
 报告的“提交材料记录”工作表按 SA 保留最新与历史选择、实际渠道和导入说明、产品文件与来源回执、保存/当前输入版本及完整依据 ID/SHA256。“原始来源依据”保留完整分段 JSON。此报告记录保存快照，名单一致不代表当前文件、来源或平台接收结果已重新核验。
 
 ### 原始文件接入
+
+“来源”页新增数据库原始下载面板。先读取入口与下载记录，配置该渠道实际网页以及其他页面、代理或下载域名，保存后打开本篇窗口。登录、检索和导出由用户操作，原文件按渠道允许的 Excel、CSV、TXT 格式保存到应用工作目录 `downloads/sources`；不使用系统 Downloads。入口域名自动保留，总共最多 12 个允许来源。配置改动未保存时不打开旧入口。
+
+`source_browser_state`、`save_source_site`、`open_source_browser`、`preview_source_download` 四项 IPC 仅开放本地工作台。来源窗口不注入平台操作脚本、不获取本地 IPC 权限；每次打开生成独立窗口身份，捕获完整原名单与输入版本，登录弹窗沿用该身份。原生 Requested 事件事务保存任务归属及下载请求，再设置唯一应用内文件名；Finished 事件核对原请求、准确路径、普通文件、实际字节与哈希，事务保存下载账本和来源证据。不会按文件名或修改时间猜测对应论文。
+
+只有本条任务当前名单仍对应且下载确认完成时，才能读取文件中的记录。预览复查原回执和实际字节，复制至既有 `source-files` 归档，再复查副本哈希；之后仍需明确选择论文行或文本范围、原文字段与绑定依据。下载证据 `source_download` 不进入 AI 事实来源，也不提升业务阶段；绑定后所选完整原文才作为 `external_metadata` 使用。重启把未收到完成回执的请求标为中断，保留原请求与文件，不扫描采纳或重新下载。来源报告另列“来源下载记录”，与完整分段原始依据关联。
+
+此新增框架按用户要求暂未验证，现有安装包不包含它。它支持在来源网站人工导出并由应用管理原文件，其他渠道自动检索、自动导出和平台自动导入仍需实际页面契约与后续实现。
 
 本地接入不依赖 WOS 记录模型。`commands/sources.rs` 提供 `preview_source_file`、`source_file_page`、`attach_source_file` 三个本地 IPC；`SourceImporter.vue` 在任务“来源”页连接这些入口。渠道允许的 Excel、CSV、TXT 格式取自同一注册表，原始字节存入工作目录 `source-files/<SHA-256>.<扩展名>`。原文件最大 16 MB、展开 XLSX 最大 64 MB、最多 200000 个单元格；完整选中记录最大 1 MB，超限拒绝，不截断字段。
 

@@ -65,7 +65,7 @@ pub fn manifest() -> Value {
         "schema_version":1,
         "services":[
             {"id":"inputs","label":"名单与版本","description":"读取 Excel、负责人范围、原表快照与旧版迁移。","state":"partial","limitation":"旧分类与准备资料已支持归档和严格绑定；真实目录迁移、部分旧操作恢复待验收或补齐。"},
-            {"id":"downloads","label":"来源与原始下载","description":"优先数据库导出；原生下载回执和本地 Excel、CSV、TXT 原文件接入。","state":"partial","limitation":"本地选择记录保留全部字段，不自动确认归属；其他数据库自动导出待接入，真实 WOS 下载待验收。"},
+            {"id":"downloads","label":"来源与原始下载","description":"WOS 自动导出、其他来源内置窗口及原生下载回执，接入 Excel、CSV、TXT。","state":"partial","limitation":"通用来源窗口由用户检索和导出，新增下载框架暂未验证；其他数据库自动检索/导出仍待接入，真实 WOS 下载待验收。"},
             {"id":"library","label":"本库查询与四分支","description":"正确题名及标识符查库，确认非交大、已有、缺失或未查询到。","state":"implemented","limitation":"真实登录后的动态页面和业务查询待验收。"},
             {"id":"sa","label":"SA 逐项核验","description":"按匹配数分流，保存每个差异的来源、结论与实时回读。","state":"implemented","limitation":"完成前仍需本条准确 SA 回读。"},
             {"id":"duplicates","label":"重复条目","description":"选择主条目与被合并条目，核对保留字段后合并并回读。","state":"partial","limitation":"完整进程恢复本地模拟已通过；真实平台合并仍待验收。"},

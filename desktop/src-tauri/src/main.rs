@@ -24,6 +24,7 @@ mod queue_smoke;
 mod restart_smoke;
 #[cfg(feature = "smoke-test")]
 mod smoke;
+mod source_browser;
 use engine::Engine;
 use tauri::Manager;
 
@@ -58,6 +59,10 @@ fn main() {
             commands::sources::preview_source_file,
             commands::sources::source_file_page,
             commands::sources::attach_source_file,
+            commands::source_browsers::source_browser_state,
+            commands::source_browsers::save_source_site,
+            commands::source_browsers::open_source_browser,
+            commands::source_browsers::preview_source_download,
             commands::workspace::export_report,
             commands::workspace::open_folder,
             commands::models::ai_settings,

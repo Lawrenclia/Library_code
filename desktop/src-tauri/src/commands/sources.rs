@@ -11,6 +11,11 @@ fn drafts(state: &Engine) -> Result<Vec<Draft>> {
         state.store.setting("source_previews")?.unwrap_or(json!([])),
     )?)
 }
+pub(super) fn remember(state: &Engine, draft: Draft) -> Result<()> {
+    let mut pending = drafts(state)?;
+    pending.push(draft);
+    state.store.set_setting("source_previews", json!(pending))
+}
 fn resolve(state: &Engine, id: &str, preview: Option<&str>) -> Result<Draft> {
     drafts(state)?
         .into_iter()
@@ -47,9 +52,7 @@ pub(crate) async fn preview_source_file(
     let draft = source_files::prepare(&state.store.root, &task, &channel, file.path(), options)?;
     let document = source_files::check_draft(&state.store.root, &task, &draft)?;
     let result = document.page(&draft, None, 0, 0)?;
-    let mut pending = drafts(&state)?;
-    pending.push(draft);
-    state.store.set_setting("source_previews", json!(pending))?;
+    remember(&state, draft)?;
     state.changed(&app);
     Ok(result)
 }

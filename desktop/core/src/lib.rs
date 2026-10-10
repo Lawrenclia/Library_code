@@ -18,6 +18,7 @@ pub mod metadata_order;
 pub mod model;
 pub mod queue;
 pub mod sa;
+pub mod source_downloads;
 pub mod source_files;
 pub mod store;
 pub mod submission;

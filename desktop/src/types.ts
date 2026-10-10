@@ -379,6 +379,26 @@ export interface SourceDraft {
   sha256: string;
   format: string;
 }
+export interface SourceSite {
+  channel: string;
+  entry_url: string;
+  download_origins: string[];
+}
+export interface SourceDownload {
+  id: string;
+  session: { site: SourceSite; record: Task["record"]; input_hash: string };
+  original_name: string;
+  page_url: string;
+  path: string;
+  state: string;
+  sha256?: string | null;
+  bytes?: number | null;
+  error?: Failure | null;
+}
+export interface SourceBrowserState {
+  sites: SourceSite[];
+  downloads: SourceDownload[];
+}
 export interface SourcePage {
   draft: SourceDraft;
   sheet: string;

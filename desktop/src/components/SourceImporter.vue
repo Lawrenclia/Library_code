@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Upload, RefreshCw } from "@lucide/vue";
+import SourceBrowserPanel from "@/components/SourceBrowserPanel.vue";
 const props = defineProps<{
   task: Task;
   locked: boolean;
@@ -129,6 +130,10 @@ async function preview() {
   );
   accept(result, id, revision);
 }
+function captured(page: SourcePage, source: string) {
+  accept(page, props.task.id, props.task.revision);
+  if (data.value?.draft.id === page.draft.id) url.value = source;
+}
 async function page(number = 0, resume = false) {
   const { id, revision } = props.task;
   const result = await props.run<SourcePage>(
@@ -220,6 +225,15 @@ async function attach() {
         </select></label
       >
     </div>
+    <SourceBrowserPanel
+      :task="task"
+      :channel="channel"
+      :locked="locked"
+      :encoding="encoding"
+      :delimiter="delimiter"
+      :run="run"
+      @preview="captured"
+    />
     <Button
       class="w-full"
       variant="outline"

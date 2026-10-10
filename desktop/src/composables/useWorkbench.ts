@@ -11,6 +11,7 @@ import { callDesktop, type DesktopCommand } from "@/services/desktop";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   Task,
+  Failure,
   Workspace,
   Review,
   Template,
@@ -1019,6 +1020,19 @@ export function useWorkbench() {
             ? "文件下载完成，正在等待身份核验。"
             : "文件下载未完成，请查看任务原因。";
         }),
+      );
+      unlisteners.push(
+        await listen<{ success: boolean; error?: Failure }>(
+          "source-download-event",
+          (e) => {
+            error.value = !e.payload.success;
+            message.value = e.payload.success
+              ? "来源文件已保存。请刷新原始下载记录，选择论文并确认绑定。"
+              : e.payload.error?.message ||
+                "原始来源下载未确认完成，请查看下载记录。";
+            refresh().catch(() => {});
+          },
+        ),
       );
     } catch (e) {
       error.value = true;

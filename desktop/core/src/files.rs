@@ -529,6 +529,16 @@ pub fn export_report_with_materials(
             .iter()
             .map(|s| (s.archive_path.clone(), s.sha256.clone()))
             .chain(a.map(|a| (a.path.clone(), a.candidate.sha256.clone())))
+            .chain(
+                t.evidence
+                    .iter()
+                    .filter(|e| e.kind == "source_download")
+                    .filter_map(|e| {
+                        serde_json::from_str::<crate::source_downloads::Receipt>(&e.text).ok()
+                    })
+                    .filter(|r| r.state == "completed" && r.session.record.sa_id == t.id)
+                    .filter_map(|r| r.sha256.map(|sha| (r.path, sha))),
+            )
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
@@ -1029,6 +1039,100 @@ pub fn export_report_with_materials(
         }
         sheet.set_freeze_panes(1, 0).map_err(Failure::storage)?;
         sheet.set_column_width(7, 80.).map_err(Failure::storage)?;
+    }
+    let downloaded = book.add_worksheet();
+    downloaded
+        .set_name("来源下载记录")
+        .map_err(Failure::storage)?;
+    for (col, label) in [
+        "SA ID",
+        "负责人",
+        "原表行号",
+        "下载时题名",
+        "渠道",
+        "原文件名",
+        "网页来源",
+        "下载事件地址",
+        "文件路径",
+        "下载状态",
+        "文件 SHA256",
+        "字节数",
+        "下载时输入版本",
+        "当前输入版本",
+        "失败原因",
+        "完整依据 ID",
+        "完整依据 SHA256",
+    ]
+    .iter()
+    .enumerate()
+    {
+        downloaded
+            .write_string(0, col as u16, *label)
+            .map_err(Failure::storage)?;
+    }
+    let mut row = 1;
+    for task in tasks {
+        let mut seen = HashSet::new();
+        for e in task
+            .evidence
+            .iter()
+            .rev()
+            .filter(|e| e.kind == "source_download")
+        {
+            let Ok(r) = serde_json::from_str::<crate::source_downloads::Receipt>(&e.text) else {
+                continue;
+            };
+            if !seen.insert(r.id.clone()) {
+                continue;
+            }
+            for (col, cell) in [
+                task.id.clone(),
+                r.session.record.owner.clone(),
+                r.session.record.row.to_string(),
+                r.session.record.title.clone(),
+                r.session.site.channel.clone(),
+                r.original_name,
+                r.page_url,
+                r.event_url,
+                r.path,
+                match r.state.as_str() {
+                    "completed" => "下载完成，记录绑定另行核验",
+                    "requested" => "下载中",
+                    "interrupted" => "下载结束未确认",
+                    _ => "下载失败",
+                }
+                .into(),
+                r.sha256.unwrap_or_default(),
+                r.bytes.map(|n| n.to_string()).unwrap_or_default(),
+                r.session.input_hash,
+                task.input_hash.clone(),
+                r.error
+                    .map(|e| format!("{}: {}", e.code, e.message))
+                    .unwrap_or_default(),
+                e.id.clone(),
+                hash(e.text.as_bytes()),
+            ]
+            .iter()
+            .enumerate()
+            {
+                downloaded
+                    .write_string(
+                        row,
+                        col as u16,
+                        cell.chars().take(15000).collect::<String>(),
+                    )
+                    .map_err(Failure::storage)?;
+            }
+            row += 1;
+        }
+    }
+    downloaded
+        .set_freeze_panes(1, 0)
+        .map_err(Failure::storage)?;
+    for col in [3, 6, 7, 8, 14] {
+        downloaded
+            .set_column_width(col, 50.)
+            .map_err(Failure::storage)?;
     }
     let selections = book.add_worksheet();
     selections
