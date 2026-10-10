@@ -131,12 +131,16 @@ pub fn build_next(
     // Reuse a source file only after checking its actual bytes against the new facts.
     if let Some(a) = &old.artifact {
         if files::verify_identity(&next.record, &a.candidate).unwrap_or(false) {
-            let raw = std::fs::read(&a.path)?;
-            let parsed = files::parse_wos(&raw)?;
-            if parsed.sha256 != a.candidate.sha256 {
+            // A matching cached DOI/title is only a reason to inspect the source.
+            // The bounded ordinary-file reader compares every parsed field and
+            // derived value with the old cache, not just its claimed SHA.
+            let parsed = files::read_metadata_candidate(old)?.ok_or_else(|| {
+                Failure::new("FILE_INVALID", "旧版本缺少可核验的实际归档，未复用。")
+            })?;
+            if !files::verify_identity(&next.record, &parsed)? {
                 return Err(Failure::new(
-                    "FILE_CHANGED",
-                    "旧归档文件已变化，未切换版本。",
+                    "IDENTITY_CONFLICT",
+                    "实际归档与新名单的完整题名和标识符未确认一致，未复用。",
                 ));
             }
             let mut artifact = a.clone();
@@ -147,6 +151,20 @@ pub fn build_next(
                 kind: "metadata".into(),
                 source: artifact.record_url.clone(),
                 text: serde_json::to_string(&artifact.candidate.fields)?,
+                created: now(),
+            });
+            next.evidence.push(Evidence {
+                id: uuid::Uuid::new_v4().to_string(),
+                kind: "artifact_reuse".into(),
+                source: artifact.record_url.clone(),
+                text: json!({"schema":"input_version_artifact_reuse_v1","sa_id":next.id,
+                    "input_hash":next.input_hash,"record_fingerprint":next.record.fingerprint(),
+                    "original_input_hash":old.input_hash,"original_record":old.record,
+                    "original_revision":old.revision,"original_artifact":a,
+                    "archive_path":artifact.path,"sha256":artifact.candidate.sha256,
+                    "candidate":artifact.candidate,"original_downloaded_at":artifact.downloaded,
+                    "reused_at":now(),"new_download":false,"platform_verified":false})
+                .to_string(),
                 created: now(),
             });
             next.artifact = Some(artifact);
@@ -186,6 +204,197 @@ mod tests {
         let store = Store::new(dir.path()).unwrap();
         store.import(vec![record()], "old-hash".into()).unwrap();
         (dir, store)
+    }
+    fn source_artifact(root: &std::path::Path) -> Artifact {
+        let raw=b"TI\tAU\tAF\tSO\tPY\tC1\tUT\tDI\tAB\nPaper\tTest, A\tAlice Test\tJournal\t2026\tShanghai Jiao Tong Univ\tWOS:000123456789012\t10.1234/test\tFull abstract\n";
+        let path = root.join("source.txt");
+        std::fs::write(&path, raw).unwrap();
+        Artifact {
+            path: path.to_string_lossy().into(),
+            source: "WOS".into(),
+            record_url: "https://www.webofscience.com/wos/woscc/full-record/WOS:000123456789012"
+                .into(),
+            downloaded: 123456,
+            candidate: files::parse_wos(raw).unwrap(),
+            identity_confirmed: true,
+        }
+    }
+    #[test]
+    fn version_reuse_rejects_wrong_cached_fields_even_with_the_correct_file_hash() {
+        for mutation in ["year", "sjtu", "fields"] {
+            let (dir, store) = setup();
+            let mut old = store.task("version-sa").unwrap();
+            let mut artifact = source_artifact(dir.path());
+            match mutation {
+                "year" => artifact.candidate.year = "2099".into(),
+                "sjtu" => artifact.candidate.sjtu = false,
+                _ => {
+                    artifact
+                        .candidate
+                        .fields
+                        .insert("AB".into(), "Forged abstract".into());
+                }
+            }
+            old.artifact = Some(artifact);
+            store.save(&mut old, "fixture_cache_mismatch").unwrap();
+            store.import(vec![incoming()], "new-input".into()).unwrap();
+            let current = store.task(&old.id).unwrap();
+            let proposal = store.pending_input(&old.id).unwrap().unwrap();
+            assert_eq!(
+                store
+                    .accept_input(
+                        &current,
+                        &proposal,
+                        &live(&proposal.record),
+                        "source",
+                        "proof"
+                    )
+                    .unwrap_err()
+                    .code,
+                "FILE_INVALID"
+            );
+            assert_eq!(json!(store.task(&old.id).unwrap()), json!(current));
+            assert_eq!(
+                store.pending_input(&old.id).unwrap().unwrap().id,
+                proposal.id
+            );
+        }
+    }
+    #[test]
+    fn invalid_missing_or_oversized_archive_never_partially_accepts_the_version() {
+        for mutation in ["changed", "missing", "oversized"] {
+            let (dir, store) = setup();
+            let mut old = store.task("version-sa").unwrap();
+            let artifact = source_artifact(dir.path());
+            old.artifact = Some(artifact.clone());
+            store.save(&mut old, "fixture_valid_source").unwrap();
+            store.import(vec![incoming()], "new-input".into()).unwrap();
+            let current = store.task(&old.id).unwrap();
+            let proposal = store.pending_input(&old.id).unwrap().unwrap();
+            match mutation {
+                "missing" => std::fs::remove_file(&artifact.path).unwrap(),
+                "oversized" => std::fs::write(&artifact.path, vec![b'x'; 524289]).unwrap(),
+                _ => std::fs::write(&artifact.path, b"Different file").unwrap(),
+            }
+            let before: i64 = store
+                .connect()
+                .unwrap()
+                .query_row("SELECT count(*) FROM task_versions", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(
+                store
+                    .accept_input(
+                        &current,
+                        &proposal,
+                        &live(&proposal.record),
+                        "source",
+                        "proof"
+                    )
+                    .unwrap_err()
+                    .code,
+                "FILE_INVALID"
+            );
+            assert_eq!(json!(store.task(&old.id).unwrap()), json!(current));
+            assert_eq!(
+                store.pending_input(&old.id).unwrap().unwrap().id,
+                proposal.id
+            );
+            let after: i64 = store
+                .connect()
+                .unwrap()
+                .query_row("SELECT count(*) FROM task_versions", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(after, before);
+        }
+    }
+    #[test]
+    fn unrelated_new_paper_keeps_old_source_and_batch_in_history_without_adopting_them() {
+        let (dir, store) = setup();
+        let mut old = store.task("version-sa").unwrap();
+        let artifact = source_artifact(dir.path());
+        old.artifact = Some(artifact.clone());
+        old.batch = Some(json!({"id":"old-batch"}));
+        old.stage = Stage::Pushed;
+        store.save(&mut old, "fixture_old_batch").unwrap();
+        let mut changed = incoming();
+        changed.title = "Other paper".into();
+        changed.doi = "10.9876/other".into();
+        store.import(vec![changed], "new-input".into()).unwrap();
+        let current = store.task(&old.id).unwrap();
+        let proposal = store.pending_input(&old.id).unwrap().unwrap();
+        std::fs::remove_file(&artifact.path).unwrap();
+        let next = store
+            .accept_input(
+                &current,
+                &proposal,
+                &live(&proposal.record),
+                "source",
+                "proof",
+            )
+            .unwrap();
+        assert!(next.artifact.is_none());
+        assert!(next.batch.is_none());
+        assert_eq!(next.stage, Stage::AwaitingReview);
+        assert!(next
+            .evidence
+            .iter()
+            .any(|e| e.kind == "input_version_history" && e.text.contains("old-batch")));
+        assert!(!next
+            .evidence
+            .iter()
+            .any(|e| e.kind == "metadata" || e.kind == "artifact_reuse"));
+    }
+    #[test]
+    fn valid_reuse_preserves_original_download_and_full_origin_without_claiming_a_new_download() {
+        let (dir, store) = setup();
+        let mut old = store.task("version-sa").unwrap();
+        let artifact = source_artifact(dir.path());
+        old.artifact = Some(artifact.clone());
+        store.save(&mut old, "fixture_original_download").unwrap();
+        store.import(vec![incoming()], "new-input".into()).unwrap();
+        let current = store.task(&old.id).unwrap();
+        let proposal = store.pending_input(&old.id).unwrap().unwrap();
+        let next = store
+            .accept_input(
+                &current,
+                &proposal,
+                &live(&proposal.record),
+                "source",
+                "proof",
+            )
+            .unwrap();
+        assert_eq!(
+            next.artifact.as_ref().unwrap().downloaded,
+            artifact.downloaded
+        );
+        assert_eq!(
+            json!(next.artifact.as_ref().unwrap().candidate),
+            json!(artifact.candidate)
+        );
+        let reuse = next
+            .evidence
+            .iter()
+            .find(|e| e.kind == "artifact_reuse")
+            .unwrap();
+        let audit: Value = serde_json::from_str(&reuse.text).unwrap();
+        assert_eq!(audit["original_input_hash"], "old-hash");
+        assert_eq!(audit["original_record"], json!(old.record));
+        assert_eq!(audit["input_hash"], "new-input");
+        assert_eq!(audit["original_downloaded_at"], 123456);
+        assert_eq!(audit["new_download"], false);
+        assert_eq!(audit["platform_verified"], false);
+        let reopened = Store::new(dir.path()).unwrap();
+        let task = reopened.task(&old.id).unwrap();
+        let sources = classification::sources(dir.path(), &task).unwrap();
+        assert!(sources
+            .iter()
+            .any(|e| e.kind == "metadata" && e.text.contains("Full abstract")));
+        assert!(!sources.iter().any(|e| e.id == reuse.id));
+        let (report, _) = reopened.report_snapshot().unwrap();
+        assert!(report[0]
+            .evidence
+            .iter()
+            .any(|e| e.id == reuse.id && e.text == reuse.text));
     }
     #[test]
     fn proposals_survive_restart_and_superseding_preserves_original_stage_and_facts() {
