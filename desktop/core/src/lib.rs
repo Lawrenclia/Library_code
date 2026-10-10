@@ -3,6 +3,7 @@ pub mod alias;
 pub mod catalog;
 pub mod claim;
 pub mod classification;
+pub mod cnki;
 pub mod doi_sources;
 pub mod download;
 pub mod files;

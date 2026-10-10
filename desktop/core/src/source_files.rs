@@ -16,6 +16,10 @@ pub struct ReadOptions {
     pub delimiter: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub text_table: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tagged_format: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub export_response: bool,
 }
 fn is_false(value: &bool) -> bool {
     !*value
@@ -26,6 +30,8 @@ impl Default for ReadOptions {
             encoding: "utf-8".into(),
             delimiter: "comma".into(),
             text_table: false,
+            tagged_format: None,
+            export_response: false,
         }
     }
 }
@@ -169,14 +175,21 @@ pub fn read(path: &Path, format: &str, options: &ReadOptions) -> Result<Document
     let mut tables = vec![];
     let encoding;
     match format {
-        "xlsx" => {
-            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&raw))
-                .map_err(|_| fail("文件不是有效 XLSX。"))?;
-            let mut expanded = 0u64;
-            for i in 0..zip.len() {
-                expanded += zip.by_index(i).map_err(Failure::storage)?.size();
-                if expanded > 64 * 1024 * 1024 {
-                    return Err(fail("XLSX 解压内容超过 64 MB，请缩小导出范围。"));
+        "xlsx" | "xls" => {
+            if format == "xls"
+                && !raw.starts_with(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])
+            {
+                return Err(fail("此 XLS 不是二进制 Excel，可能是网页表格。请用 Excel 打开并另存为 XLSX，再选择新文件；原下载保留。"));
+            }
+            if format == "xlsx" {
+                let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&raw))
+                    .map_err(|_| fail("文件不是有效 XLSX。"))?;
+                let mut expanded = 0u64;
+                for i in 0..zip.len() {
+                    expanded += zip.by_index(i).map_err(Failure::storage)?.size();
+                    if expanded > 64 * 1024 * 1024 {
+                        return Err(fail("XLSX 解压内容超过 64 MB，请缩小导出范围。"));
+                    }
                 }
             }
             let mut book = open_workbook_auto(path).map_err(|_| fail("无法读取原始 Excel。"))?;
@@ -211,7 +224,25 @@ pub fn read(path: &Path, format: &str, options: &ReadOptions) -> Result<Document
                     formulas: formula_map,
                 });
             }
-            encoding = "XLSX".into();
+            encoding = format.to_uppercase();
+        }
+        "txt" if options.tagged_format.as_deref() == Some("cnki") => {
+            if options.text_table {
+                return Err(fail("CNKI 标记题录与分隔表格不能同时启用。"));
+            }
+            let (text, actual) = decode(&raw, &options.encoding)?;
+            encoding = actual;
+            let rows = crate::cnki::rows(&text)?;
+            if rows.iter().map(Vec::len).sum::<usize>() > MAX_CELLS {
+                return Err(fail("题录超过 200000 个字段，请缩小导出范围。"));
+            }
+            tables.push(Table {
+                name: "CNKI 题录".into(),
+                start_row: 0,
+                start_col: 0,
+                rows,
+                formulas: BTreeMap::new(),
+            });
         }
         "csv" | "txt" if format == "csv" || options.text_table => {
             let (text, actual) = decode(&raw, &options.encoding)?;
@@ -271,7 +302,7 @@ pub fn read(path: &Path, format: &str, options: &ReadOptions) -> Result<Document
     Ok(Document {
         tables,
         encoding,
-        text_mode: format == "txt" && !options.text_table,
+        text_mode: format == "txt" && !options.text_table && options.tagged_format.is_none(),
     })
 }
 pub fn prepare(
@@ -279,7 +310,7 @@ pub fn prepare(
     task: &Task,
     channel: &str,
     path: &Path,
-    options: ReadOptions,
+    mut options: ReadOptions,
 ) -> Result<Draft> {
     let format = path
         .extension()
@@ -290,7 +321,47 @@ pub fn prepare(
         return Err(fail("该文件后缀不属于所选渠道的登记格式。"));
     }
     let raw = bytes(path)?;
+    if options
+        .tagged_format
+        .as_deref()
+        .is_some_and(|s| s != "cnki")
+        || (options.tagged_format.is_some() && (format != "txt" || channel != "cnki"))
+    {
+        return Err(fail("标记题录仅支持 CNKI TXT。"));
+    }
+    if channel == "cnki"
+        && format == "txt"
+        && !options.text_table
+        && options.tagged_format.is_none()
+    {
+        let (text, _) = decode(&raw, &options.encoding)?;
+        if text
+            .trim_start_matches('\u{feff}')
+            .trim_start()
+            .starts_with("%0 ")
+            || text
+                .trim_start_matches('\u{feff}')
+                .trim_start()
+                .starts_with("RT ")
+        {
+            options.tagged_format = Some("cnki".into());
+        }
+    }
     let sha = hash(&raw);
+    if options.tagged_format.as_deref() == Some("cnki") {
+        let (text, _) = decode(&raw, &options.encoding)?;
+        // A user can reopen the generated TXT through the ordinary file picker.
+        // Preserve its acquisition type instead of relabeling it as a native export.
+        if crate::cnki::parse(&text)?.iter().any(|r| {
+            r.values(&["XR"]).iter().any(|v| {
+                serde_json::from_str::<Value>(v.trim())
+                    .ok()
+                    .is_some_and(|p| p["mode"] == "cnki_export_response")
+            })
+        }) {
+            options.export_response = true;
+        }
+    }
     read(path, &format, &options)?;
     if hash(&bytes(path)?) != sha {
         return Err(fail("预览期间原文件变化，请重新选择。"));
@@ -332,7 +403,7 @@ pub fn prepare(
 fn owned(root: &Path, path: &str, sha: &str, format: &str) -> Result<PathBuf> {
     if sha.len() != 64
         || !sha.bytes().all(|b| b.is_ascii_hexdigit())
-        || !["xlsx", "csv", "txt"].contains(&format)
+        || !["xlsx", "xls", "csv", "txt"].contains(&format)
     {
         return Err(fail("来源归档身份无效。"));
     }
@@ -763,7 +834,9 @@ pub fn original_exports(root: &Path, task: &Task) -> Result<Vec<OriginalExport>>
     {
         let receipt: Receipt = serde_json::from_str(&evidence.text)?;
         // General/other are template or unclassified source containers.
-        if matches!(receipt.channel.as_str(), "general" | "other") {
+        if matches!(receipt.channel.as_str(), "general" | "other")
+            || receipt.options.export_response
+        {
             continue;
         }
         let key = json!({"hash":receipt.sha256,"channel":receipt.channel,"selection":receipt.selection,"options":receipt.options}).to_string();
@@ -1058,6 +1131,41 @@ mod tests {
         let id = e.id.clone();
         t.evidence.push(e);
         assert!(verify_for_ai(dir.path(), &t).unwrap().contains(&id));
+    }
+    #[test]
+    fn cnki_response_is_factual_input_but_never_an_original_upload_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = task();
+        let path = dir.path().join("cnki.txt");
+        let raw = "%0 Journal Article\n%T Paper\n%A 张三\n%A 李四\n%X full abstract\ncontinued\n";
+        std::fs::write(&path, raw).unwrap();
+        let draft = prepare(
+            dir.path(),
+            &t,
+            "cnki",
+            &path,
+            ReadOptions {
+                export_response: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(draft.options.tagged_format.as_deref(), Some("cnki"));
+        let doc = check_draft(dir.path(), &t, &draft).unwrap();
+        let page = doc.page(&draft, None, 1, 0).unwrap();
+        assert_eq!(page["layout"], "table");
+        assert_eq!(page["total"], 1);
+        let mut selection = csv_selection();
+        selection.sheet = "CNKI 题录".into();
+        selection.title_column = Some(1);
+        selection.doi_column = None;
+        selection.wos_column = None;
+        let e = evidence(dir.path(), &t, &draft, selection).unwrap();
+        t.evidence.push(e.clone());
+        assert!(verify_for_ai(dir.path(), &t).unwrap().contains(&e.id));
+        assert!(original_exports(dir.path(), &t).unwrap().is_empty());
+        std::fs::write(&draft.path, raw.replace("Paper", "Another")).unwrap();
+        assert!(verify_for_ai(dir.path(), &t).is_err());
     }
     #[test]
     fn delimited_txt_rejects_inconsistent_columns_and_paginates_logical_records() {

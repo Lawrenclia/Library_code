@@ -30,6 +30,7 @@ export type DesktopCommand =
   | "focus_source_browser"
   | "close_source_browser"
   | "preview_source_download"
+  | "cnki_source"
   | "export_report"
   | "open_folder"
   | "ai_settings"

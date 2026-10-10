@@ -112,6 +112,20 @@ fn valid(label: &str, url: &Url) -> bool {
     }
 }
 impl Browser {
+    fn authorized(&self, label: &str, url: &Url) -> bool {
+        if valid(label, url) {
+            return true;
+        }
+        library_core::cnki::is_site(url)
+            && self.source_windows.lock().ok().is_some_and(|windows| {
+                windows.get(label).is_some_and(|s| {
+                    s.site.channel == "cnki"
+                        && s.site
+                            .download_origins
+                            .contains(&url.origin().ascii_serialization())
+                })
+            })
+    }
     pub fn database_directory(&self, app: &AppHandle) -> Result<()> {
         let window = app
             .get_webview_window("wos")
@@ -226,7 +240,7 @@ impl Browser {
             .ok_or_else(|| Failure::new("REPLY_EXPIRED", "网页命令已结束。"))?;
         let url = window.url().map_err(Failure::storage)?;
         if window.label() != p.label
-            || !valid(window.label(), &url)
+            || !self.authorized(window.label(), &url)
             || url.origin().ascii_serialization() != p.origin
             || now() > p.expires
         {
@@ -251,7 +265,7 @@ impl Browser {
             )
         })?;
         let url = w.url().map_err(Failure::storage)?;
-        if !valid(label, &url) {
+        if !self.authorized(label, &url) {
             return Err(Failure::new(
                 "AUTH_REQUIRED",
                 "当前页面仍在登录或已经离开工作区。",

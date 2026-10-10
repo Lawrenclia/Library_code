@@ -71,6 +71,7 @@ fn main() {
             commands::source_browsers::focus_source_browser,
             commands::source_browsers::close_source_browser,
             commands::source_browsers::preview_source_download,
+            commands::source_browsers::cnki_source,
             commands::workspace::export_report,
             commands::workspace::open_folder,
             commands::models::ai_settings,

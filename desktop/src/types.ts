@@ -418,6 +418,13 @@ export interface MaterialValidation {
   cancelled?: boolean;
 }
 export interface SourceDraft {
+  options: {
+    encoding: string;
+    delimiter: string;
+    text_table?: boolean;
+    tagged_format?: "cnki";
+    export_response?: boolean;
+  };
   id: string;
   task_id: string;
   task_revision: number;
@@ -509,6 +516,14 @@ export interface SourceWindowState {
   created: number;
 }
 export interface SourcePage {
+  acquisition?: {
+    mode: "cnki_export_response";
+    source_url: string;
+    response_path: string;
+    response_sha256: string;
+    saved_path: string;
+    missing: string[];
+  };
   draft: SourceDraft;
   layout?: "text" | "table";
   sheet: string;

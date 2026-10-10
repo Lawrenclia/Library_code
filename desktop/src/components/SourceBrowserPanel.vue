@@ -171,6 +171,31 @@ async function open() {
   );
   await load(false, true);
 }
+async function cnki(action: "search" | "capture", window?: SourceWindowState) {
+  if (windowAction.value || props.locked) return;
+  const { id, revision } = props.task;
+  windowAction.value = window?.label || "cnki-search";
+  try {
+    const page = await props.run<SourcePage>(
+      "cnki_source",
+      { id, action, label: window?.label || null },
+      action === "search"
+        ? "已按名单题名打开 CNKI。请完成登录，核对并打开目标论文详情。"
+        : "已保存完整题录与原始响应，请选择记录并核对身份和缺项。",
+    );
+    if (props.task.id !== id || props.task.revision !== revision || disposed)
+      return;
+    if (
+      action === "capture" &&
+      page?.draft &&
+      page.draft.task_revision === revision
+    )
+      emit("preview", page, page.acquisition?.source_url || "");
+    await load(false, true);
+  } finally {
+    windowAction.value = "";
+  }
+}
 async function preview(download: SourceDownload) {
   const id = props.task.id,
     channel = props.channel;
@@ -207,6 +232,19 @@ async function preview(download: SourceDownload) {
     <p class="text-[11px] leading-6 text-muted-foreground">
       配置实际访问入口，在内置窗口自行登录、检索和导出。应用保存本篇的下载文件与来源，不把下载当作论文身份或交大归属确认。
     </p>
+    <div v-if="channel === 'cnki'" class="space-y-2 rounded-md bg-muted/40 p-2">
+      <Button
+        size="sm"
+        :disabled="locked || !!windowAction"
+        @click="cnki('search')"
+      >
+        按名单题名打开 CNKI
+      </Button>
+      <p class="text-[11px] leading-5 text-muted-foreground">
+        在内置窗口登录并打开目标论文详情，然后点击下方“获取题录”。默认检索使用题名作为关键词，请核对实际匹配；不会自动选择首条。
+        也可在网页导出 Excel/TXT，完成的下载直接保存到工作目录。
+      </p>
+    </div>
     <template v-if="state">
       <label class="field"
         >数据库入口<Input
@@ -280,6 +318,19 @@ async function preview(download: SourceDownload) {
             窗口的入口或下载来源配置已改变，请使用已保存配置重新打开后下载。
           </p>
           <div class="flex flex-wrap gap-2">
+            <Button
+              v-if="window.channel === 'cnki'"
+              size="sm"
+              :disabled="
+                locked ||
+                !!windowAction ||
+                window.downloading ||
+                !window.current_record ||
+                !window.current_site
+              "
+              @click="cnki('capture', window)"
+              >获取当前详情页题录</Button
+            >
             <Button
               size="sm"
               variant="outline"

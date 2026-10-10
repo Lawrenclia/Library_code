@@ -151,6 +151,14 @@ function accept(value: SourcePage | undefined, id: string, revision: number) {
   data.value = value;
   sheet.value = value.sheet;
   header.value = value.header_row;
+  if (fresh && value.draft.channel === "cnki" && value.sheet === "CNKI 题录") {
+    const column = (names: string[]) => {
+      const found = value.columns.filter((c) => names.includes(c.name));
+      return found.length === 1 ? String(found[0]!.column) : "";
+    };
+    titleColumn.value = column(["%T", "T1"]);
+    doiColumn.value = column(["%R", "DO", "DI"]);
+  }
   if (value.draft.origin) {
     const original = value.draft.origin;
     const s = original.selection;
@@ -508,6 +516,28 @@ const conflictNames: Record<string, string> = {
       <p class="break-all font-mono text-[10px] text-muted-foreground">
         SHA-256：{{ data.draft.sha256 }}
       </p>
+      <div
+        v-if="data.draft.options?.export_response"
+        class="space-y-1 rounded border p-2 text-[11px] leading-5"
+      >
+        <p>
+          这份文件来自内置会话的题录响应，用于分类和填表。已保留全部字段与原始响应；直接导入机构库时，请使用网页原始导出或对应模板。
+        </p>
+        <template v-if="data.acquisition">
+          <p class="break-all">题录：{{ data.acquisition.saved_path }}</p>
+          <p class="break-all">
+            原始响应：{{ data.acquisition.response_path }}
+          </p>
+          <p
+            v-if="data.acquisition.missing.length"
+            class="text-amber-700 dark:text-amber-400"
+          >
+            导出字段缺项：{{
+              data.acquisition.missing.join("、")
+            }}。需从其他可靠来源补充，AI 不得猜写。
+          </p>
+        </template>
+      </div>
       <p
         v-if="data.draft.origin"
         class="text-[11px] leading-5 text-muted-foreground"
@@ -546,7 +576,11 @@ const conflictNames: Record<string, string> = {
         v-if="data.draft.format === 'txt' && !textMode"
         class="text-[11px] text-muted-foreground"
       >
-        本预览按分隔表格读取。记录号对应表格行；引号内换行保留在同一字段，不按物理文本行拆分。
+        {{
+          data.draft.options?.tagged_format === "cnki"
+            ? "CNKI 标记题录按论文分行；保留全部标签、重复作者和多行内容，以及原始完整记录。"
+            : "本预览按分隔表格读取。记录号对应表格行；引号内换行保留在同一字段，不按物理文本行拆分。"
+        }}
       </p>
       <div class="max-h-56 space-y-1 overflow-auto rounded border p-2">
         <label

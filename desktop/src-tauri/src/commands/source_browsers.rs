@@ -6,7 +6,110 @@ use library_core::{
     *,
 };
 use serde_json::{json, Value};
-use tauri::{AppHandle, State, WebviewWindow};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
+
+/// User initiated CNKI search / metadata acquisition in its own authenticated webview.
+#[tauri::command]
+pub(crate) async fn cnki_source(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, Engine>,
+    id: String,
+    action: String,
+    label: Option<String>,
+) -> Result<Value> {
+    local(&window)?;
+    let _lease = state.acquire()?;
+    if action != "search" && action != "capture" {
+        return Err(Failure::new(
+            "INVALID_ACTION",
+            "请选择 CNKI 检索或获取题录。",
+        ));
+    }
+    if !state
+        .store
+        .source_sites()?
+        .iter()
+        .any(|s| s.channel == "cnki")
+    {
+        state.store.save_source_site(Site {
+            channel: "cnki".into(),
+            entry_url: cnki::ENTRY.into(),
+            download_origins: vec!["https://kns8.cnki.net".into()],
+        })?;
+    }
+    let current = state.store.source_session(&id, "cnki")?;
+    let task = state.store.task(&id)?;
+    if action == "search" {
+        if task.record.title.trim().is_empty() {
+            return Err(Failure::new("INPUT_INVALID", "本篇名单缺少题名。"));
+        }
+        let entry = url::Url::parse(&current.site.entry_url).map_err(Failure::storage)?;
+        if !cnki::is_site(&entry) {
+            return Err(Failure::new(
+                "PAGE_UNSUPPORTED",
+                "机构代理入口请使用‘打开来源窗口’并在网页检索，原始下载仍由工作台接收。",
+            ));
+        }
+        let opened = state.browser.open_source(&app, &state.store, current)?;
+        let label = opened["label"]
+            .as_str()
+            .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "来源窗口未返回。"))?;
+        let mut query = entry
+            .join("/kns8s/defaultresult/index")
+            .map_err(Failure::storage)?;
+        query
+            .query_pairs_mut()
+            .append_pair("kw", &task.record.title)
+            .append_pair("korder", "SU");
+        app.get_webview_window(label)
+            .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "来源窗口已关闭。"))?
+            .navigate(query)
+            .map_err(Failure::storage)?;
+        return Ok(opened);
+    }
+    let label =
+        label.ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "请选择本篇 CNKI 详情窗口。"))?;
+    let session = state
+        .browser
+        .source_windows
+        .lock()
+        .map_err(Failure::storage)?
+        .get(&label)
+        .cloned()
+        .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "来源窗口未登记或已关闭。"))?;
+    if session.site.channel != "cnki"
+        || session.input_hash != task.input_hash
+        || json!(session.record) != json!(task.record)
+        || json!(session.site) != json!(current.site)
+    {
+        return Err(Failure::new(
+            "INPUT_CHANGED",
+            "窗口属于旧名单或旧入口，请重新打开本篇窗口。",
+        ));
+    }
+    let response = state
+        .browser
+        .execute(&app, &label, "cnki_capture", json!({}), 35)
+        .await?;
+    let latest = state.store.task(&id)?;
+    if latest.revision != task.revision
+        || latest.input_hash != task.input_hash
+        || json!(latest.record) != json!(task.record)
+    {
+        return Err(Failure::new(
+            "INPUT_CHANGED",
+            "获取期间名单变化，请重新获取。",
+        ));
+    }
+    let (draft, acquisition) = cnki::capture(&state.store.root, &task, &response)?;
+    let document = source_files::check_draft(&state.store.root, &task, &draft)?;
+    let mut page = document.page(&draft, None, 1, 0)?;
+    page["acquisition"] = acquisition;
+    remember(&state, draft)?;
+    state.changed(&app);
+    Ok(page)
+}
 
 #[tauri::command]
 pub(crate) fn source_browser_state(
@@ -103,7 +206,16 @@ pub(crate) fn preview_source_download(
     }
     draft.original_name = receipt.original_name;
     let document = source_files::check_draft(&state.store.root, &task, &draft)?;
-    let page = document.page(&draft, None, 0, 0)?;
+    let page = document.page(
+        &draft,
+        None,
+        if draft.options.tagged_format.is_some() {
+            1
+        } else {
+            0
+        },
+        0,
+    )?;
     remember(&state, draft)?;
     state.changed(&app);
     Ok(page)

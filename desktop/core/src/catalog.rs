@@ -10,7 +10,7 @@ pub fn channels() -> Value {
         {"id":"wos_txt","label":"WOS 数据导入 (Txt)","formats":["txt"],"automated":true},
         {"id":"cscd","label":"CSCD 数据导入 (Txt)","formats":["txt"],"automated":false},
         {"id":"cssci","label":"CSSCI 数据导入 (Txt)","formats":["txt"],"automated":false},
-        {"id":"cnki","label":"CNKI 数据导入 (Excel/Txt)","formats":["xlsx","txt"],"automated":false},
+        {"id":"cnki","label":"CNKI 数据导入 (Excel/Txt)","formats":["xls","xlsx","txt"],"automated":false},
         {"id":"wanfang","label":"万方数据导入","formats":["txt","xlsx"],"automated":false},
         {"id":"ei","label":"EI 数据导入 (Csv/Excel)","formats":["csv","xlsx"],"automated":false},
         {"id":"vip","label":"VIP 数据导入 (Excel)","formats":["xlsx"],"automated":false},
@@ -20,14 +20,16 @@ pub fn channels() -> Value {
     ]);
     for channel in channels.as_array_mut().unwrap() {
         let native = channel["id"] == "wos_txt";
+        let cnki = channel["id"] == "cnki";
         let template = channel["id"] == "general" || channel["id"] == "other";
         channel["capabilities"] = json!({
-            "search":if native {"implemented"} else {"unimplemented"},
+            "search":if native {"implemented"} else if cnki {"title_query_manual_selection"} else {"unimplemented"},
             "local_source":"implemented",
-            "source_browser":"configured_manual",
+            "source_browser":if cnki {"builtin_entry"} else {"configured_manual"},
+            "browser_export_response":if cnki {"implemented"} else {"unimplemented"},
             "native_source_download":"implemented",
             "export":if native {"implemented"} else {"unimplemented"},
-            "parse":if native {"implemented"} else {"unimplemented"},
+            "parse":if native {"implemented"} else if cnki {"endnote_refworks_excel"} else {"unimplemented"},
             "submit":if native {"implemented"} else {"unimplemented"},
             "template":if template {"implemented"} else {"registered_only"}
         });

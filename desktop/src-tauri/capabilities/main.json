@@ -29,6 +29,7 @@
     "allow-focus-source-browser",
     "allow-close-source-browser",
     "allow-preview-source-download",
+    "allow-cnki-source",
     "allow-export-report",
     "allow-open-folder",
     "allow-ai-settings",
