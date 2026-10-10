@@ -68,7 +68,7 @@ pub fn manifest() -> Value {
             {"id":"downloads","label":"来源与原始下载","description":"优先数据库导出；原生下载回执和本地 Excel、CSV、TXT 原文件接入。","state":"partial","limitation":"本地选择记录保留全部字段，不自动确认归属；其他数据库自动导出待接入，真实 WOS 下载待验收。"},
             {"id":"library","label":"本库查询与四分支","description":"正确题名及标识符查库，确认非交大、已有、缺失或未查询到。","state":"implemented","limitation":"真实登录后的动态页面和业务查询待验收。"},
             {"id":"sa","label":"SA 逐项核验","description":"按匹配数分流，保存每个差异的来源、结论与实时回读。","state":"implemented","limitation":"完成前仍需本条准确 SA 回读。"},
-            {"id":"duplicates","label":"重复条目","description":"选择主条目与被合并条目，核对保留字段后合并并回读。","state":"partial","limitation":"完整进程重启合并验收及真实平台合并待验证。"},
+            {"id":"duplicates","label":"重复条目","description":"选择主条目与被合并条目，核对保留字段后合并并回读。","state":"partial","limitation":"完整进程恢复本地模拟已通过；真实平台合并仍待验收。"},
             {"id":"metadata","label":"作者与单位字段","description":"按原始证据编辑角色和完整署名顺序，保留其他元数据。","state":"partial","limitation":"没有实际页面控件的其他字段需逐项适配。"},
             {"id":"authors","label":"认领与别名","description":"按完整工号读取身份，明确选择作者，必要时增加有来源的别名。","state":"implemented","limitation":"真实机构业务验收待完成。"},
             {"id":"materials","label":"模板与材料","description":"注册实际 Excel 模板，保留格式并校验必填内容。","state":"implemented","limitation":"必填缺项的材料保留待补充，不自动上传。"},

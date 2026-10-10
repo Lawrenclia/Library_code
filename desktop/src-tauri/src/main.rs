@@ -13,6 +13,8 @@ mod engine;
 #[cfg(feature = "smoke-test")]
 mod link_smoke;
 #[cfg(feature = "smoke-test")]
+mod merge_smoke;
+#[cfg(feature = "smoke-test")]
 mod metadata_smoke;
 #[cfg(feature = "smoke-test")]
 mod queue_smoke;

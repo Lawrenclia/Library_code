@@ -103,7 +103,16 @@ cargo run --quiet --locked --manifest-path desktop/core/Cargo.toml --example fra
 
 `node tests/desktop-sources-ui.test.cjs` 验证原文件渠道/编码设置、明确记录/范围/列选择、分页和表头刷新、来源确认、版本清理、恢复入口及异步返回的任务隔离。`node tests/desktop-materials-ui.test.cjs` 验证模板材料和校验展示。这些测试均使用隔离 IPC，未操作真实数据库或平台。
 
-原生完整流程由 `smoke-test` 编译后的程序运行 `tests/desktop-native.test.cjs`，只访问独立本地合成页面。正式编译不包含回环来源覆盖。既有完整进程恢复测试仍保留；合并完整进程恢复验收尚未完成。
+原生完整流程由 `smoke-test` 编译后的程序运行 `tests/desktop-native.test.cjs`，只访问独立本地合成页面。正式编译不包含回环来源覆盖。完整合并进程恢复由 `tests/desktop-merge-restart.test.cjs` 验证，12 个实际程序进程及其 WebView2：外部模拟服务收到写入后结束测试自建进程，重启核对原意图、SA、候选池和完整主条目。三条原匹配先合并一条，剩余第三条继续独立核对；两次合并各仅一次，SA 不提前完成。字段/SA/候选/检索条件变化或实际未保存时保持未知，不重发。它证明本地模拟恢复，不证明真实机构平台恢复。
+
+从仓库根目录构建并运行独立合并测试（Windows / WebView2）：
+
+```text
+cargo build --locked --manifest-path desktop/src-tauri/Cargo.toml --features smoke-test --target-dir desktop/src-tauri/target/merge-restart
+node tests/desktop-merge-restart.test.cjs
+```
+
+测试默认使用这个独立目录下的程序；`DESKTOP_TEST_BINARY` 可指定已编译的测试程序。不要把带 `smoke-test` 的程序作为正式交付包。
 
 ## 交付边界
 
