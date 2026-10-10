@@ -60,6 +60,9 @@ impl Engine {
     pub fn acquire_download(&self) -> Result<Lease> {
         self.acquire_kind(2)
     }
+    pub fn acquire_materials(&self) -> Result<Lease> {
+        self.acquire_kind(4)
+    }
     fn acquire_kind(&self, kind: u8) -> Result<Lease> {
         if self
             .active
@@ -78,10 +81,12 @@ impl Engine {
     pub fn snapshot(&self, app: &AppHandle) -> Result<Value> {
         let download_queue = self.store.latest_download_queue()?;
         let ai_queue = self.store.latest_ai_queue()?;
+        let material_batch = self.store.latest_material_batch()?;
         let running_service = match self.active_kind.load(Ordering::SeqCst) {
             1 => Some("general"),
             2 => Some("download"),
             3 => Some("ai"),
+            4 => Some("materials"),
             _ => None,
         };
         let queue_paused = download_queue
@@ -99,7 +104,7 @@ impl Engine {
                 serde_json::to_value(self.store.pending_input(task["id"].as_str().unwrap())?)?;
         }
         Ok(
-            json!({"tasks":tasks,"root":self.store.root.to_string_lossy(),"running":self.active.load(Ordering::SeqCst),"running_service":running_service,"paused":self.pause.load(Ordering::SeqCst)||queue_paused||ai_queue.as_ref().is_some_and(|q|q.status.unfinished()&&q.status!=queue::QueueStatus::Running),"download_queue":download_queue,"ai_queue":ai_queue,"browsers":self.browser.states(app),"policy":PUSH_POLICY,"framework":framework::manifest(),"legacy_materials":library_core::legacy_materials::summary(&self.store.legacy_snapshots()?)}),
+            json!({"tasks":tasks,"root":self.store.root.to_string_lossy(),"running":self.active.load(Ordering::SeqCst),"running_service":running_service,"paused":self.pause.load(Ordering::SeqCst)||queue_paused||material_batch.as_ref().is_some_and(|q|q.status.unfinished()&&q.status!=queue::QueueStatus::Running)||ai_queue.as_ref().is_some_and(|q|q.status.unfinished()&&q.status!=queue::QueueStatus::Running),"download_queue":download_queue,"ai_queue":ai_queue,"material_batch":material_batch,"browsers":self.browser.states(app),"policy":PUSH_POLICY,"framework":framework::manifest(),"legacy_materials":library_core::legacy_materials::summary(&self.store.legacy_snapshots()?)}),
         )
     }
     pub async fn step(

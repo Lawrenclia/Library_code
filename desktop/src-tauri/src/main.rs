@@ -70,6 +70,9 @@ fn main() {
             commands::materials::templates,
             commands::materials::register_template,
             commands::materials::fill_template,
+            commands::material_batches::prepare_material_batch,
+            commands::material_batches::resume_material_batch,
+            commands::material_batches::cancel_material_batch,
             commands::browsers::browser_result
         ])
         .run(tauri::generate_context!())

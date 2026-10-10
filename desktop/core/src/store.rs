@@ -20,6 +20,7 @@ impl Store {
         db.execute_batch("CREATE TABLE IF NOT EXISTS pending_inputs(task_id TEXT PRIMARY KEY,data TEXT NOT NULL);CREATE TABLE IF NOT EXISTS task_versions(id TEXT PRIMARY KEY,task_id TEXT NOT NULL,data TEXT NOT NULL,created INTEGER NOT NULL);CREATE TABLE IF NOT EXISTS input_history(id TEXT PRIMARY KEY,task_id TEXT NOT NULL,data TEXT NOT NULL,created INTEGER NOT NULL);")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS download_queues(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,created INTEGER NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS one_pending_download_queue ON download_queues((1)) WHERE status IN ('running','paused','blocked','interrupted');")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS ai_queues(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,created INTEGER NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS one_pending_ai_queue ON ai_queues((1)) WHERE status IN ('running','paused','blocked','interrupted');")?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS material_batches(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,created INTEGER NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS one_pending_material_batch ON material_batches((1)) WHERE status IN ('running','paused','blocked','interrupted');")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS native_downloads(id TEXT PRIMARY KEY,task_id TEXT NOT NULL,state TEXT NOT NULL,data TEXT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS one_pending_native_download ON native_downloads(task_id) WHERE state IN ('armed','requested','completed');")?;
         Ok(s)
     }
@@ -762,6 +763,7 @@ impl Store {
         self.recover_native_downloads()?;
         self.recover_download_queue()?;
         self.recover_ai_queue()?;
+        self.recover_material_batch()?;
         Ok(())
     }
     pub fn events(&self, id: &str) -> Result<Vec<Value>> {

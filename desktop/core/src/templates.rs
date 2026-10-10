@@ -502,7 +502,13 @@ pub fn write_checked(
     let target = sheet_path(&book, &rels, &template.sheet)?;
     let xml = read_xml(&mut archive, &target)?;
     // Invalid values stay in the provenance, but cannot become upload cells.
-    let mut accepted = fields.clone();
+    // Clear every template example cell, including optional columns without a source.
+    let mut accepted: BTreeMap<String, String> = template
+        .columns
+        .iter()
+        .map(|column| (column.clone(), String::new()))
+        .collect();
+    accepted.extend(fields.clone());
     for name in report
         .invalid
         .iter()

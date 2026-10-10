@@ -32,6 +32,9 @@
     "allow-templates",
     "allow-register-template",
     "allow-fill-template",
+    "allow-prepare-material-batch",
+    "allow-resume-material-batch",
+    "allow-cancel-material-batch",
     "allow-resume-queue",
     "allow-cancel-queue"
   ]

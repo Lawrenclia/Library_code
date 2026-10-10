@@ -71,7 +71,7 @@ pub fn manifest() -> Value {
             {"id":"duplicates","label":"重复条目","description":"选择主条目与被合并条目，核对保留字段后合并并回读。","state":"partial","limitation":"完整进程恢复本地模拟已通过；真实平台合并仍待验收。"},
             {"id":"metadata","label":"作者与单位字段","description":"按原始证据编辑角色和完整署名顺序，保留其他元数据。","state":"partial","limitation":"没有实际页面控件的其他字段需逐项适配。"},
             {"id":"authors","label":"认领与别名","description":"按完整工号读取身份，明确选择作者，必要时增加有来源的别名。","state":"implemented","limitation":"真实机构业务验收待完成。"},
-            {"id":"materials","label":"模板与材料","description":"注册实际 Excel 模板，保留格式并校验必填内容。","state":"implemented","limitation":"必填缺项的材料保留待补充，不自动上传。"},
+            {"id":"materials","label":"模板与材料","description":"注册实际 Excel 模板，批量整理零匹配材料、字段校验和来源表。","state":"implemented","limitation":"原始导出优先；缺项保留草稿与原因，字段通过仍需核对，不自动上传。"},
             {"id":"ai","label":"AI 分类与补全","description":"调用配置的 API，验证结构化结果和每个字段的来源引用。","state":"implemented","limitation":"需配置 API；分类不决定归属或平台完成状态。"},
             {"id":"submission","label":"上传、导入与推送","description":"按 PPT 分阶段执行，绑定 SA 说明与五项推送规则并回读。","state":"partial","limitation":"自动导入目前仅 WOS TXT；真实后台闭环待验收。"},
             {"id":"storage","label":"记录、恢复与报告","description":"SQLite 保存意图、进度与完整证据，恢复先回读，导出来源 Excel。","state":"partial","limitation":"部分旧操作和丢失上传窗口的独立恢复待补齐。"}

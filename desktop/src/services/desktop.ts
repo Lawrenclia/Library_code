@@ -28,6 +28,9 @@ export type DesktopCommand =
   | "resume_ai_queue"
   | "pause_ai_queue"
   | "cancel_ai_queue"
+  | "prepare_material_batch"
+  | "resume_material_batch"
+  | "cancel_material_batch"
   | "templates"
   | "register_template"
   | "fill_template";

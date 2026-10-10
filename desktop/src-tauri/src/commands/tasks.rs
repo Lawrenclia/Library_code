@@ -28,6 +28,7 @@ pub(crate) fn pause_queue(
     local(&window)?;
     state.store.request_download_pause()?;
     state.store.request_ai_pause()?;
+    state.store.request_material_pause()?;
     state.pause.store(true, Ordering::SeqCst);
     state.changed(&app);
     Ok(())

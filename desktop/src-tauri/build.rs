@@ -30,6 +30,9 @@ fn main() {
             "templates",
             "register_template",
             "fill_template",
+            "prepare_material_batch",
+            "resume_material_batch",
+            "cancel_material_batch",
             "browser_result",
         ]),
     ))

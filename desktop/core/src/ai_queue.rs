@@ -300,6 +300,11 @@ impl Store {
             || v["source_hash"] != target.source_hash
             || v["model_config"] != q.config
             || v["template_hash"] != template_hash
+            || v["template_id"]
+                != q.template
+                    .as_ref()
+                    .and_then(|t| t["id"].as_str())
+                    .unwrap_or("")
         {
             return Ok(false);
         }
@@ -312,7 +317,15 @@ impl Store {
             .filter(|e| e.kind == "ai_classification")
             .filter_map(|e| serde_json::from_str::<Value>(&e.text).ok())
             .any(|a| {
-                a["result"] == *v && a["review_required"] == true && a["platform_verified"] == false
+                a["result"] == *v
+                    && a["review_required"] == true
+                    && a["platform_verified"] == false
+                    && a["sources"] == json!(sources)
+                    && a["model"] == q.config["model"]
+                    && crate::materials::same_template(
+                        a["template"].as_object().map(|_| &a["template"]),
+                        q.template.as_ref(),
+                    )
             }))
     }
     pub fn begin_ai_target(&self, id: &str) -> Result<Attempt> {
@@ -447,7 +460,7 @@ impl Store {
         if !q.status.unfinished() || q.status == QueueStatus::Running || q.inflight.is_some() {
             return Err(bad("原 AI 队列不能继续，请刷新状态。"));
         }
-        if q.config != *cfg || q.template.as_ref() != template {
+        if q.config != *cfg || !crate::materials::same_template(q.template.as_ref(), template) {
             return Err(Failure::new(
                 "AI_CONFIG_CHANGED",
                 "模型地址、模型或模板已变化；原范围不能混用新配置。结束原范围后再建立新范围。",

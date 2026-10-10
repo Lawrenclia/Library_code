@@ -10,6 +10,8 @@ pub mod issues;
 pub mod legacy;
 pub mod legacy_materials;
 pub mod library;
+pub mod material_batch;
+pub mod materials;
 pub mod merge;
 pub mod metadata;
 pub mod metadata_order;
@@ -36,6 +38,8 @@ mod download_tests;
 mod issue_tests;
 #[cfg(test)]
 mod library_tests;
+#[cfg(test)]
+mod materials_tests;
 #[cfg(test)]
 mod merge_tests;
 #[cfg(test)]

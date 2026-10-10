@@ -63,7 +63,7 @@ async function start() {
         </p>
         <p class="mt-2 text-[11px] leading-6 text-muted-foreground">
           按负责人固定原名单，使用已配置的 API
-          额度。普通逐篇失败继续；来源、名单或模型变化会记录原因。仅保存建议，导出模板材料仍需逐篇校验。
+          额度。普通逐篇失败继续；来源、名单或模型变化会记录原因。建议保存后，可批量整理材料并核对缺项。
         </p>
       </div>
       <Button

@@ -118,23 +118,40 @@ pub(crate) async fn export_report(
         return Ok(json!({"cancelled":true}));
     };
     let (tasks, queues) = state.store.report_snapshot()?;
-    files::export_report_with_runs(
+    files::export_report_with_materials(
         &tasks,
         &queues,
         &state.store.legacy_snapshots()?,
         &state.store.ai_queues()?,
+        &state.store.material_batches()?,
         path.path(),
     )?;
     Ok(json!({"path":path.path().to_string_lossy()}))
 }
 #[tauri::command]
-pub(crate) fn open_folder(window: WebviewWindow, state: State<Engine>) -> Result<()> {
+pub(crate) fn open_folder(
+    window: WebviewWindow,
+    state: State<Engine>,
+    kind: Option<String>,
+) -> Result<()> {
     local(&window)?;
+    let folder = match kind.as_deref() {
+        None => state.store.root.clone(),
+        Some("materials") => state.store.root.join("materials"),
+        _ => return Err(Failure::new("INVALID_CHANNEL", "未知资料目录。")),
+    };
+    std::fs::create_dir_all(&folder)?;
+    if !folder
+        .canonicalize()?
+        .starts_with(state.store.root.canonicalize()?)
+    {
+        return Err(Failure::new("MATERIAL_CHANGED", "资料目录已被重定向。"));
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         std::process::Command::new("explorer.exe")
-            .arg(&state.store.root)
+            .arg(&folder)
             .creation_flags(0x08000000)
             .spawn()?;
     }

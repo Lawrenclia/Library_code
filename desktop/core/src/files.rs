@@ -480,6 +480,16 @@ pub fn export_report_with_runs(
     ai: &[crate::ai_queue::AiQueue],
     path: &Path,
 ) -> Result<()> {
+    export_report_with_materials(tasks, queues, legacy, ai, &[], path)
+}
+pub fn export_report_with_materials(
+    tasks: &[Task],
+    queues: &[crate::queue::DownloadQueue],
+    legacy: &[serde_json::Value],
+    ai: &[crate::ai_queue::AiQueue],
+    materials: &[crate::material_batch::Batch],
+    path: &Path,
+) -> Result<()> {
     use rust_xlsxwriter::Workbook;
     let mut book = Workbook::new();
     let sheet = book.add_worksheet();
@@ -878,6 +888,147 @@ pub fn export_report_with_runs(
         }
         sheet.set_freeze_panes(1, 0).map_err(Failure::storage)?;
         sheet.set_column_width(9, 80.).map_err(Failure::storage)?;
+    }
+    if !materials.is_empty() {
+        let index = book.add_worksheet();
+        index.set_name("材料文件索引").map_err(Failure::storage)?;
+        for (column, label) in [
+            "原范围 ID",
+            "负责人",
+            "SA ID",
+            "原表行号",
+            "题名",
+            "材料类型",
+            "材料路径",
+            "文件 SHA256",
+            "来源回执",
+            "必填缺项",
+            "格式问题",
+            "待核对要求",
+            "失败原因",
+            "原文件/模板来源",
+            "是否复用",
+        ]
+        .iter()
+        .enumerate()
+        {
+            index
+                .write_string(0, column as u16, *label)
+                .map_err(Failure::storage)?;
+        }
+        let mut row = 1;
+        for batch in materials {
+            for result in &batch.outcomes {
+                let target = batch.targets.iter().find(|t| t.id == result.id);
+                let p = result.product.as_ref();
+                let list = |key: &str| p.map(|p| p.validation[key].to_string()).unwrap_or_default();
+                let source = target
+                    .and_then(|t| t.template.as_ref())
+                    .map(|t| format!("{} / {} / {}", t.name, t.path, t.fingerprint))
+                    .unwrap_or_else(|| {
+                        target
+                            .and_then(|t| t.artifact.as_ref())
+                            .map(|a| format!("{} / {}", a.source, a.record_url))
+                            .unwrap_or_default()
+                    });
+                for (column, value) in [
+                    batch.id.clone(),
+                    batch.owner.clone(),
+                    result.id.clone(),
+                    target.map(|t| t.record.row.to_string()).unwrap_or_default(),
+                    target.map(|t| t.record.title.clone()).unwrap_or_default(),
+                    p.map(|p| {
+                        match p.kind.as_str() {
+                            "original" => "原始数据库导出",
+                            "field_valid" => "模板字段校验通过",
+                            _ => "草稿待核对",
+                        }
+                        .to_string()
+                    })
+                    .unwrap_or_default(),
+                    p.map(|p| p.path.clone()).unwrap_or_default(),
+                    p.map(|p| p.sha256.clone()).unwrap_or_default(),
+                    p.map(|p| p.audit.clone()).unwrap_or_default(),
+                    list("missing"),
+                    list("invalid"),
+                    list("requires_review"),
+                    result
+                        .error
+                        .as_ref()
+                        .map(|e| format!("{}: {}", e.code, e.message))
+                        .unwrap_or_default(),
+                    source,
+                    p.map(|p| p.reused.to_string()).unwrap_or_default(),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    // Full values remain in the chunked receipt sheet below.
+                    index
+                        .write_string(
+                            row,
+                            column as u16,
+                            value.chars().take(15000).collect::<String>(),
+                        )
+                        .map_err(Failure::storage)?;
+                }
+                row += 1;
+            }
+        }
+        index.set_freeze_panes(1, 0).map_err(Failure::storage)?;
+        for col in [4, 6, 8, 13] {
+            index.set_column_width(col, 50.).map_err(Failure::storage)?;
+        }
+        let sheet = book.add_worksheet();
+        sheet.set_name("材料整理结果").map_err(Failure::storage)?;
+        for (column, label) in [
+            "原范围 ID",
+            "负责人",
+            "状态",
+            "已记录",
+            "总数",
+            "完整记录 SHA256",
+            "片段序号",
+            "原范围与完整结果 JSON",
+        ]
+        .iter()
+        .enumerate()
+        {
+            sheet
+                .write_string(0, column as u16, *label)
+                .map_err(Failure::storage)?;
+        }
+        let mut row = 1;
+        for batch in materials {
+            let raw = serde_json::to_string(batch)?;
+            let digest = hash(raw.as_bytes());
+            let chars: Vec<_> = raw.chars().collect();
+            for (part, chunk) in chars.chunks(15000).enumerate() {
+                for (column, value) in [
+                    batch.id.clone(),
+                    batch.owner.clone(),
+                    serde_json::to_value(&batch.status)?
+                        .as_str()
+                        .unwrap()
+                        .into(),
+                    batch.cursor.to_string(),
+                    batch.targets.len().to_string(),
+                    digest.clone(),
+                    (part + 1).to_string(),
+                    chunk.iter().collect(),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    sheet
+                        .write_string(row, column as u16, value)
+                        .map_err(Failure::storage)?;
+                }
+                row += 1;
+            }
+        }
+        sheet.set_freeze_panes(1, 0).map_err(Failure::storage)?;
+        sheet.set_column_width(7, 80.).map_err(Failure::storage)?;
     }
     book.save(path).map_err(Failure::storage)?;
     Ok(())

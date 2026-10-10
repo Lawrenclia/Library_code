@@ -31,6 +31,7 @@ import WorkbenchShell from "@/components/WorkbenchShell.vue";
 import WorkflowOverview from "@/components/WorkflowOverview.vue";
 import SourceImporter from "@/components/SourceImporter.vue";
 import AiQueuePanel from "@/components/AiQueuePanel.vue";
+import MaterialBatchPanel from "@/components/MaterialBatchPanel.vue";
 import LegacyMaterials from "@/components/LegacyMaterials.vue";
 import TaskTable from "@/components/TaskTable.vue";
 import { Button } from "@/components/ui/button";
@@ -432,6 +433,12 @@ function frameworkBrowser(role: string, entry?: string) {
         :locked="locked"
         :configured="api.configured"
         :templates="schemas"
+        :run="run"
+      />
+      <MaterialBatchPanel
+        :workspace="workspace"
+        :owner="owner"
+        :locked="locked"
         :run="run"
       />
       <section

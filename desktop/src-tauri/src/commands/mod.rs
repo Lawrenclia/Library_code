@@ -1,6 +1,7 @@
 use library_core::{Failure, Result};
 use tauri::WebviewWindow;
 pub mod browsers;
+pub mod material_batches;
 pub mod materials;
 pub mod models;
 pub mod sources;

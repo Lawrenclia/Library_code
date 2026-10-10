@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resume-material-batch"
+description = "Enables the resume_material_batch command without any pre-configured scope."
+commands.allow = ["resume_material_batch"]
+
+[[permission]]
+identifier = "deny-resume-material-batch"
+description = "Denies the resume_material_batch command without any pre-configured scope."
+commands.deny = ["resume_material_batch"]

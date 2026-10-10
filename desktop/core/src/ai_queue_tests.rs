@@ -3,6 +3,49 @@ use crate::queue::QueueStatus;
 use crate::*;
 use calamine::{open_workbook_auto, Reader};
 use serde_json::{json, Value};
+#[test]
+fn cache_requires_same_registration_and_full_source_audit() {
+    let (_dir, store) = fixture();
+    let template = json!({"id":"original-template","fingerprint":"same-file","columns":[],"required":[],"notes":"original requirements"});
+    let q = store
+        .start_ai_queue("AI owner", true, cfg(), Some(template.clone()))
+        .unwrap();
+    for _ in 0..4 {
+        let current = store.ai_queue(&q.id).unwrap();
+        let a = store.begin_ai_target(&q.id).unwrap();
+        saved(&store, &current, &a);
+        store.finish_ai_target(&q.id, "classified", None).unwrap();
+    }
+    let q = store
+        .start_ai_queue("AI owner", true, cfg(), Some(template.clone()))
+        .unwrap();
+    assert!(store.reuse_ai_target(&q.id).unwrap());
+    store.pause_ai_queue(&q.id).unwrap();
+    store.cancel_ai_queue(&q.id).unwrap();
+    let mut other = template.clone();
+    other["id"] = json!("other-template");
+    let q = store
+        .start_ai_queue("AI owner", true, cfg(), Some(other))
+        .unwrap();
+    assert!(!store.reuse_ai_target(&q.id).unwrap());
+    store.pause_ai_queue(&q.id).unwrap();
+    store.cancel_ai_queue(&q.id).unwrap();
+    let mut task = store.task("ai-1").unwrap();
+    for e in task
+        .evidence
+        .iter_mut()
+        .filter(|e| e.kind == "ai_classification")
+    {
+        let mut audit: Value = serde_json::from_str(&e.text).unwrap();
+        audit["sources"] = json!([]);
+        e.text = audit.to_string();
+    }
+    store.save(&mut task, "incomplete_cache_audit").unwrap();
+    let q = store
+        .start_ai_queue("AI owner", true, cfg(), Some(template))
+        .unwrap();
+    assert!(!store.reuse_ai_target(&q.id).unwrap());
+}
 fn records() -> Vec<Record> {
     (1..=4).map(|i|serde_json::from_value(json!({"row":i+1,"owner":"AI owner","sa_id":format!("ai-{i}"),"title":format!("Paper {i}"),"doi":"","wos":"","staff_id":"000000000000001","matches":0,"item_ids":"","mark":"待处理","reason":"原始原因完整保留","skipped":false,"done":false,"source":"list.xlsx"})).unwrap()).collect()
 }

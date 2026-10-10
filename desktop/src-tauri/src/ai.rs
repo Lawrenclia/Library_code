@@ -51,20 +51,7 @@ pub fn resolve_template(e: &Engine, id: Option<&str>) -> Result<Option<Value>> {
         .iter()
         .find(|t| t.id == id)
         .ok_or_else(|| Failure::new("TEMPLATE_INVALID", "选择的模板没有注册。"))?;
-    let mut actual = library_core::templates::inspect(
-        std::path::Path::new(&saved.path),
-        &saved.sheet,
-        saved.header_row,
-        saved.required.clone(),
-        saved.notes.clone(),
-    )?;
-    if actual.fingerprint != saved.fingerprint || actual.columns != saved.columns {
-        return Err(Failure::new(
-            "TEMPLATE_CHANGED",
-            "模板已变化，请重新注册后调用 AI。",
-        ));
-    }
-    actual.id = saved.id.clone();
+    let actual = library_core::materials::actual_template(saved)?;
     Ok(Some(json!(actual)))
 }
 pub fn public_config(e: &Engine) -> Result<Value> {
@@ -258,7 +245,9 @@ pub async fn queue_loop(e: &Engine, app: &tauri::AppHandle, id: &str) -> Result<
                         )
                     }
                 })?;
-            if cfg != q.config || schema != q.template {
+            if cfg != q.config
+                || !library_core::materials::same_template(schema.as_ref(), q.template.as_ref())
+            {
                 return Err(Failure::new(
                     "AI_CONFIG_CHANGED",
                     "原队列的模型或模板配置变化；结束原范围后再建立新范围。",

@@ -183,10 +183,11 @@ export interface Workspace {
   tasks: Task[];
   root: string;
   running: boolean;
-  running_service?: "general" | "download" | "ai" | null;
+  running_service?: "general" | "download" | "ai" | "materials" | null;
   paused: boolean;
   download_queue?: DownloadQueue | null;
   ai_queue?: AiQueue | null;
+  material_batch?: MaterialBatch | null;
   browsers: Record<string, { open: boolean; usable: boolean }>;
   policy: string;
   framework?: FrameworkManifest;
@@ -210,6 +211,25 @@ export interface Workspace {
       format: string;
     }[];
     warnings: string[];
+  }[];
+}
+export interface MaterialBatch {
+  id: string;
+  owner: string;
+  cursor: number;
+  status: DownloadQueue["status"];
+  pause_requested: boolean;
+  targets: { id: string; record: Task["record"]; error: Failure | null }[];
+  outcomes: {
+    id: string;
+    error: Failure | null;
+    product: {
+      kind: "original" | "field_valid" | "draft";
+      path: string;
+      audit: string;
+      reused: boolean;
+      validation: MaterialValidation;
+    } | null;
   }[];
 }
 export interface AiQueue {

@@ -34,7 +34,7 @@ flowchart TD
 | 层 | 入口和责任 |
 | --- | --- |
 | 桌面启动 | `src-tauri/src/main.rs`：装配窗口、Engine 和分类 IPC，不包含业务操作实现 |
-| IPC | `src-tauri/src/commands/`：workspace、tasks、browsers、materials、models 五组命令；统一验证本地窗口，按操作取得执行租约 |
+| IPC | `src-tauri/src/commands/`：按名单、任务、浏览器、来源、材料、模型和批次拆分命令；统一验证本地窗口，按操作取得执行租约 |
 | 应用调度 | `src-tauri/src/engine.rs`：唯一实例、工作空间、并发租约、事件、操作分发 |
 | 输入和人工核验 | `engine/input_service.rs`、`review_service.rs`：名单版本确认和有来源的分流；名单读取、迁移入口位于 `commands/workspace.rs` |
 | 来源下载 | `engine/downloads.rs`：原始文件、身份核验、队列、失败继续、暂停恢复和文件复用 |
@@ -48,6 +48,7 @@ flowchart TD
 | 核心业务 | `core/src/model.rs`、`issues.rs`、`sa.rs`、`claim.rs`、`alias.rs`、`metadata.rs`、`merge.rs`、`library.rs`：规则和来源校验，不依赖窗口或 Tauri |
 | 存储与恢复 | `core/src/store.rs`、`queue.rs`、`download.rs`、`versions.rs`、`legacy.rs`：事务、原始意图、输入、回执和恢复条件 |
 | 文件、模板、AI | `core/src/files.rs`、`source_files.rs`、`templates.rs`、`template_rules.rs`、`catalog.rs` 与 `src-tauri/src/ai.rs`：原文件接入、Excel、实际模板规则、渠道和 API 引用验证 |
+| 批量材料 | `core/src/materials.rs`、`material_batch.rs`、`commands/material_batches.rs` 与 `MaterialBatchPanel.vue`：冻结零匹配范围、原始导出优先、模板产品、来源与文件回执、暂停恢复 |
 | 前端服务 | `src/services/desktop.ts`：闭合的本地命令类型；`composables/useWorkbench.ts`：任务、表单、确认和事件 |
 | 前端页面 | `WorkflowOverview.vue`：流程、来源能力、连接与实时数量；`App.vue`：任务详情、材料与设置；`TaskTable.vue`、`WorkbenchShell.vue`：列表和导航 |
 
@@ -66,6 +67,16 @@ flowchart TD
 新增操作依次接入：公开枚举 → 核心规则 → 服务 → 原始意图与回读 → 页面驱动 → UI 确认 → 权限注册与业务验收。恢复必须读取原载荷，不能用后来改变的表单替代旧意图。
 
 模板以实际文件为准，重复表头使用列位置作为唯一填写键，导出不改原表头。注册及导出均读取说明行和输出行的数据有效性；可解释规则在本地验证，未知规则列为待核对。生成草稿保留有效字段，无效字段留空，模板与输出哈希、输入和 AI 建议绑定后写入任务证据及来源报告。材料导出不改业务阶段；再次分类不会让旧材料成为新建议的成功证明。
+
+### 批量材料整理
+
+本地 `prepare_material_batch`、`resume_material_batch`、`cancel_material_batch` 与已有全局暂停入口共用唯一 Engine 租约，运行服务标为 `materials`。SQLite `material_batches` 保存原负责人、顺序、完整名单、原 Artifact、输入/来源/建议哈希、实际模板要求和逐篇结果，只允许一份未结束的材料范围。原范围中的逐篇失败继续；存储故障暂停，重启将运行范围转为待继续，不自动执行。
+
+已有原始导出重新解析并核验原字节与身份后优先复制，身份未确认不能改用模板绕过。其他论文按保存建议的模板 ID 读取实际注册文件，要求完整来源和模板语义匹配的 AI 审计。模板 ID、必填列、规则和补充说明参与比较；读取实际模板时不会重复附加相同原文说明。只有重复且完全相同的自动说明块可归一化，不同说明不能合并。单篇导出与 AI 缓存也检查实际模板及完整来源审计。
+
+`materials/products/<recipe SHA256>` 中的 `intent.json`、`prepared.json`、产品和 `来源.json` 分别记录冻结事实、发布前回执、原字节/模板结果和完整字段来源。发布前复查资料、实际模板与验证结论；恢复时检查原回执、哈希及实际填写单元格。未填写的可选列也清空示例值。发布后游标更新前退出，可以复用同一文件和保存审计，不生成第二份或重复增加证据；被修改的产品、来源记录或回执保留并拒绝采纳。
+
+批次退出或完成时生成 `materials/batches/<批次 ID>/材料与来源.xlsx`。材料文件索引包含原行号、题名、类型、文件与回执路径、哈希、缺项、格式问题、待核对要求和失败原因；完整原范围与结果按 15000 字符分段并附完整 SHA256。全局来源报告同时保留全部历史材料范围。整理不调用 API、不发送平台写入、不提升业务阶段；原始导出、字段通过和草稿都仍需后续业务核对。这里验证的是核心数据库/文件重开恢复及隔离前端，尚未宣称材料批次已通过完整原生程序强制退出测试。
 
 ### 原始文件接入
 

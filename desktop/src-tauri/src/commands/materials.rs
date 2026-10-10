@@ -85,6 +85,7 @@ pub(crate) async fn fill_template(
         .iter()
         .find(|t| t.id == template_id)
         .ok_or_else(|| Failure::new("TEMPLATE_INVALID", "模板不存在。"))?;
+    let template = library_core::materials::actual_template(template)?;
     let classification = task
         .classification
         .clone()
@@ -102,6 +103,25 @@ pub(crate) async fn fill_template(
         &sources,
         &json!(template),
     )?;
+    if !task
+        .evidence
+        .iter()
+        .filter(|e| e.kind == "ai_classification")
+        .filter_map(|e| serde_json::from_str::<Value>(&e.text).ok())
+        .any(|a| {
+            a["result"] == classification
+                && a["sources"] == json!(sources)
+                && library_core::materials::same_template(a.get("template"), Some(&json!(template)))
+                && a["review_required"] == true
+                && a["platform_verified"] == false
+        })
+    {
+        return Err(Failure::new(
+            "AI_RESULT_INVALID",
+            "建议缺少对应实际模板和当前来源的完整审计。",
+        ));
+    }
+    let frozen = library_core::materials::facts(&state.store.root, &task)?;
     let fields: std::collections::BTreeMap<String, String> = classification["fields"]
         .as_object()
         .ok_or_else(|| Failure::new("AI_RESULT_INVALID", "缺少已核验字段。"))?
@@ -124,8 +144,15 @@ pub(crate) async fn fill_template(
     let Some(file) = file else {
         return Ok(json!({"cancelled":true}));
     };
+    task = state.store.task(&id)?;
+    if library_core::materials::facts(&state.store.root, &task)? != frozen {
+        return Err(Failure::new(
+            "MATERIAL_CHANGED",
+            "选择保存位置期间，原论文资料变化，未导出。",
+        ));
+    }
     library_core::source_files::verified_evidence(&state.store.root, &task)?;
-    let validation = library_core::templates::write_checked(template, &fields, file.path())?;
+    let validation = library_core::templates::write_checked(&template, &fields, file.path())?;
     let audit = state.store.root.join("materials");
     std::fs::create_dir_all(&audit)?;
     let source_evidence = sources;
