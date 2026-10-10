@@ -30,6 +30,7 @@ pub mod template_rules;
 pub mod templates;
 pub mod versions;
 pub mod workflow;
+pub mod wos_failure;
 pub mod wos_reuse;
 pub mod wos_search;
 pub use model::*;

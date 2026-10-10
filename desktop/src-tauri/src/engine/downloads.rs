@@ -77,7 +77,17 @@ impl Engine {
         Ok(t)
     }
     pub async fn download_one(&self, app: &AppHandle, id: &str) -> Result<()> {
+        let mut checkpoint = None;
+        self.download_one_tracked(app, id, &mut checkpoint).await
+    }
+    async fn download_one_tracked(
+        &self,
+        app: &AppHandle,
+        id: &str,
+        checkpoint: &mut Option<Task>,
+    ) -> Result<()> {
         let mut t = self.store.task(id)?;
+        *checkpoint = Some(t.clone());
         if t.record.done || t.record.matches != 0 {
             return Ok(());
         }
@@ -103,6 +113,12 @@ impl Engine {
         {
             return Err(Failure::new("INPUT_CHANGED", "任务输入已变化，请先核对。"));
         }
+        if !matches!(t.route, Route::ZeroReview | Route::Missing) {
+            return Err(Failure::new(
+                "INVALID_TRANSITION",
+                "当前业务分支不进入补充下载，请先核对零匹配原因。",
+            ));
+        }
         // An actual native completion receipt owns recovery before any shared
         // file shortcut. Its original scope/hash cannot be bypassed by reuse.
         if self.store.recover_native_download(id)? {
@@ -117,6 +133,7 @@ impl Engine {
         t.running = true;
         t.last_error = None;
         self.store.save(&mut t, "search_started")?;
+        *checkpoint = Some(t.clone());
         self.changed(app);
         let payload = json!({"sa_id":t.id,"title":t.record.title,"doi":normalized_doi(&t.record.doi),"wos":normalized_wos(&t.record.wos)});
         let journal = library_core::wos_search::begin(&self.store, &t)?;
@@ -134,6 +151,7 @@ impl Engine {
             .ok_or_else(|| Failure::new("PAGE_UNSUPPORTED", "检索没有返回来源链接。"))?;
         t.stage = Stage::Downloading;
         self.store.save(&mut t, "export_started")?;
+        *checkpoint = Some(t.clone());
         self.changed(app);
         let mut payload = payload;
         payload["expected_record_url"] = url.into();
@@ -238,7 +256,15 @@ impl Engine {
         _t: Task,
         _extra: Value,
     ) -> Result<Value> {
-        self.download_one(app, id).await?;
-        return Ok(json!({}));
+        let mut checkpoint = None;
+        let result = self.download_one_tracked(app, id, &mut checkpoint).await;
+        if let Err(error) = &result {
+            if let Some(task) = &checkpoint {
+                self.store.record_single_wos_failure(task, error)?;
+            }
+        }
+        self.changed(app);
+        result?;
+        Ok(json!({}))
     }
 }
