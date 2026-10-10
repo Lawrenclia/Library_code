@@ -138,6 +138,19 @@ fn eligible(store: &Store, task: &Task) -> Result<()> {
     }
     Ok(())
 }
+fn check_template_original(task: &Task) -> Result<()> {
+    if let Some(artifact) = &task.artifact {
+        if !artifact.identity_confirmed {
+            return Err(Failure::new(
+                "IDENTITY_CONFLICT",
+                "已有原始导出身份待核验，不能改用模板绕过核验。",
+            ));
+        }
+        let payload = json!({"sa_id":task.id,"instructions":format!("SA补充-{}",task.id),"candidate":artifact.candidate,"contentSha":artifact.candidate.sha256});
+        files::read_import_archive(task, &payload)?;
+    }
+    Ok(())
+}
 fn commit_audit(store: &Store, task: &mut Task, audit: &Value, path: &Path) -> Result<()> {
     if !task.evidence.iter().any(|e| {
         e.kind == "material_validation"
@@ -198,6 +211,83 @@ pub fn prepare(
     frozen: &Value,
     schema: Option<&Template>,
 ) -> Result<Product> {
+    prepare_product(store, id, frozen, schema, false)
+}
+/// An explicitly requested template uses the same durable product publication.
+/// Automatic batches still prefer original database exports.
+pub fn prepare_template(
+    store: &Store,
+    id: &str,
+    frozen: &Value,
+    schema: &Template,
+) -> Result<Product> {
+    prepare_product(store, id, frozen, Some(schema), true)
+}
+/// Export a user copy while retaining the managed product as the authority.
+pub fn export_copy(
+    store: &Store,
+    product: &Product,
+    frozen: &Value,
+    destination: &Path,
+) -> Result<Value> {
+    verify_product(store, product, frozen)?;
+    if product.kind == "original"
+        || destination
+            .extension()
+            .and_then(|v| v.to_str())
+            .map(str::to_lowercase)
+            .as_deref()
+            != Some("xlsx")
+    {
+        return Err(Failure::new(
+            "FILE_INVALID",
+            "模板副本需要保存为 Excel 文件。",
+        ));
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| invalid("保存目录无效。"))?
+        .canonicalize()?;
+    if parent.starts_with(store.root.canonicalize()?) {
+        return Err(invalid(
+            "请选择工作目录之外的位置导出副本；应用目录内的原材料已自动保存。",
+        ));
+    }
+    if destination.exists() {
+        let meta = fs::symlink_metadata(destination)?;
+        if !meta.is_file() || meta.file_type().is_symlink() {
+            return Err(invalid("副本保存位置不是普通文件。"));
+        }
+    }
+    let bytes = fs::read(&product.path)?;
+    if hash(&bytes) != product.sha256 {
+        return Err(invalid("管理文件在导出前变化，未复制。"));
+    }
+    fs::write(destination, &bytes)?;
+    if !same_file(destination, &product.sha256)? {
+        return Err(invalid("导出副本与管理文件不一致，未登记成功。"));
+    }
+    let mut task = store.task(&product.sa_id)?;
+    verify_product(store, product, frozen)?;
+    task.evidence.push(Evidence {
+        id: uuid::Uuid::new_v4().to_string(),
+        kind: "material_export".into(),
+        source: destination.to_string_lossy().into(),
+        text: json!({"schema":"material_export_v1","product":product,"copy":destination.to_string_lossy(),"copy_hash":product.sha256,"facts":frozen,"platform_verified":false}).to_string(),
+        created: now(),
+    });
+    store.save(&mut task, "material_copy_exported")?;
+    Ok(
+        json!({"path":destination.to_string_lossy(),"managed_path":product.path,"recipe":product.recipe,"audit":product.audit,"sha256":product.sha256,"task_revision":task.revision,"missing":product.validation["missing"],"invalid":product.validation["invalid"],"requires_review":product.validation["requires_review"],"ready":product.validation["ready"]}),
+    )
+}
+fn prepare_product(
+    store: &Store,
+    id: &str,
+    frozen: &Value,
+    schema: Option<&Template>,
+    explicit_template: bool,
+) -> Result<Product> {
     let mut task = store.task(id)?;
     eligible(store, &task)?;
     if facts(&store.root, &task)? != *frozen {
@@ -206,7 +296,12 @@ pub fn prepare(
         ));
     }
     let sources = classification::sources(&store.root, &task)?;
-    let (kind, fields, template, original) = if let Some(artifact) = &task.artifact {
+    if explicit_template {
+        check_template_original(&task)?;
+    }
+    let (kind, fields, template, original) = if let Some(artifact) =
+        task.artifact.as_ref().filter(|_| !explicit_template)
+    {
         let payload = json!({"sa_id":id,"instructions":format!("SA补充-{id}"),"candidate":artifact.candidate,"contentSha":artifact.candidate.sha256});
         let bytes = files::read_import_archive(&task, &payload)?;
         if !artifact.identity_confirmed {
@@ -322,6 +417,7 @@ pub fn prepare(
     }
     if let Some(schema) = &template {
         actual_template(schema)?;
+        check_template_original(&task)?;
     }
     let digest = prepared["sha256"]
         .as_str()

@@ -624,6 +624,7 @@ pub fn verified_evidence(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
                         | "claim_verified"
                         | "sa_read"
                         | "material_validation"
+                        | "material_export"
                         | "submission_packet"
                         | "legacy_material"
                         | "legacy_history"

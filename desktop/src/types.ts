@@ -357,6 +357,10 @@ export interface SubmissionOptions {
 }
 export interface MaterialValidation {
   path: string;
+  managed_path?: string;
+  recipe?: string;
+  audit?: string;
+  sha256?: string;
   task_revision?: number;
   missing: string[];
   invalid?: MaterialProblem[];

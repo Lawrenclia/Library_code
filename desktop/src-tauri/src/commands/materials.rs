@@ -78,7 +78,7 @@ pub(crate) async fn fill_template(
 ) -> Result<Value> {
     local(&window)?;
     let _lease = state.acquire()?;
-    let mut task = state.store.task(&id)?;
+    let task = state.store.task(&id)?;
     let schemas: Vec<Template> =
         serde_json::from_value(state.store.setting("templates")?.unwrap_or(json!([])))?;
     let template = schemas
@@ -86,56 +86,13 @@ pub(crate) async fn fill_template(
         .find(|t| t.id == template_id)
         .ok_or_else(|| Failure::new("TEMPLATE_INVALID", "模板不存在。"))?;
     let template = library_core::materials::actual_template(template)?;
-    let classification = task
+    let result = task
         .classification
-        .clone()
-        .ok_or_else(|| Failure::new("EVIDENCE_REQUIRED", "先调用 AI 并核对有来源的模板字段。"))?;
-    if classification["template_id"].as_str() != Some(&template.id) {
-        return Err(Failure::new(
-            "TEMPLATE_CHANGED",
-            "AI 填写建议属于其他模板，请针对当前模板重新生成。",
-        ));
-    }
+        .as_ref()
+        .ok_or_else(|| Failure::new("EVIDENCE_REQUIRED", "先针对实际模板生成有来源的 AI 建议。"))?;
     let sources = library_core::classification::sources(&state.store.root, &task)?;
-    library_core::classification::validate_saved(
-        &task,
-        &classification,
-        &sources,
-        &json!(template),
-    )?;
-    if !task
-        .evidence
-        .iter()
-        .filter(|e| e.kind == "ai_classification")
-        .filter_map(|e| serde_json::from_str::<Value>(&e.text).ok())
-        .any(|a| {
-            a["result"] == classification
-                && a["sources"] == json!(sources)
-                && library_core::materials::same_template(a.get("template"), Some(&json!(template)))
-                && a["review_required"] == true
-                && a["platform_verified"] == false
-        })
-    {
-        return Err(Failure::new(
-            "AI_RESULT_INVALID",
-            "建议缺少对应实际模板和当前来源的完整审计。",
-        ));
-    }
+    library_core::classification::validate_saved(&task, result, &sources, &json!(template))?;
     let frozen = library_core::materials::facts(&state.store.root, &task)?;
-    let fields: std::collections::BTreeMap<String, String> = classification["fields"]
-        .as_object()
-        .ok_or_else(|| Failure::new("AI_RESULT_INVALID", "缺少已核验字段。"))?
-        .iter()
-        .map(|(k, v)| {
-            Ok((
-                k.clone(),
-                v["value"]
-                    .as_str()
-                    .ok_or_else(|| Failure::new("AI_RESULT_INVALID", "字段格式无效。"))?
-                    .into(),
-            ))
-        })
-        .collect::<Result<_>>()?;
     let file = rfd::AsyncFileDialog::new()
         .add_filter("Excel 材料", &["xlsx"])
         .set_file_name(format!("{}-{}.xlsx", template.name, id))
@@ -144,31 +101,13 @@ pub(crate) async fn fill_template(
     let Some(file) = file else {
         return Ok(json!({"cancelled":true}));
     };
-    task = state.store.task(&id)?;
-    if library_core::materials::facts(&state.store.root, &task)? != frozen {
-        return Err(Failure::new(
-            "MATERIAL_CHANGED",
-            "选择保存位置期间，原论文资料变化，未导出。",
-        ));
-    }
-    library_core::source_files::verified_evidence(&state.store.root, &task)?;
-    let validation = library_core::templates::write_checked(&template, &fields, file.path())?;
-    let audit = state.store.root.join("materials");
-    std::fs::create_dir_all(&audit)?;
-    let source_evidence = sources;
-    let provenance = json!({"schema":"template_material_v1","sa_id":id,"input_hash":task.input_hash,"record_fingerprint":task.record.fingerprint(),"classification_hash":hash(classification.to_string().as_bytes()),"template_id":template.id,"template_hash":template.fingerprint,"output":file.path().to_string_lossy(),"output_hash":hash(&std::fs::read(file.path())?),"fields":classification["fields"],"evidence":source_evidence,"validation":validation,"missing":validation.missing,"invalid_fields_omitted":true});
-    let audit_path = audit.join(format!("{}.json", uuid::Uuid::new_v4()));
-    std::fs::write(&audit_path, serde_json::to_vec_pretty(&provenance)?)?;
-    task.evidence.push(Evidence {
-        id: uuid::Uuid::new_v4().to_string(),
-        kind: "material_validation".into(),
-        source: audit_path.to_string_lossy().into(),
-        text: provenance.to_string(),
-        created: now(),
-    });
-    state.store.save(&mut task, "material_exported")?;
+    // Recheck the original scope inside the shared publisher after the dialog.
+    // A failed external copy leaves its managed product available for submission.
+    let product = library_core::materials::prepare_template(&state.store, &id, &frozen, &template);
     state.changed(&app);
-    Ok(
-        json!({"path":file.path().to_string_lossy(),"task_revision":task.revision,"missing":validation.missing,"invalid":validation.invalid,"requires_review":validation.requires_review,"ready":validation.ready}),
-    )
+    let product = product?;
+    let exported =
+        library_core::materials::export_copy(&state.store, &product, &frozen, file.path());
+    state.changed(&app);
+    exported
 }

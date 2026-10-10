@@ -1030,6 +1030,136 @@ pub fn export_report_with_materials(
         sheet.set_freeze_panes(1, 0).map_err(Failure::storage)?;
         sheet.set_column_width(7, 80.).map_err(Failure::storage)?;
     }
+    let selections = book.add_worksheet();
+    selections
+        .set_name("提交材料记录")
+        .map_err(Failure::storage)?;
+    for (column, label) in [
+        "SA ID",
+        "负责人",
+        "原表行号",
+        "题名",
+        "准备记录 ID",
+        "是否最新选择",
+        "保存时间",
+        "选择渠道",
+        "成果类型建议",
+        "所属机构",
+        "导入说明",
+        "材料类型",
+        "管理文件",
+        "文件 SHA256",
+        "来源回执",
+        "材料版本",
+        "保存时输入版本",
+        "当前输入版本",
+        "名单版本是否一致",
+        "当前任务阶段",
+        "平台唯一号",
+        "校核范围",
+        "完整记录依据 ID",
+        "完整记录 SHA256",
+    ]
+    .iter()
+    .enumerate()
+    {
+        selections
+            .write_string(0, column as u16, *label)
+            .map_err(Failure::storage)?;
+    }
+    let mut row = 1;
+    for task in tasks {
+        let latest = task
+            .evidence
+            .iter()
+            .rfind(|e| e.kind == "submission_packet")
+            .map(|e| &e.id);
+        for e in task
+            .evidence
+            .iter()
+            .filter(|e| e.kind == "submission_packet")
+        {
+            let saved = serde_json::from_str::<serde_json::Value>(&e.text).unwrap_or_default();
+            let packet = &saved["packet"];
+            let value = |key: &str| packet[key].as_str().unwrap_or("未记录").to_string();
+            let material = |key: &str| {
+                packet["material"][key]
+                    .as_str()
+                    .unwrap_or("未记录")
+                    .to_string()
+            };
+            let snapshot_matches = saved["schema"] == "submission_packet_v1"
+                && packet["sa_id"] == task.id
+                && packet["input_hash"] == task.input_hash
+                && packet["record"] == serde_json::json!(task.record);
+            for (column, cell) in [
+                task.id.clone(),
+                packet["record"]["owner"]
+                    .as_str()
+                    .unwrap_or(&task.record.owner)
+                    .to_string(),
+                packet["record"]["row"]
+                    .as_u64()
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+                packet["record"]["title"]
+                    .as_str()
+                    .unwrap_or("未记录")
+                    .to_string(),
+                value("id"),
+                if latest == Some(&e.id) {
+                    "是"
+                } else {
+                    "历史选择"
+                }
+                .into(),
+                e.created.to_string(),
+                value("channel_label"),
+                value("work_type"),
+                value("organisation"),
+                value("instructions"),
+                material("kind"),
+                material("path"),
+                material("sha256"),
+                material("audit"),
+                material("recipe"),
+                value("input_hash"),
+                task.input_hash.clone(),
+                if snapshot_matches {
+                    "名单一致；来源与文件仍需重新核对"
+                } else {
+                    "名单已变化或记录无效"
+                }
+                .into(),
+                serde_json::to_value(&task.stage)?.as_str().unwrap().into(),
+                task.platform_id.clone(),
+                "保存时的材料选择；本次报告没有重新校验文件、来源或平台接收结果".into(),
+                e.id.clone(),
+                hash(e.text.as_bytes()),
+            ]
+            .iter()
+            .enumerate()
+            {
+                // The original-source sheet holds all JSON chunks without truncation.
+                selections
+                    .write_string(
+                        row,
+                        column as u16,
+                        cell.chars().take(15000).collect::<String>(),
+                    )
+                    .map_err(Failure::storage)?;
+            }
+            row += 1;
+        }
+    }
+    selections
+        .set_freeze_panes(1, 0)
+        .map_err(Failure::storage)?;
+    for col in [3, 10, 12, 14, 21] {
+        selections
+            .set_column_width(col, 50.)
+            .map_err(Failure::storage)?;
+    }
     book.save(path).map_err(Failure::storage)?;
     Ok(())
 }

@@ -1932,6 +1932,14 @@ function frameworkBrowser(role: string, entry?: string) {
                     <p class="break-all text-[11px] text-muted-foreground">
                       {{ materialValidation.path }}
                     </p>
+                    <p
+                      v-if="materialValidation.managed_path"
+                      class="break-all text-[11px] text-muted-foreground"
+                    >
+                      应用内原材料：{{
+                        materialValidation.managed_path
+                      }}。可在“平台操作”页选择本篇提交材料；字段校验通过后仍需完成业务核验。
+                    </p>
                     <p v-if="materialValidation.missing.length" class="text-xs">
                       必填缺项：{{ materialValidation.missing.join("、") }}
                     </p>
