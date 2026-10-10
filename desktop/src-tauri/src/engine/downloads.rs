@@ -181,7 +181,7 @@ impl Engine {
                 .ok_or_else(|| Failure::new("QUEUE_CHANGED", "队列位置与原范围不一致。"))?;
             let id = &target.id;
             let t = self.store.task(id)?;
-            let available = target.matches(&t.record)
+            let available = target.matches_task(&t)
                 && !t.record.done
                 && t.record.matches == 0
                 && t.record.owner == queue.owner
@@ -195,7 +195,7 @@ impl Engine {
                 && self.store.unresolved(id)?.is_empty();
             if !available {
                 self.store.finish_download_target(queue_id, id, "not_executed", Some(Failure::new(
-                    "QUEUE_TARGET_CHANGED", "原队列的任务输入、跳过标记、业务阶段或待确认操作已变化；未检索或覆盖当前任务，请核对。")), None)?;
+                    "QUEUE_TARGET_CHANGED", "原队列的名单版本、任务字段、跳过标记、业务阶段或待确认操作已变化，或原名单版本未记录；未检索或覆盖当前任务，请核对。")), None)?;
                 self.changed(app);
                 continue;
             }

@@ -67,6 +67,13 @@ impl QueueTarget {
             && self.fingerprint == record.fingerprint()
             && self.skipped == record.skipped
     }
+    /// Resume the original roster snapshot, including its accepted input version.
+    /// Old targets without a recorded version remain audit history, never inferred scopes.
+    pub fn matches_task(&self, task: &Task) -> bool {
+        !self.input_hash.is_empty()
+            && self.input_hash == task.input_hash
+            && self.matches(&task.record)
+    }
 }
 fn read_queue(db: &Connection, id: &str) -> Result<DownloadQueue> {
     let raw: Option<String> = db
@@ -343,6 +350,12 @@ impl Store {
         }
         let saved = if let Some(t) = task.as_deref() {
             current_target(&queue, &t.id)?;
+            if !queue.targets[queue.cursor].matches_task(t) {
+                return Err(Failure::new(
+                    "QUEUE_TARGET_CHANGED",
+                    "原下载队列与当前名单版本不一致，未覆盖任务；请核对原范围。",
+                ));
+            }
             Some(Self::write_task(&tx, t, "search_failed")?)
         } else {
             None
@@ -374,6 +387,12 @@ impl Store {
         let saved = if let Some(t) = task.as_deref() {
             if t.id != target_id {
                 return Err(Failure::new("QUEUE_CHANGED", "队列与任务不一致。"));
+            }
+            if !queue.targets[queue.cursor].matches_task(t) {
+                return Err(Failure::new(
+                    "QUEUE_TARGET_CHANGED",
+                    "逐篇结果不属于原队列名单版本，未覆盖当前任务或推进队列。",
+                ));
             }
             Some(Self::write_task(&tx, t, "search_failed")?)
         } else {

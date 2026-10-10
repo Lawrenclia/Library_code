@@ -285,6 +285,73 @@ fn frozen_target_detects_staff_title_owner_and_skip_changes_but_not_row_move() {
     }
 }
 #[test]
+fn resumed_scope_rejects_same_fields_in_new_roster_and_preserves_remaining_original_targets() {
+    let (dir, store) = setup();
+    let q = store.start_download_queue("one", false).unwrap();
+    store.pause_download_queue(&q.id).unwrap();
+    let original = store.task("a").unwrap();
+    let mut moved = original.clone();
+    moved.record.row = 28;
+    assert!(q.targets[0].matches_task(&moved));
+    store
+        .import(vec![original.record.clone()], "new-roster-hash".into())
+        .unwrap();
+    let store = Store::new(dir.path()).unwrap();
+    store.recover().unwrap();
+    store.resume_download_queue(&q.id).unwrap();
+    let mut changed = store.task("a").unwrap();
+    assert!(q.targets[0].matches(&changed.record));
+    assert!(!q.targets[0].matches_task(&changed));
+    let before = serde_json::to_value(&changed).unwrap();
+    assert_eq!(
+        store
+            .finish_download_target(
+                &q.id,
+                "a",
+                "review",
+                Some(Failure::new("NO_RESULT", "old search")),
+                Some(&mut changed)
+            )
+            .unwrap_err()
+            .code,
+        "QUEUE_TARGET_CHANGED"
+    );
+    assert_eq!(
+        store
+            .block_download_queue(
+                &q.id,
+                Failure::new("AUTH_REQUIRED", "old session"),
+                Some(&mut changed)
+            )
+            .unwrap_err()
+            .code,
+        "QUEUE_TARGET_CHANGED"
+    );
+    assert_eq!(
+        serde_json::to_value(store.task("a").unwrap()).unwrap(),
+        before
+    );
+    assert_eq!(store.download_queue(&q.id).unwrap().cursor, 0);
+    store
+        .finish_download_target(
+            &q.id,
+            "a",
+            "not_executed",
+            Some(Failure::new("QUEUE_TARGET_CHANGED", "roster changed")),
+            None,
+        )
+        .unwrap();
+    let resumed = store.download_queue(&q.id).unwrap();
+    assert_eq!(resumed.status, QueueStatus::Running);
+    assert_eq!(resumed.cursor, 1);
+    assert_eq!(resumed.targets[0].input_hash, "input");
+    assert!(resumed.targets[1].matches_task(&store.task("d").unwrap()));
+    assert_eq!(resumed.outcomes[0].status, "not_executed");
+    let mut legacy = resumed.targets[1].clone();
+    legacy.input_hash.clear();
+    assert!(!legacy.matches_task(&store.task("d").unwrap()));
+}
+#[test]
 fn report_retains_cancelled_scope_original_fields_and_long_failure_without_truncation() {
     use calamine::{open_workbook_auto, Reader};
     let (_dir, store) = setup();
