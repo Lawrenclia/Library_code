@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import type {
   Task,
   SourcePage,
+  SourceCandidates,
   SourceReuseChoice,
   SourceReuseOptions,
 } from "@/types";
@@ -70,6 +71,26 @@ const originals = computed(() =>
 const selected = computed(() =>
   data.value?.rows.find((r) => r.row === selectedRow.value),
 );
+const matches = ref<SourceCandidates | null>(null);
+const matchesCurrent = computed(() => {
+  const found = matches.value;
+  return (
+    !!found &&
+    !!data.value &&
+    found.task_id === props.task.id &&
+    found.input_hash === props.task.input_hash &&
+    found.task_revision === props.task.revision &&
+    found.preview_id === data.value.draft.id &&
+    found.sha256 === data.value.draft.sha256 &&
+    found.sheet === sheet.value &&
+    found.header_row === Number(header.value) &&
+    String(found.title_column) === titleColumn.value &&
+    (found.doi_column === null ? "" : String(found.doi_column)) ===
+      doiColumn.value &&
+    (found.wos_column === null ? "" : String(found.wos_column)) ===
+      wosColumn.value
+  );
+});
 const ready = computed(
   () =>
     !!data.value &&
@@ -82,6 +103,7 @@ const ready = computed(
       : selectedRow.value !== null && titleColumn.value !== ""),
 );
 function reset() {
+  matches.value = null;
   data.value = null;
   selectedRow.value = null;
   titleColumn.value = "";
@@ -245,6 +267,79 @@ async function attach() {
     "原始来源已绑定，全部所选字段可用于 AI 分类和模板填写；归属与平台阶段仍须独立核验。",
   );
 }
+async function locate() {
+  if (
+    !data.value ||
+    textMode.value ||
+    reusing.value ||
+    titleColumn.value === ""
+  )
+    return;
+  const { id, revision } = props.task;
+  const draft = data.value.draft;
+  const criteria = JSON.stringify([
+    sheet.value,
+    header.value,
+    titleColumn.value,
+    doiColumn.value,
+    wosColumn.value,
+  ]);
+  matches.value = null;
+  selectedRow.value = null;
+  confirmed.value = false;
+  const result = await props.run<SourceCandidates>(
+    "locate_source_records",
+    {
+      id,
+      previewId: draft.id,
+      mapping: {
+        sheet: sheet.value,
+        header_row: Number(header.value),
+        row: Number(header.value) + 1,
+        end_row: Number(header.value) + 1,
+        title_column: Number(titleColumn.value),
+        doi_column: doiColumn.value === "" ? null : Number(doiColumn.value),
+        wos_column: wosColumn.value === "" ? null : Number(wosColumn.value),
+        text_title: "",
+      },
+    },
+    "已检查整张来源表。请选择并核验本篇候选；此结果不表示已绑定或已确认归属。",
+  );
+  if (
+    result &&
+    props.task.id === id &&
+    props.task.revision === revision &&
+    data.value?.draft.id === draft.id &&
+    criteria ===
+      JSON.stringify([
+        sheet.value,
+        header.value,
+        titleColumn.value,
+        doiColumn.value,
+        wosColumn.value,
+      ])
+  )
+    matches.value = result;
+}
+async function showCandidate(hit: SourceCandidates["candidates"][number]) {
+  if (!matchesCurrent.value || !data.value) return;
+  const found = matches.value;
+  if (data.value.page !== hit.page) await page(hit.page);
+  if (
+    matches.value === found &&
+    matchesCurrent.value &&
+    data.value?.rows.some((r) => r.row === hit.row)
+  ) {
+    selectedRow.value = hit.basis === "conflict" ? null : hit.row;
+    confirmed.value = false;
+  }
+}
+const conflictNames: Record<string, string> = {
+  doi_invalid: "DOI 格式无效",
+  doi_mismatch: "DOI 与名单冲突",
+  wos_invalid: "WOS ID 格式无效",
+  wos_mismatch: "WOS ID 与名单冲突",
+};
 </script>
 <template>
   <div class="space-y-3 rounded-xl border p-4" data-testid="source-importer">
@@ -568,6 +663,92 @@ async function attach() {
             </option>
           </select></label
         >
+        <div class="space-y-2 rounded border p-3">
+          <Button
+            variant="outline"
+            size="sm"
+            :disabled="
+              locked ||
+              reusing ||
+              titleColumn === '' ||
+              sheet !== data.sheet ||
+              header !== data.header_row
+            "
+            @click="locate"
+            >按名单定位整张表中的候选</Button
+          >
+          <p class="text-[11px] leading-6 text-muted-foreground">
+            先选择真实身份列。仅按完整题名或实际标识符匹配，不作模糊匹配，也不默认绑定第一条。
+          </p>
+          <template v-if="matchesCurrent && matches">
+            <p class="text-xs">
+              检查 {{ matches.examined }} 条记录，命中
+              {{ matches.candidates.length }} 个候选；{{
+                matches.unreadable.length
+              }}
+              条无法读取。
+            </p>
+            <p
+              v-if="!matches.candidates.length"
+              class="text-[11px] leading-6 text-muted-foreground"
+            >
+              所选列中未定位到候选。请核对列与题名；这不代表数据库没有该文献，也不作为零结果记录。
+            </p>
+            <div class="max-h-64 space-y-2 overflow-auto">
+              <div
+                v-for="hit in matches.candidates"
+                :key="hit.row"
+                class="rounded border p-2 text-[11px] leading-6"
+              >
+                <p class="break-all">第 {{ hit.row }} 条：{{ hit.title }}</p>
+                <p class="break-all text-muted-foreground">
+                  {{
+                    [hit.doi, hit.wos].filter(Boolean).join(" · ") ||
+                    "原记录未提供所选标识符"
+                  }}
+                </p>
+                <p
+                  :class="
+                    hit.basis === 'conflict'
+                      ? 'text-destructive'
+                      : 'text-muted-foreground'
+                  "
+                >
+                  {{
+                    hit.basis === "conflict"
+                      ? hit.conflicts
+                          .map((key) => conflictNames[key] || key)
+                          .join("；")
+                      : hit.basis === "identifier"
+                        ? "标识符命中，仍须核对完整记录"
+                        : "仅题名命中，身份仍须核验"
+                  }}
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  :disabled="locked"
+                  @click="showCandidate(hit)"
+                  >{{
+                    hit.basis === "conflict"
+                      ? "查看冲突记录"
+                      : "查看并选择此候选"
+                  }}</Button
+                >
+              </div>
+            </div>
+            <details v-if="matches.unreadable.length">
+              <summary class="text-xs">查看未读取的行</summary>
+              <p
+                v-for="problem in matches.unreadable"
+                :key="problem.row"
+                class="my-1 text-[11px] leading-6 text-destructive"
+              >
+                第 {{ problem.row }} 条：{{ problem.error.message }}
+              </p>
+            </details>
+          </template>
+        </div>
         <details v-if="selected">
           <summary>查看所选记录的全部字段</summary>
           <div

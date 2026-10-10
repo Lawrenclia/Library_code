@@ -21,6 +21,7 @@ fn main() {
             "source_reuse_options",
             "preview_reused_source",
             "source_file_page",
+            "locate_source_records",
             "attach_source_file",
             "source_browser_state",
             "save_source_site",

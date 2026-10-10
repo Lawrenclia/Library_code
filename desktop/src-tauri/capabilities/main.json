@@ -21,6 +21,7 @@
     "allow-source-reuse-options",
     "allow-preview-reused-source",
     "allow-source-file-page",
+    "allow-locate-source-records",
     "allow-attach-source-file",
     "allow-source-browser-state",
     "allow-save-source-site",

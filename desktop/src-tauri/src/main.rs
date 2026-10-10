@@ -63,6 +63,7 @@ fn main() {
             commands::sources::source_reuse_options,
             commands::sources::preview_reused_source,
             commands::sources::source_file_page,
+            commands::sources::locate_source_records,
             commands::sources::attach_source_file,
             commands::source_browsers::source_browser_state,
             commands::source_browsers::save_source_site,

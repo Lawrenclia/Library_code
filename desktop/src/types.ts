@@ -521,3 +521,29 @@ export interface SourcePage {
   rows: { row: number; values: string[] }[];
   cancelled?: boolean;
 }
+export interface SourceCandidates {
+  schema: "source_table_candidates_v1";
+  task_id: string;
+  input_hash: string;
+  task_revision: number;
+  preview_id: string;
+  sha256: string;
+  sheet: string;
+  header_row: number;
+  title_column: number;
+  doi_column: number | null;
+  wos_column: number | null;
+  examined: number;
+  unreadable: { row: number; error: Failure }[];
+  candidates: {
+    row: number;
+    title: string;
+    doi: string;
+    wos: string;
+    matched_by: string[];
+    conflicts: string[];
+    basis: "conflict" | "identifier" | "title_only";
+    page: number;
+  }[];
+  automatically_bound: false;
+}

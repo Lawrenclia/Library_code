@@ -136,6 +136,20 @@ pub(crate) fn source_file_page(
     )
 }
 #[tauri::command]
+pub(crate) fn locate_source_records(
+    window: WebviewWindow,
+    state: State<Engine>,
+    id: String,
+    preview_id: String,
+    mapping: Selection,
+) -> Result<Value> {
+    local(&window)?;
+    let task = state.store.task(&id)?;
+    let draft = resolve(&state, &id, Some(&preview_id))?;
+    let document = source_files::check_draft(&state.store.root, &task, &draft)?;
+    document.locate(&task, &draft, &mapping)
+}
+#[tauri::command]
 pub(crate) fn attach_source_file(
     window: WebviewWindow,
     app: AppHandle,

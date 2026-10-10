@@ -360,6 +360,117 @@ pub fn check_draft(root: &Path, task: &Task, draft: &Draft) -> Result<Document> 
     read(&path, &draft.format, &draft.options)
 }
 impl Document {
+    /// Locate candidates in the entire selected table. Never bind or select one.
+    pub fn locate(&self, task: &Task, draft: &Draft, mapping: &Selection) -> Result<Value> {
+        if self.text_mode || draft.origin.is_some() {
+            return Err(fail(
+                "文本片段需手动选择；复用来源已固定原记录，不能重新定位其他行。",
+            ));
+        }
+        if draft.task_id != task.id
+            || draft.input_hash != task.input_hash
+            || draft.record_fingerprint != task.record.fingerprint()
+            || draft.task_revision != task.revision
+        {
+            return Err(Failure::new(
+                "INPUT_CHANGED",
+                "当前定位预览属于其他名单版本。",
+            ));
+        }
+        let table = self.table(&mapping.sheet)?;
+        let offset = mapping
+            .header_row
+            .checked_sub(table.start_row + 1)
+            .ok_or_else(|| fail("表头行不在原始表内。"))? as usize;
+        let header = table
+            .rows
+            .get(offset)
+            .ok_or_else(|| fail("原始表头行不存在。"))?;
+        let mut mapped = std::collections::BTreeSet::new();
+        if mapping.title_column.is_none()
+            || [mapping.title_column, mapping.doi_column, mapping.wos_column]
+                .into_iter()
+                .flatten()
+                .any(|col| {
+                    !mapped.insert(col)
+                        || col < table.start_col
+                        || (col - table.start_col) as usize >= header.len()
+                })
+        {
+            return Err(fail("先选择互不重复的实际题名、DOI 和 WOS ID 列。"));
+        }
+        let wanted_title = norm(&task.record.title);
+        let wanted_doi = normalized_doi(&task.record.doi);
+        let wanted_wos = normalized_wos(&task.record.wos);
+        let valid_doi = regex::Regex::new(r"^10\.[0-9]{4,9}/\S+$").unwrap();
+        let valid_wos = regex::Regex::new(r"^WOS:[0-9]{15}$").unwrap();
+        let mut candidates = Vec::new();
+        let mut unreadable = Vec::new();
+        for index in offset + 1..table.rows.len() {
+            let mut selection = mapping.clone();
+            selection.row = table.start_row + index as u32 + 1;
+            selection.end_row = selection.row;
+            let (_, _, title, doi, wos) = match self.extract(&draft.format, &selection) {
+                Ok(value) => value,
+                Err(error) => {
+                    unreadable.push(json!({"row":selection.row,"error":error}));
+                    continue;
+                }
+            };
+            let doi = normalized_doi(&doi);
+            let wos = normalized_wos(&wos);
+            let mut matched_by = Vec::new();
+            if !wanted_title.is_empty() && norm(&title) == wanted_title {
+                matched_by.push("title");
+            }
+            if !wanted_doi.is_empty() && doi == wanted_doi {
+                matched_by.push("doi");
+            }
+            if !wanted_wos.is_empty() && wos == wanted_wos {
+                matched_by.push("wos");
+            }
+            if matched_by.is_empty() {
+                continue;
+            }
+            let mut conflicts = Vec::new();
+            if !doi.is_empty() {
+                if !valid_doi.is_match(&doi) {
+                    conflicts.push("doi_invalid");
+                }
+                if !wanted_doi.is_empty() && doi != wanted_doi {
+                    conflicts.push("doi_mismatch");
+                }
+            }
+            if !wos.is_empty() {
+                if !valid_wos.is_match(&wos) {
+                    conflicts.push("wos_invalid");
+                }
+                if !wanted_wos.is_empty() && wos != wanted_wos {
+                    conflicts.push("wos_mismatch");
+                }
+            }
+            let basis = if !conflicts.is_empty() {
+                "conflict"
+            } else if matched_by.contains(&"doi") || matched_by.contains(&"wos") {
+                "identifier"
+            } else {
+                "title_only"
+            };
+            candidates.push(
+                json!({"row":selection.row,"title":title,"doi":doi,"wos":wos,
+                "matched_by":matched_by,"conflicts":conflicts,"basis":basis,
+                "page":(index-offset-1)/50}),
+            );
+        }
+        Ok(
+            json!({"schema":"source_table_candidates_v1","task_id":task.id,"input_hash":task.input_hash,
+            "task_revision":task.revision,"preview_id":draft.id,"sha256":draft.sha256,
+            "sheet":mapping.sheet,"header_row":mapping.header_row,"title_column":mapping.title_column,
+            "doi_column":mapping.doi_column,"wos_column":mapping.wos_column,
+            "examined":table.rows.len().saturating_sub(offset+1),"unreadable":unreadable,
+            "candidates":candidates,"automatically_bound":false,"institution_verified":false,"platform_verified":false}),
+        )
+    }
     fn table(&self, sheet: &str) -> Result<&Table> {
         self.tables
             .iter()
@@ -754,6 +865,98 @@ mod tests {
         )
         .unwrap();
         prepare(root, t, "ei", &path, ReadOptions::default()).unwrap()
+    }
+    #[test]
+    fn whole_table_locator_returns_all_candidates_conflicts_and_original_pages_without_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = task();
+        let path = dir.path().join("many.csv");
+        let mut raw = "Title,DOI,WOS,Abstract\nPaper,10.9876/other,,conflicting DOI\nOther title,https://doi.org/10.1234/test,,corrected title\nPaper,,,title only\n".to_owned();
+        for n in 0..60 {
+            raw.push_str(&format!("Other {n},,,unchanged\n"));
+        }
+        raw.push_str("Paper,10.1234/test,WOS:000123456789012,full abstract\n");
+        std::fs::write(&path, &raw).unwrap();
+        let draft = prepare(dir.path(), &t, "ei", &path, ReadOptions::default()).unwrap();
+        let document = check_draft(dir.path(), &t, &draft).unwrap();
+        let before = serde_json::to_value(&t).unwrap();
+        let found = document.locate(&t, &draft, &csv_selection()).unwrap();
+        assert_eq!(found["examined"], 64);
+        assert_eq!(found["candidates"].as_array().unwrap().len(), 4);
+        assert_eq!(found["candidates"][0]["basis"], "conflict");
+        assert_eq!(found["candidates"][0]["conflicts"], json!(["doi_mismatch"]));
+        assert_eq!(found["candidates"][1]["basis"], "identifier");
+        assert_eq!(found["candidates"][2]["basis"], "title_only");
+        assert_eq!(found["candidates"][3]["row"], 65);
+        assert_eq!(found["candidates"][3]["page"], 1);
+        assert_eq!(found["automatically_bound"], false);
+        assert_eq!(found["institution_verified"], false);
+        assert_eq!(serde_json::to_value(&t).unwrap(), before);
+        assert_eq!(std::fs::read(&draft.path).unwrap(), raw.as_bytes());
+    }
+    #[test]
+    fn locator_preserves_excel_offset_and_reports_unreadable_rows_instead_of_false_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = task();
+        let path = dir.path().join("offset.xlsx");
+        let mut book = rust_xlsxwriter::Workbook::new();
+        let sheet = book.add_worksheet();
+        sheet.write_string(4, 2, "Title").unwrap();
+        sheet.write_string(4, 3, "DOI").unwrap();
+        sheet.write_string(5, 2, "Paper").unwrap();
+        sheet.write_string(5, 3, "10.1234/test").unwrap();
+        sheet.write_formula(6, 2, "=\"Paper\"").unwrap();
+        sheet.write_string(6, 3, "10.1234/test").unwrap();
+        book.save(&path).unwrap();
+        let draft = prepare(dir.path(), &t, "cnki", &path, ReadOptions::default()).unwrap();
+        let document = check_draft(dir.path(), &t, &draft).unwrap();
+        let mapping = Selection {
+            sheet: "Sheet1".into(),
+            header_row: 5,
+            row: 6,
+            end_row: 6,
+            title_column: Some(2),
+            doi_column: Some(3),
+            wos_column: None,
+            text_title: String::new(),
+        };
+        let found = document.locate(&t, &draft, &mapping).unwrap();
+        assert_eq!(found["examined"], 2);
+        assert_eq!(found["candidates"][0]["row"], 6);
+        assert_eq!(found["unreadable"][0]["row"], 7);
+        let mut bad = mapping.clone();
+        bad.doi_column = bad.title_column;
+        assert!(document.locate(&t, &draft, &bad).is_err());
+        let mut changed = t.clone();
+        changed.revision += 1;
+        assert!(document.locate(&changed, &draft, &mapping).is_err());
+    }
+    #[test]
+    fn explicit_txt_tables_can_locate_but_raw_text_ranges_are_not_database_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = task();
+        let path = dir.path().join("rows.txt");
+        std::fs::write(
+            &path,
+            "Title\tDOI\tWOS\nPaper\t10.1234/test\tWOS:000123456789012\n",
+        )
+        .unwrap();
+        let opts = ReadOptions {
+            delimiter: "tab".into(),
+            text_table: true,
+            ..ReadOptions::default()
+        };
+        let draft = prepare(dir.path(), &t, "cssci", &path, opts).unwrap();
+        let document = check_draft(dir.path(), &t, &draft).unwrap();
+        let mut mapping = csv_selection();
+        mapping.sheet = "TXT 表格".into();
+        let found = document.locate(&t, &draft, &mapping).unwrap();
+        assert_eq!(found["candidates"][0]["row"], 2);
+        let raw = prepare(dir.path(), &t, "cssci", &path, ReadOptions::default()).unwrap();
+        assert!(check_draft(dir.path(), &t, &raw)
+            .unwrap()
+            .locate(&t, &raw, &mapping)
+            .is_err());
     }
     fn evidence(root: &Path, t: &Task, d: &Draft, s: Selection) -> Result<Evidence> {
         bind(
