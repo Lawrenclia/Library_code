@@ -32,9 +32,13 @@ function inspectWorkPage(command) {
   };
   // Button text can also contain an account name or query. Return only fixed
   // UI labels; arbitrary text and aria-label values are deliberately redacted.
-  const fixed=['search','检索','搜索','檢索','搜尋','search documents','search publications','检索文献','搜索文献','文献检索','檢索文獻','clear','清除'];
+  const fixed=['search','检索','搜索','檢索','搜尋','search documents','search publications','检索文献','搜索文献','文献检索','檢索文獻','clear','清除',
+    'advanced search','高级检索','高级搜索','fielded search','字段检索','字段搜索','export','导出','full record','完整记录','tab delimited file','制表符分隔文件'];
   const safeLabel=value=>{const label=normal(value);return fixed.includes(label.toLowerCase())?label:label?'[非检索文案省略]':'';};
   const buttonElements=[...document.querySelectorAll('button,[role="button"],input[type="submit"],input[type="button"]')].filter(visible);
+  const navigation=[...document.querySelectorAll('a,button,[role="tab"],[role="button"]')].filter(visible)
+    .map(el=>({tag:el.tagName,label:safeLabel(cleanText(el)),selected:el.getAttribute('aria-selected')==='true',current:el.getAttribute('aria-current')==='page'}))
+    .filter(el=>/^(advanced search|高级检索|高级搜索|fielded search|字段检索|字段搜索|search|检索|搜索)$/i.test(el.label));
   const buttons=buttonElements.slice(0,40).map(el=>({tag:el.tagName,
     display:safeLabel(cleanText(el)),aria_label:safeLabel(el.getAttribute('aria-label')),
     has_labelledby:el.hasAttribute('aria-labelledby'),icon_count:el.querySelectorAll(icons).length,
@@ -94,7 +98,7 @@ function inspectWorkPage(command) {
       }
     }
   }
-  const noResult=/(?:no\s+(?:results?|records?|documents?)\s+(?:were\s+)?found|your\s+search\s+(?:did\s+not\s+(?:return|find)\s+any|returned\s+no)\s+results?|您的?\s*(?:检索|搜索|檢索|搜尋)\s*(?:未找到|没有找到|沒有找到|未檢索到)\s*(?:任何)?\s*(?:结果|結果)|未找到\s*(?:任何)?\s*(?:结果|結果)|没有\s*(?:检索|搜索)\s*结果|沒有\s*(?:檢索|搜尋)\s*結果)/i.test(text);
+  const noResult=/(?:your\s+search\s+found\s+no\s+results|no\s+(?:results?|records?|documents?)\s+(?:were\s+)?found|your\s+search\s+(?:did\s+not\s+(?:return|find)\s+any|returned\s+no)\s+results?|您的?\s*(?:检索|搜索|檢索|搜尋)\s*(?:未找到|没有找到|沒有找到|未檢索到)\s*(?:任何)?\s*(?:结果|結果)|未找到\s*(?:任何)?\s*(?:结果|結果)|没有\s*(?:检索|搜索)\s*结果|沒有\s*(?:檢索|搜尋)\s*結果)/i.test(text);
   const busy=[...document.querySelectorAll('[aria-busy="true"],[role="progressbar"],mat-spinner,mat-progress-bar,.mat-mdc-progress-spinner')]
     .some(el=>visible(el)&&!el.closest('[hidden],[inert],[aria-hidden="true"]'));
   let recordRoute=false;
@@ -109,7 +113,7 @@ function inspectWorkPage(command) {
     smart_search:/Smart Search|智能检索|智能搜索/i.test(text),
     fielded_search:/Fielded Search|字段检索|字段搜索/i.test(text),
     wos_import_button:/WOS\s*数据导入\s*[（(]\s*Txt\s*[）)]/i.test(text),
-    controls,buttons,visible_button_count:buttonElements.length};
+    controls,buttons,navigation,visible_button_count:buttonElements.length};
   if(!probing)return data;
   if(data.wos_error)return fail('WOS 网站报错：Oops, something went wrong! 请先恢复机构访问或检索页面');
   if([...document.querySelectorAll('iframe[src*="captcha"],input[type="password"],#challenge-form')].some(visible))

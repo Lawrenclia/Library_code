@@ -1,0 +1,28 @@
+[package]
+name = "library-workspace"
+version = "0.1.4"
+edition = "2021"
+
+[features]
+smoke-test = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+regex = "1"
+library-core = { path = "../core" }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time", "rt-multi-thread"] }
+uuid = { version = "1", features = ["v4"] }
+url = "2"
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rfd = "0.15"
+keyring = { version = "3", features = ["windows-native"] }
+
+[profile.release]
+strip = true
+lto = "thin"

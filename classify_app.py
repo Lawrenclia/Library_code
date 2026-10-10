@@ -16,7 +16,8 @@ from ui_theme import P, install_theme, style_text
 
 class ClassifyApp:
     def __init__(self, root, parent=None, on_busy=None, on_review=None, on_export=None,
-                 on_settings=None, on_export_skipped=None, on_import=None,on_export_selected=None):
+                 on_settings=None, on_export_skipped=None, on_browser=None,
+                 on_import=None,on_export_selected=None):
         self.root = root
         self.embedded = parent is not None
         self.on_busy = on_busy
@@ -50,18 +51,20 @@ class ClassifyApp:
             root.minsize(920,680)
             root.protocol('WM_DELETE_WINDOW',self.close)
         install_theme(root)
-        page = ttk.Frame(parent if self.embedded else root,padding=16 if self.embedded else 22)
+        page = ttk.Frame(parent if self.embedded else root,padding=10 if self.embedded else 22)
         page.pack(fill='both',expand=True)
         header=ttk.Frame(page)
         header.pack(fill='x')
         ttk.Label(header,text='论文分类工作台',style='Title.TLabel').pack(side='left')
         self.key_status=tk.StringVar(value='密钥已配置' if self.store.configured() else '请配置密钥')
         ttk.Label(header,textvariable=self.key_status,style='Muted.TLabel').pack(side='right')
-        ttk.Label(page,text='AI 分类辅助选择数据库；WOS 下载可直接开始，无需先分类。分类进度自动保存。',style='Muted.TLabel').pack(anchor='w',pady=(4,14))
+        if on_browser:
+            ttk.Button(header,text='内置 WOS 浏览器',command=on_browser).pack(side='right',padx=12)
+        ttk.Label(page,text='AI 分类辅助选择数据库；WOS 下载可直接开始，无需先分类。分类进度自动保存。',style='Muted.TLabel').pack(anchor='w',pady=(4,4 if self.embedded else 14))
         self.summary = tk.StringVar()
         self.metrics={name:tk.StringVar(value='—') for name in ('名单记录','分类任务','已处理','渠道待判定','分类失败')}
         cards=ttk.Frame(page)
-        cards.pack(fill='x',pady=(0,14))
+        cards.pack(fill='x',pady=(0,4 if self.embedded else 14))
         for column,(name,value) in enumerate(self.metrics.items()):
             cards.columnconfigure(column,weight=1,uniform='cards')
             card=ttk.Frame(cards,style='Card.TFrame',padding=(16,10))
@@ -88,26 +91,30 @@ class ClassifyApp:
                                         state='readonly',width=4)
         self.batch_combo.pack(side='left',padx=8)
         self.combo.bind('<<ComboboxSelected>>',self.change_model)
-        actions = ttk.Frame(settings)
-        actions.pack(side='right')
+        actions = ttk.Frame(page)
+        actions.pack(fill='x',pady=(4 if self.embedded else 10,0))
         self.start_button = ttk.Button(actions,text='开始 / 继续分类',command=self.start,style='Primary.TButton')
         self.start_button.pack(side='left')
         self.stop_button = ttk.Button(actions,text='当前步骤后暂停',command=self.request_stop,state='disabled')
         self.stop_button.pack(side='left',padx=8)
-        ttk.Label(page,textvariable=self.summary,style='Muted.TLabel').pack(anchor='w',pady=(10,4))
+        ttk.Label(actions,text='每批自动保存 · 可随时继续',style='Muted.TLabel').pack(side='right')
+        ttk.Label(page,textvariable=self.summary,style='Muted.TLabel').pack(anchor='w',pady=(4 if self.embedded else 10,4))
         self.status = tk.StringVar(value=f'准备就绪；{self.model.get()} 默认每批 {limits(self.model.get())["batch_size"]} 篇。')
         self.status_label=ttk.Label(page,textvariable=self.status,wraplength=1000)
         self.status_label.pack(anchor='w',pady=(0,6))
         self.bar = ttk.Progressbar(page,mode='determinate',maximum=100)
-        self.bar.pack(fill='x',pady=(0,14))
+        self.bar.pack(fill='x',pady=(0,4 if self.embedded else 14))
         filters=ttk.Frame(page)
-        filters.pack(fill='x',pady=(0,8))
+        filters.pack(fill='x',pady=(0,4 if self.embedded else 8))
         ttk.Label(filters,text='搜索题名 / DOI').pack(side='left')
         self.search=tk.StringVar()
-        ttk.Entry(filters,textvariable=self.search,width=26).pack(side='left',padx=(8,14),fill='x',expand=True)
+        self.search_entry=ttk.Entry(filters,textvariable=self.search,width=26)
+        self.search_entry.pack(side='left',padx=(8,14),fill='x',expand=True)
+        self.search_entry.bind('<Escape>',lambda event:self.reset_filters())
         self.channel=tk.StringVar(value='全部渠道')
         from import_channels import CHANNELS
         ttk.Combobox(filters,textvariable=self.channel,values=['全部渠道',*CHANNELS,'待判定','未处理','分类失败'],state='readonly',width=14).pack(side='left')
+        ttk.Button(filters,text='重置筛选',command=self.reset_filters).pack(side='left',padx=(8,0))
         self.search.trace_add('write',lambda *_:self.filter_results())
         self.channel.trace_add('write',lambda *_:self.filter_results())
         self.count_text=tk.StringVar(value='暂无结果')
@@ -116,9 +123,9 @@ class ClassifyApp:
         # out space in packing order, so a pane packed first would claim the whole
         # cavity and push the footer buttons off the edge -- where they are not merely
         # hidden but unmapped, which is how the WOS download button disappeared.
-        ttk.Label(page,text='分类会使用模型额度；AI 建议不代表数据库已收录。下载 TXT 不等于已导入，也不包含论文 PDF。',style='Muted.TLabel').pack(side='bottom',anchor='w',pady=(8,0))
+        ttk.Label(page,text='分类会使用模型额度；AI 建议不代表数据库已收录。下载 TXT 不等于已导入，也不包含论文 PDF。',style='Muted.TLabel').pack(side='bottom',anchor='w',pady=(4 if self.embedded else 8,0))
         footer=ttk.Frame(page)
-        footer.pack(side='bottom',fill='x',pady=(12,0))
+        footer.pack(side='bottom',fill='x',pady=(4 if self.embedded else 12,0))
         self.batch_scope=tk.StringVar()
         if self.on_export or self.on_export_skipped or self.on_import:
             self.scope_label=ttk.Label(footer,textvariable=self.batch_scope,style='Muted.TLabel',wraplength=900)
@@ -166,6 +173,8 @@ class ClassifyApp:
         scroll.pack(side='right',fill='y')
         self.tree.pack(fill='both',expand=True)
         self.tree.tag_configure('pending',foreground=P.amber)
+        self.tree.tag_configure('failed',foreground=P.red)
+        self.tree.tag_configure('alternate',background=P.white)
         self.tree.bind('<<TreeviewSelect>>',self.show_detail)
         detail=ttk.Frame(panes,padding=(0,10,0,0))
         panes.add(detail,weight=1)
@@ -503,11 +512,16 @@ class ClassifyApp:
         self._sync_start_button()
         self.filter_results()
 
+    def reset_filters(self):
+        self.search.set('')
+        self.channel.set('全部渠道')
+
     def filter_results(self):
         selected=self.tree.selection()
         self.tree.delete(*self.tree.get_children())
         query=self.search.get().strip().casefold()
         category=self.channel.get()
+        visible_count=0
         for index,item in enumerate(self.records):
             result=item.get('classification') or {}
             route=item.get('import_route') or {}
@@ -517,13 +531,29 @@ class ClassifyApp:
                 channel='分类失败' if item.get('failure') else '未处理'
             if query not in (item.get('title','')+' '+item.get('doi','')).casefold() or (category!='全部渠道' and category!=channel):
                 continue
-            self.tree.insert('', 'end',iid=str(index),values=('、'.join(map(str,item['rows'])),item['title'],result.get('type') or '待判定',channel,item.get('status','未处理')),tags=('pending',) if channel in ('待判定','未处理','分类失败') else ())
+            tags=[]
+            if channel=='分类失败':
+                tags.append('failed')
+            elif channel in ('待判定','未处理'):
+                tags.append('pending')
+            if visible_count%2:
+                tags.append('alternate')
+            self.tree.insert('', 'end',iid=str(index),values=('、'.join(map(str,item['rows'])),item['title'],result.get('type') or '待判定',channel,item.get('status','未处理')),tags=tuple(tags))
+            visible_count+=1
         self.count_text.set(f'{len(self.tree.get_children())} / {len(self.records)} 项')
         if selected and self.tree.exists(selected[0]):
             self.tree.selection_set(selected[0])
             self.show_detail()
         else:
-            self.set_detail('选择一篇论文查看详情。' if self.tree.get_children() else '没有匹配的结果。可调整搜索词或渠道筛选。')
+            if self.tree.get_children():
+                hint='选择一篇论文查看详情。'
+            elif self.records:
+                hint='没有符合筛选条件的论文。点击“重置筛选”查看全部结果。'
+            elif not self.owner.get():
+                hint='先选择负责人，再开始分类或查看已有结果。'
+            else:
+                hint='当前负责人及模型暂无结果。点击“开始 / 继续分类”生成分类建议。'
+            self.set_detail(hint)
 
     def set_detail(self,text):
         self.detail.configure(state='normal')

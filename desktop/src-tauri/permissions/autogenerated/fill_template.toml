@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-fill-template"
+description = "Enables the fill_template command without any pre-configured scope."
+commands.allow = ["fill_template"]
+
+[[permission]]
+identifier = "deny-fill-template"
+description = "Denies the fill_template command without any pre-configured scope."
+commands.deny = ["fill_template"]

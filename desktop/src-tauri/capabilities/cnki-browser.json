@@ -1,0 +1,7 @@
+{
+  "identifier": "cnki-browser-reply",
+  "local": false,
+  "windows": ["source-*"],
+  "remote": { "urls": ["https://kns.cnki.net/*", "https://kns8.cnki.net/*"] },
+  "permissions": ["allow-browser-result"]
+}

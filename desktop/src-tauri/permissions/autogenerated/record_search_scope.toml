@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-record-search-scope"
+description = "Enables the record_search_scope command without any pre-configured scope."
+commands.allow = ["record_search_scope"]
+
+[[permission]]
+identifier = "deny-record-search-scope"
+description = "Denies the record_search_scope command without any pre-configured scope."
+commands.deny = ["record_search_scope"]

@@ -326,7 +326,10 @@ class WOSFlow:
             state["upload"] = uploaded
             state["phase"] = "import_intent"
             self.store.save(record, state)
-            self.call("import_submit", {**common, "upload": uploaded})
+            # Reuse the same verified archive for read-only file checks around
+            # the final import click; this does not upload a second file.
+            self.call("import_submit", {**common, "upload": uploaded,
+                                        "content": base64.b64encode(raw).decode()})
         if state["phase"] == "upload_intent":
             raise SafetyStop("上次上传结果不明。请人工核对上传窗口；不会自动再次上传。")
         if state["phase"] in ("import_intent", "imported", "push_intent"):

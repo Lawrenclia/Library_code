@@ -71,7 +71,7 @@ class CoreTests(unittest.TestCase):
         path = self.roster()
         for name in ("~$list.xlsx", "list-2026.xlsx", "数据比对结果-new.xlsx"):
             (self.root / name).touch()
-        self.assertEqual(fixed_roster_path(self.root), path)
+        self.assertEqual(fixed_roster_path(self.root), path.resolve())
 
     def test_fixed_path_missing_has_no_parent_fallback(self):
         self.roster()
@@ -94,7 +94,7 @@ class CoreTests(unittest.TestCase):
         try:
             os.chdir(launch_dir)
             with patch("core.__file__", str(self.root / "core.py")):
-                self.assertEqual(fixed_roster_path(), path)
+                self.assertEqual(fixed_roster_path(), path.resolve())
         finally:
             os.chdir(previous_dir)
 
@@ -168,9 +168,38 @@ class BridgeTests(unittest.TestCase):
                               "result": {"ok": False, "error": "synthetic"}})
         self.assertTrue(self.bridge.online)
 
+    def test_lost_poll_can_be_received_again_but_acknowledged_write_is_not_reoffered(self):
+        self.post("/poll", {"client": "1"})
+        responses = []
+        worker = threading.Thread(target=lambda: responses.append(self.bridge.call("complete", {"sa_id": "demo", "expected": {"题名": "合成论文"}}, 3)))
+        worker.start()
+        deadline = time.monotonic() + 2
+        command = None
+        while not command and time.monotonic() < deadline:
+            command = self.post("/poll", {"client": "1", "deliveryAck": True})["command"]
+        self.assertIsNotNone(command)
+        # The first response is lost from the client's perspective: no ack.
+        repeated = self.post("/poll", {"client": "1", "deliveryAck": True})["command"]
+        self.assertEqual(repeated, command)
+        self.assertFalse(self.post("/ack", {"client": "2", "id": command["id"]})["accepted"])
+        self.assertFalse(self.post("/ack", {"client": "1", "id": "wrong"})["accepted"])
+        for _ in range(2):  # A lost acknowledgement may be repeated, not execution.
+            self.assertTrue(self.post("/ack", {"client": "1", "id": command["id"]})["accepted"])
+        self.assertIsNone(self.post("/poll", {"client": "1", "deliveryAck": True})["command"])
+        self.post("/result", {"id": command["id"], "client": "1", "result": {"ok": True, "data": {"verified": True}}})
+        worker.join(4)
+        self.assertEqual(responses, [{"verified": True}])
+
     def test_offline_stops(self):
         with self.assertRaises(SafetyStop):
             self.bridge.call("search", {})
+
+    def test_invalid_unicode_is_rejected_before_command_delivery(self):
+        self.post("/poll", {"client": "1"})
+        with self.assertRaises(SafetyStop):
+            self.bridge.call("complete", {"note": "invalid\udca4"})
+        self.assertIsNone(self.bridge.pending)
+        self.assertIsNone(self.post("/poll", {"client": "1", "deliveryAck": True})["command"])
 
 
 if __name__ == "__main__":

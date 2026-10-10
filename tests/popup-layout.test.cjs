@@ -12,7 +12,7 @@ const root=path.resolve(__dirname,'..');
     await page.addInitScript(()=>{
       window.calls=[];
       window.chrome={tabs:{query:async()=>[{id:1}]},runtime:{sendMessage:async message=>{
-        window.calls.push(message);return {ok:true};}}};
+        window.calls.push(message);return message.type==='popup_status' ? {ok:true,data:{paired:false,version:'test'}} : {ok:true};}}};
     });
     await page.goto(pathToFileURL(path.join(root,'extension/popup.html')).href);
     const folder=path.join(root,'runtime/ui-preview');fs.mkdirSync(folder,{recursive:true});
@@ -39,8 +39,9 @@ const root=path.resolve(__dirname,'..');
     await page.locator('#import').click();
     assert.ok((await page.locator('#status').innerText()).includes('用于 TXT 入库'));
     const calls=await page.evaluate(()=>window.calls);
-    assert.deepEqual(calls.map(value=>value.type),['pair','bind_workflow','bind_workflow']);
-    assert.deepEqual(calls.slice(1).map(value=>value.role),['wosTabId','importTabId']);
+    const actions=calls.filter(value=>value.type!=='popup_status');
+    assert.deepEqual(actions.map(value=>value.type),['pair','bind_workflow','bind_workflow']);
+    assert.deepEqual(actions.slice(1).map(value=>value.role),['wosTabId','importTabId']);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.locator('#status').evaluate(el=>{el.textContent='长连接诊断示例 '.repeat(100);});
     const card=await page.locator('.status-card').boundingBox();

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cnki-source"
+description = "Enables the cnki_source command without any pre-configured scope."
+commands.allow = ["cnki_source"]
+
+[[permission]]
+identifier = "deny-cnki-source"
+description = "Denies the cnki_source command without any pre-configured scope."
+commands.deny = ["cnki_source"]

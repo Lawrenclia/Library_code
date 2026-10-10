@@ -181,7 +181,7 @@ class ExportTests(unittest.TestCase):
         def call(action, payload, timeout=75):
             if action == "wos_export":
                 return {"path": str(download), "sa_id": payload["sa_id"]}
-            return {}
+            return {'record_url':'https://www.webofscience.com/wos/woscc/full-record/WOS:000123456789012'}
 
         return Mock(call=Mock(side_effect=call))
 
@@ -208,9 +208,37 @@ class ExportTests(unittest.TestCase):
         written = Path(result["exported"][0]["file"])
         self.assertEqual(written.parent, self.inbox)
         self.assertEqual(written.read_bytes(), raw)
+        self.assertEqual(result['exported'][0]['source']['database'],'WOS')
+        self.assertTrue(result['exported'][0]['source']['record_url'].endswith('WOS:000123456789012'))
         # The intake scan must be able to match what we just wrote.
         self.assertTrue(matches_paper(written.read_text(encoding="utf-8"),
                                       {"title": self.record.title, "doi": self.record.doi}))
+
+    def test_search_record_is_bound_to_export(self):
+        bridge=self.bridge_for(sample())
+        result=export(self.selected(),bridge,ImportStore(self.root/'downloads'),self.inbox)
+        self.assertEqual(len(result['exported']),1)
+        self.assertTrue(bridge.call.call_args_list[1].args[1]['expected_record_url'].endswith('WOS:000123456789012'))
+
+    def test_missing_search_record_never_exports(self):
+        bridge=Mock(call=Mock(return_value={}))
+        result=export(self.selected(),bridge,ImportStore(self.root/'downloads'),self.inbox)
+        self.assertEqual(result['exported'],[])
+        self.assertEqual(bridge.call.call_count,1)
+
+    def test_mismatched_download_source_is_not_adopted(self):
+        bridge=self.bridge_for(sample())
+        original=bridge.call.side_effect
+        def call(action,payload,timeout=75):
+            data=original(action,payload,timeout)
+            if action=='wos_export':
+                data['record_url']='https://www.webofscience.com/wos/woscc/full-record/WOS:000123456789013'
+            return data
+        bridge.call.side_effect=call
+        result=export(self.selected(),bridge,ImportStore(self.root/'downloads'),self.inbox)
+        self.assertEqual(result['exported'],[])
+        self.assertIn('目标不一致',next(iter(result['failed'].values()))['error'])
+        self.assertEqual(list(self.inbox.iterdir()),[])
 
     def test_second_run_reuses_the_archive_without_touching_the_browser(self):
         raw = sample()
@@ -262,7 +290,8 @@ class ExportTests(unittest.TestCase):
     def test_repeated_download_failures_visit_every_record(self):
         records = self.distinct(4)
         # A relative path means the extension never reported a usable download.
-        bridge = Mock(call=Mock(return_value={"path": "relative.txt", "sa_id": "demo-002"}))
+        bridge = Mock(call=Mock(return_value={"path": "relative.txt", "sa_id": "demo-002",
+                    "record_url":"https://www.webofscience.com/wos/woscc/full-record/WOS:000123456789012"}))
         result=export(all_targets(FakeRoster(records)), bridge,
                       ImportStore(self.root / "imports"), self.inbox)
         self.assertEqual(len(result['failed']),4)
@@ -393,6 +422,10 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(len(result['failed']),3)
         self.assertEqual(len(result['exported']),1)
         self.assertEqual(result['exported'][0]['sa_id'],self.record.sa_id)
+        import json
+        report=json.loads(Path(result['report']).read_text(encoding='utf-8'))
+        self.assertEqual(len(report['failed']),3)
+        self.assertEqual(len(report['exported']),1)
 
     def test_bridge_failure_is_not_silently_swallowed(self):
         bridge = Mock(call=Mock(side_effect=RuntimeError("桥接断开")))

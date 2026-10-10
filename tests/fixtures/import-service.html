@@ -33,6 +33,12 @@ const push={$options:{name:'BatchPushModal'},modelFieldsList:[{fieldName:'title'
   showDrawer(row){this.form={batchId:row.id,modelId:row.modelId};this.drawer=true;},
   async onSubmit(){await request('push',this.form);this.drawer=false;}};
 shown(push,'push');
+// The production adapter resolves the PPT choices from rendered form controls.
+push.$children=[['duplicateChecking','是否查重：','是',true],['duplicateItemProcessingType','重复条目元数据：','根据优先级合并','4'],['newItemProcessingType','不存在的条目：','新增','1'],['owner','是否本校成果：','是',true]].map(([prop,label,text,value])=>{
+  const el=document.createElement('label');el.textContent=text;document.getElementById('push').appendChild(el);
+  const radio={$options:{name:'ElRadio'},$el:el,label:value,disabled:false,isDisabled:false};
+  return {$options:{name:'ElFormItem'},prop,label,$children:[radio]};
+});
 const view={$options:{name:'BatchViewModal'},tableData:[],page:{total:0},loading:false,
   async showDrawer(id){this.id=id;this.tableData=[];this.drawer=true;this.loading=true;
     const data=await request('metadata?id='+encodeURIComponent(id));

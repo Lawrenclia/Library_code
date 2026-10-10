@@ -8,7 +8,7 @@ const root=path.join(__dirname,'../extension');
 test('WOS pairs and executes without an SA or import tab; rejects backend operations',async()=>{
   const state={}, requests=[], injections=[];
   let listener,command;
-  const tab={id:7,url:'https://www.webofscience.com/wos/woscc/basic-search'};
+  const tab={id:7,status:'complete',url:'https://www.webofscience.com/wos/woscc/basic-search'};
   const chrome={
     runtime:{id:'test',getURL:p=>'chrome-extension://test/'+p,getManifest:()=>({version:'test'}),
       onMessage:{addListener:fn=>listener=fn}},
@@ -30,8 +30,9 @@ test('WOS pairs and executes without an SA or import tab; rejects backend operat
     runSACommand:()=>{throw Error('must not call SA');},
     fetch:async(url,opts)=>{
       requests.push({url,body:JSON.parse(opts.body)});
+      if(url.endsWith('/ack'))return {ok:true,json:async()=>({accepted:true})};
       return {ok:true,json:async()=>({command:JSON.parse(opts.body).claimOnly?null:command})};
-    },runWOSCommand:()=>{},setTimeout});
+    },runWOSCommand:()=>{},inspectWorkPage:()=>{},setTimeout});
   vm.runInContext(fs.readFileSync(path.join(root,'workflow-background.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(root,'background.js'),'utf8'),context);
   const send=(message,sender)=>new Promise(resolve=>listener(message,sender,resolve));
@@ -43,7 +44,7 @@ test('WOS pairs and executes without an SA or import tab; rejects backend operat
   assert.equal(state.importTabId,undefined);
   command={id:'one',action:'wos_search',expires:Date.now()+60000};
   await send({type:'tick'},{tab});
-  assert.equal(requests.at(-1).body.result.ok,true);
+  assert.equal(requests.at(-1).body.result.ok,true,JSON.stringify(requests.at(-1).body.result));
   assert.equal(injections.at(-1).target.tabId,7);
   const count=injections.length;
   command={id:'two',action:'import_submit',expires:Date.now()+60000};

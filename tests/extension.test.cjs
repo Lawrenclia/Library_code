@@ -13,7 +13,7 @@ const edge='C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const wosOrigin=process.env.SA_TEST_WOS_ORIGIN || 'https://www.webofscience.com';
 assert.ok(['https://www.webofscience.com','https://webofscience.clarivate.cn'].includes(wosOrigin));
 (async()=>{
-  const backend=spawn(python,['-u','-m','tests.extension_backend'],{cwd:root,windowsHide:true,stdio:['pipe','pipe','pipe']});
+  const backend=spawn(python,['-u','-m','tests.extension_backend'],{cwd:root,env:{...process.env,PYTHONUTF8:'1',PYTHONIOENCODING:'utf-8'},windowsHide:true,stdio:['pipe','pipe','pipe']});
   let stderr='';backend.stderr.on('data',x=>stderr+=x);
   const lines=[], waiters=[];
   readline.createInterface({input:backend.stdout}).on('line',line=>{
@@ -47,6 +47,7 @@ assert.ok(['https://www.webofscience.com','https://webofscience.clarivate.cn'].i
       return route.abort();
     });
     const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker',{timeout:10000});
+    await worker.evaluate(()=>{globalThis.fixtureTraffic=[];globalThis.droppedPoll=false;globalThis.droppedAck=false;const original=request;request=async function(route,body,token){try{const result=await original(route,body,token);fixtureTraffic.push({route,action:result.command?.action||null,result:body.result?.ok??null});if(route==='/poll'&&result.command?.action==='search'&&!droppedPoll){droppedPoll=true;throw new Error('Synthetic lost poll response');}if(route==='/ack'&&result.accepted===true&&!droppedAck){droppedAck=true;throw new Error('Synthetic lost acknowledgement');}return result;}catch(error){fixtureTraffic.push({route,error:String(error.message)});throw error;}};});
     const extensionId=new URL(worker.url()).hostname;
     const site=await context.newPage();
     await site.goto('http://admin.ir.lib.sjtu.edu.cn/#/dataCompare/list');
@@ -58,10 +59,22 @@ assert.ok(['https://www.webofscience.com','https://webofscience.clarivate.cn'].i
     },pair.token);
     assert.equal(connection.ok,true,connection.error);
     console.log('PASS real extension pairs through authenticated loopback');
+    const popupState=await popup.evaluate(()=>chrome.runtime.sendMessage({type:'popup_status'}));
+    assert.equal(popupState.ok,true);
+    assert.equal(popupState.data.paired,true);
+    assert.equal(popupState.data.primary,true);
+    assert.equal(JSON.stringify(popupState).includes(pair.token),false);
+    await popup.locator('#refresh').click();
+    await popup.waitForFunction(()=>document.getElementById('connection').textContent.includes('已配对'));
+    assert.equal(await popup.locator('#refresh').isEnabled(),true);
+    console.log('PASS popup refresh shows real pairing state without exposing token');
     await site.waitForTimeout(1800);
     let read=await invoke('search',{sa_id:'demo-001'});
     assert.equal(read.ok,true,JSON.stringify(read));
     assert.equal(read.data.row.saLzkId,'demo-001');
+    assert.deepEqual(await worker.evaluate(()=>({poll:droppedPoll,ack:droppedAck})),{poll:true,ack:true});
+    assert.equal(await site.evaluate(()=>queryCount),1,'失去响应后可重领/确认，但页面只执行一次');
+    console.log('PASS lost poll and acknowledgement are recovered without duplicate execution');
     console.log('PASS desktop bridge -> extension -> page -> result round trip');
     await site.evaluate(()=>testConfig.drawerCloseDelay=20000);
     read=await invoke('search',{sa_id:'demo-001'});
@@ -71,7 +84,8 @@ assert.ok(['https://www.webofscience.com','https://webofscience.clarivate.cn'].i
     await site.evaluate(()=>testConfig.drawerCloseDelay=180);
     console.log('PASS repeated SA reads reuse the same drawer without close timeout or writes');
     const editor=await invoke('open_metadata',{sa_id:'demo-001',expected:read.data.row});
-    assert.equal(editor.ok,true,JSON.stringify(editor));
+    if(!editor.ok)console.log('Synthetic editor diagnostics',await site.evaluate(()=>({opened:window.openedEditor,queryCount:window.queryCount,detailId:detail.currentSaLzkId,detailShown:detail.dialogVisible,detailLoading:detail.dialogLoading,claimShown:claimWindow.drawer,visiblePanels:[...document.querySelectorAll('.el-dialog,.el-drawer')].filter(e=>e.getClientRects().length).map(e=>e.id)})),await worker.evaluate(()=>({busy,polling,traffic:fixtureTraffic})));
+    assert.equal(editor.ok,true,JSON.stringify(editor)+'\n'+stderr);
     assert.equal(await site.evaluate(()=>openedEditor),'1234567890123456789');
     assert.equal(await site.evaluate(()=>writeCount),0);
     console.log('PASS manual editor opens the exact item without saving');
@@ -89,6 +103,8 @@ assert.ok(['https://www.webofscience.com','https://webofscience.clarivate.cn'].i
       sa_text:'测试员(00001)①',staff_id:'00001',roster_staff_id:'00001'});
     assert.equal(prepared.ok,true,JSON.stringify(prepared));
     assert.equal(prepared.data.prepared.person.wno,'00001');
+    assert.equal(Object.hasOwn(prepared.data.prepared.metadata.author[0],'scholarId'),true);
+    assert.equal(prepared.data.prepared.metadata.author[0].scholarId,null);
     assert.equal(await site.evaluate(()=>writeCount),0);
     console.log('PASS exact scholar lookup crosses the real extension without writing');
     const claimed=await invoke('submit_claim',{sa_id:'demo-001',expected:read.data.row,
@@ -191,6 +207,9 @@ assert.ok(['https://www.webofscience.com','https://webofscience.clarivate.cn'].i
     const importCandidate={...c,sha256:require('node:crypto').createHash('sha256').update(raw).digest('hex')};
     const target={sa_id:'demo-001',instructions:'SA补充-demo-001',candidate:importCandidate};
     const uploaded=await invoke('import_upload',{...target,content:raw.toString('base64')});assert.equal(uploaded.ok,true,JSON.stringify(uploaded));
+    const uploadChecked=await invoke('import_check',{...target,expect_upload:true,content:raw.toString('base64')});
+    assert.equal(uploadChecked.ok,true,JSON.stringify(uploadChecked));assert.equal(uploadChecked.data.uploaded,true);
+    assert.equal(await importPage.evaluate(()=>writes.upload),1,'只读上传核验不重复上传');
     const submitted=await invoke('import_submit',{...target,upload:uploaded.data});assert.equal(submitted.ok,true,JSON.stringify(submitted));
     const imported=await invoke('import_check',target);assert.equal(imported.ok,true,JSON.stringify(imported));
     const pushed=await invoke('import_push',{...target,batch:imported.data.batch});assert.equal(pushed.ok,true,JSON.stringify(pushed));
@@ -203,7 +222,7 @@ assert.ok(['https://www.webofscience.com','https://webofscience.clarivate.cn'].i
     const changedTab=await invoke('import_scan',{sa_id:'demo-001',instructions:'SA补充-demo-001',candidate:c});
     assert.equal(changedTab.ok,false);
     console.log('PASS changed workflow tab stops before executing commands');
-    console.log(`Extension integration: 19 cases passed (${wosOrigin}). Only synthetic data; no production requests.`);
+    console.log(`Extension integration: 20 cases passed (${wosOrigin}). Only synthetic data; no production requests.`);
   } finally {
     if(context)await context.close();
     if(stagedExtension && path.dirname(path.resolve(stagedExtension))===path.resolve(os.tmpdir()) &&

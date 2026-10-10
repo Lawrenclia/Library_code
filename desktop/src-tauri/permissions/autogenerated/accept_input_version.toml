@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-accept-input-version"
+description = "Enables the accept_input_version command without any pre-configured scope."
+commands.allow = ["accept_input_version"]
+
+[[permission]]
+identifier = "deny-accept-input-version"
+description = "Denies the accept_input_version command without any pre-configured scope."
+commands.deny = ["accept_input_version"]

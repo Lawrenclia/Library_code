@@ -14,6 +14,12 @@ function loadPolicy(sandbox) {
   vm.runInContext(source,sandbox);
 }
 
+test('PPT result-list export correlates to exactly the same search page',()=>{
+  const url=origins[0]+'/wos/woscc/summary/example/session-id?query=one';
+  assert.equal(policy.isExpectedWOSDownload({url:'blob:'+origins[0]+'/export',referrer:url},url),true);
+  assert.equal(policy.isExpectedWOSDownload({url:origins[0]+'/export.txt',referrer:url.replace('one','two')},url),false);
+});
+
 for (const origin of origins) {
   test(`${origin}: binding accepts only the exact HTTPS WOS origin`, () => {
     assert.equal(policy.validRolePage(origin + '/wos/woscc/basic-search', 'wosTabId'), true);
@@ -35,6 +41,9 @@ for (const origin of origins) {
     assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:record}, encodedRecord), true);
     assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:encodedRecord}, record), true);
     assert.equal(policy.isExpectedWOSDownload({url:origin + '/export.txt', referrer:record}, record), true);
+    assert.equal(policy.isExpectedWOSDownload({url:origin + '/export.txt', referrer:record+'(overlay:export/ext)'}, record), true);
+    assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:record+'(overlay:export/other)'}, record), false);
+    assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:record.replace('789012','789013')+'(overlay:export/ext)'}, record), false);
     assert.equal(policy.isExpectedWOSDownload({url:origin + '/export.txt', referrer:''}, record), false);
     assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:origin + '/wos/woscc/basic-search'}, record), false);
     assert.equal(policy.isExpectedWOSDownload({url:blob, referrer:record.replace('789012', '789013')}, record), false);
@@ -49,7 +58,7 @@ for (const origin of origins) {
   });
   test(`${origin}: navigation retains the bound regional origin`, async () => {
     const navigations = [], executions = [];
-    let tab = {id:2, url:origin + '/wos/author/author-search', status:'complete'};
+    let tab = {id:2, url:origin + '/wos/', status:'complete'};
     const sandbox = {URL, Date, setTimeout, runWOSCommand(){}, chrome:{
       tabs:{get:async()=>tab, update:async(id, change)=>{navigations.push(change.url);tab={...tab,...change};}},
       scripting:{executeScript:async input=>{executions.push(input);const action=input.args[0].action;
@@ -59,7 +68,7 @@ for (const origin of origins) {
     loadPolicy(sandbox);
     const result = await sandbox.dispatchWorkflow({action:'wos_search', expires:Date.now()+30000}, {tabId:1,wosTabId:2});
     assert.equal(result.ok, true);
-    assert.deepEqual(navigations, [origin + '/wos/woscc/basic-search']);
+    assert.deepEqual(navigations, []);
     assert.equal(executions.length, 2);
     assert.equal(executions[0].target.tabId, 2);
     assert.equal(executions[0].args[0].action, 'wos_start_search');
@@ -113,10 +122,10 @@ test('binding errors distinguish SA reuse, wrong role, and wrong backend menu wi
   assert.equal(policy.validRolePage('not a URL', 'wosTabId'), false);
 });
 
-test('a redirect to the other WOS origin stops before page execution', async () => {
-  let tab={id:2,url:origins[1]+'/wos/author/author-search',status:'complete'}, executed=false;
+test('a switch to the other WOS origin stops before page execution', async () => {
+  let tab={id:2,url:origins[1]+'/wos/',status:'complete'}, executed=false, reads=0;
   const sandbox={URL,Date,setTimeout,runWOSCommand(){},chrome:{
-    tabs:{get:async()=>tab,update:async()=>{tab={...tab,url:origins[0]+'/wos/woscc/basic-search'};}},
+    tabs:{get:async()=>++reads===1?tab:{...tab,url:origins[0]+'/wos/'}},
     scripting:{executeScript:async()=>{executed=true;return [];}}
   }};
   loadPolicy(sandbox);

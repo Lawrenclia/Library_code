@@ -18,6 +18,14 @@
   </header>
   <p class="intro">这里连接工作页，具体任务在桌面助手中开始。</p>
   <main>
+    <section class="card pairing" aria-labelledby="connection-title">
+      <div class="section-heading">
+        <h2 id="connection-title">当前连接</h2>
+        <button id="refresh" class="utility">刷新状态</button>
+      </div>
+      <p id="connection" role="status">正在读取配对状态…</p>
+      <p class="caption">配对状态不代表桌面在线；开始下载前请保持桌面助手运行。</p>
+    </section>
     <section class="card pairing" aria-labelledby="pairing-title">
       <div class="section-heading">
         <h2 id="pairing-title">1. 连接桌面助手</h2>
@@ -66,6 +74,7 @@
       </button>
     </div>
     <textarea id="diagnostics" rows="6" readonly hidden aria-label="只读控件诊断"></textarea>
+    <button id="copy-diagnostics" class="secondary" hidden>复制诊断信息</button>
   </main>
   <footer>支持 WOS .com / clarivate.cn。下载权限仅用于本次 TXT，不读取历史下载、账号或登录令牌；不下载 PDF。</footer>
   <script src="popup.js"></script>

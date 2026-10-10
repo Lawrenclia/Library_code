@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-submission-bundle"
+description = "Enables the export_submission_bundle command without any pre-configured scope."
+commands.allow = ["export_submission_bundle"]
+
+[[permission]]
+identifier = "deny-export-submission-bundle"
+description = "Denies the export_submission_bundle command without any pre-configured scope."
+commands.deny = ["export_submission_bundle"]

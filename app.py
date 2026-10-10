@@ -46,6 +46,7 @@ class App:
         self.by_id = {}
         self.current = None
         self.bridge = bridge
+        self.internal_browser = None
         self.model_client = model_client or ModelClient(KeyStore(BASE / "runtime"))
         self.snapshot = None
         self.comparison = None
@@ -105,6 +106,7 @@ class App:
                                    on_busy=self.set_busy,on_review=self.review_classified,
                                    on_export=self.export_wos_metadata,on_settings=self.open_settings,
                                    on_export_skipped=self.export_skipped_wos_metadata,
+                                   on_browser=self.open_internal_browser,
                                    on_export_selected=self.export_selected_wos_metadata,
                                    on_import=self.open_wos_import)
         from submission_panel import SubmissionPanel
@@ -194,10 +196,10 @@ class App:
             messagebox.showinfo('请先读取名单','请在人工处理页读取 list.xlsx。',parent=self.root)
             self.tabs.select(self.manual_page)
             return None
-        if not self.bridge or not self.bridge.online:
+        if not self.wos_browser() or not self.wos_browser().online:
             messagebox.showinfo('需要连接浏览器',
-                '批量导出会操作你在扩展里绑定的 WOS 标签页。\n'
-                '请点“连接浏览器”取得配对码，在已登录的 WOS 页打开扩展并连接即可。无需 SA 或导入页。',
+                '请点“内置 WOS 浏览器”，在打开的窗口完成机构登录后再下载。\n'
+                '也可使用原有“连接浏览器”配对扩展方式。',
                 parent=self.root)
             return None
         from paper_classify import read_papers
@@ -258,7 +260,7 @@ class App:
             return
         from wos_batch import default_inbox, export as export_batch
         roster=self.roster
-        bridge=self.bridge
+        bridge=self.wos_browser()
         self.classifier.set_exporting(True)
         generation=self.classifier.export_generation
         def report(message):
@@ -277,9 +279,16 @@ class App:
                 report('log.txt 保存失败；本轮完整结果仍将单独保存，请检查文件权限。')
         def job():
             from wos_batch import default_store, preflight
-            report('正在确认浏览器插件版本和下载接口（最多 15 秒）')
-            connection=preflight(bridge)
-            report(f'已连接插件 {connection["extension_version"]}；准备下载 {total} 篇')
+            from internal_browser import InternalBrowser
+            if isinstance(bridge, InternalBrowser):
+                if not bridge.online:
+                    raise RuntimeError('内置浏览器尚未连接，请打开 WOS 工作页后继续。')
+                connection={'browser_backend':'internal'}
+                report(f'使用内置 WOS 浏览器；准备下载 {total} 篇')
+            else:
+                report('正在确认浏览器插件版本和下载接口（最多 15 秒）')
+                connection=preflight(bridge)
+                report(f'已连接插件 {connection["extension_version"]}；准备下载 {total} 篇')
             store=default_store()
             result=export_batch(targets,bridge,store,default_inbox(),
                                 stop=self.classifier.stop,unchanged=roster.assert_unchanged,
@@ -341,6 +350,8 @@ class App:
             if result.get('report_path'):
                 self.wos_import_panel.download_report = result['report_path']
                 detail += '\n\n每篇的结果和文件位置已完整保存：\n' + result['report_path']
+            if result.get('exported'):
+                detail += '\n\n成功文件保存目录：\n' + str(default_inbox())
             if result.get('report_error'):
                 detail += '\n\n' + result['report_error']
             if result.get('disconnected'):
@@ -374,6 +385,31 @@ class App:
         widget = ttk.Button(parent, text=text, command=command, **kwargs)
         self.buttons.append(widget)
         return widget
+
+    def wos_browser(self):
+        if self.internal_browser:
+            return self.internal_browser
+        return self.bridge
+
+    def open_internal_browser(self):
+        if self.busy:
+            return
+        from internal_browser import InternalBrowser
+        if self.internal_browser is None:
+            self.internal_browser=InternalBrowser()
+        self.internal_browser.open()
+        self.status.set('内置浏览器正在启动，请在窗口内完成 WOS 登录。')
+        def check_start():
+            if self.closing or not self.root.winfo_exists():
+                return
+            if self.internal_browser.online:
+                self.status.set('内置 WOS 浏览器已打开；批量下载将直接保存到助手目录。')
+            elif self.internal_browser.process.poll() is not None:
+                messagebox.showwarning('内置浏览器未启动',
+                    '请安装 requirements-browser.txt 中的依赖。详细原因见 runtime/browser/browser.log。',parent=self.root)
+            else:
+                self.root.after(500,check_start)
+        self.root.after(500,check_start)
 
     def build(self):
         self.root.title("机构知识库 · 比对助手")
@@ -445,7 +481,7 @@ class App:
                                  padx=12, pady=5, command=self.switch_view, font=(FONT, 9))
             tab.pack(side="left", padx=(0, 5))
             self.view_buttons.append(tab)
-        ttk.Label(counts, text="点击切换", style="Muted.TLabel").pack(side="right")
+        self.button(counts, "内置 WOS 浏览器", self.open_internal_browser).pack(side="right")
         listing = ttk.Frame(page)
         listing.grid(row=2, column=0, sticky="nsew")
         self.tree = ttk.Treeview(listing, columns=("id", "title", "state"), show="headings", height=5, selectmode="browse",
@@ -1082,6 +1118,8 @@ class App:
                 self.root.after_cancel(timer)
         if self.bridge:
             self.bridge.close()
+        if self.internal_browser:
+            self.internal_browser.close()
         if self.classifier:
             self.classifier.dispose()
         if self.submission_panel:

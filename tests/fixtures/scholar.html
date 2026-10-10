@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Offline scholar fixture</title></head><body>
+<main id="app"><h1>OFFLINE TEST — no production data</h1></main>
+<div id="aliases" style="display:none"><div class="el-dialog"><button>新增</button><button>保存</button></div></div>
+<script>
+window.testConfig={};window.aliasWrites=0;window.persistedAliases=[];
+const copy=v=>JSON.parse(JSON.stringify(v));
+const modal={id:null,loading:false,data:[],$el:document.getElementById('aliases'),
+  showTableDialog(row){this.id=row.id;this.dialogVisible=true;this.getData({scholarId:row.id});},
+  async getData(){this.loading=true;await new Promise(r=>setTimeout(r,5));this.data=copy(persistedAliases);this.loading=false;},
+  handleModal(action){if(action==='add')this.data.unshift({id:'',scholarId:this.id,nameAlias:'',isSet:true,defaultNameCn:0,defaultNameEn:0});},
+  onSubmit(row){aliasWrites++;this.loading=true;if(testConfig.hangSave)return;setTimeout(()=>{if(!testConfig.rejectSave)persistedAliases.push({...copy(row),id:'alias-001',isSet:false});this.getData();},5);}
+};
+let shown=false;Object.defineProperty(modal,'dialogVisible',{get:()=>shown,set:value=>{shown=value;modal.$el.style.display=value?'block':'none';}});
+const vm={$options:{name:'学者管理'},$children:[],$refs:{aliasTableModal:modal},page:{current:1,size:10,total:0},query:{},tableData:[],loading:false,$nextTick:()=>Promise.resolve(),
+  async getData(){this.loading=true;await new Promise(r=>setTimeout(r,5));if(!testConfig.staleList){this.tableData=copy(testConfig.people||[{id:'scholar-001',wno:'00001',nameCn:'测试员',nameEn:'Tester'}]);this.page.total=testConfig.total??this.tableData.length;}this.loading=false;},
+  handleAli(row){modal.showTableDialog(row);}
+};document.getElementById('app').__vue__=vm;window.vm=vm;window.aliasModal=modal;
+</script></body></html>

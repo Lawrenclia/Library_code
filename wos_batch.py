@@ -172,9 +172,15 @@ class WOSDownload:
             progress('检索并核验唯一文献（本步最多 120 秒，不重复检索）' if action == 'wos_search'
                      else '导出完整记录并等待 TXT（本步最多 75 秒）')
             result=self.bridge.call(action,query,timeout=timeout)
+            if action == 'wos_search':
+                if not result.get('record_url'):
+                    raise SafetyStop('检索未返回目标记录地址，未开始下载。请更新扩展后重新连接。')
+                query={**query,'expected_record_url':result['record_url']}
             self.audit(action,'已执行',record.sa_id)
         progress('核验下载文件的题名、DOI 和 WOS 号')
         path=Path(result.get('path',''))
+        if result.get('record_url') and result['record_url']!=query['expected_record_url']:
+            raise SafetyStop('导出记录地址与检索目标不一致，未采纳下载文件。')
         if result.get('sa_id')!=record.sa_id or not path.is_absolute() or path.suffix.lower()!='.txt' or path.is_symlink():
             raise SafetyStop('无法确定本次导出的 TXT 文件。')
         if not path.is_file() or not 1<=path.stat().st_size<=MAX_TXT:
@@ -186,7 +192,9 @@ class WOSDownload:
                 raise SafetyStop(f'下载记录的 {name.upper()} 与名单冲突，未采纳。')
         confirmed=bool((query['doi'] or query['wos']) and norm(record.title)==norm(candidate['title']))
         self.store.archive(raw)
-        state={'phase':'downloaded','candidate':candidate,'identity_confirmed':confirmed}
+        state={'phase':'downloaded','candidate':candidate,'identity_confirmed':confirmed,
+               'source':{'database':'WOS','record_url':result.get('record_url',query['expected_record_url']),
+                         'download_path':str(path),'download_id':result.get('download_id')}}
         self.store.save(record,state)
         return state
 
@@ -206,6 +214,16 @@ def export(targets, bridge, store, inbox,
     exported, failed, unconfirmed = [], {}, []
     disconnected = False
     attempted = 0
+    from paper_classify import atomic_json
+    report_path=Path(store.root)/'最近下载结果.json'
+    def checkpoint():
+        result={'total':len(targets),'exported':exported,'failed':failed,'unconfirmed':unconfirmed,
+                'inbox':str(inbox),'not_exported':sum(v['per_record'] for v in failed.values()),
+                'session_failures':sum(not v['per_record'] for v in failed.values()),
+                'attempted':attempted,'remaining':len(targets)-attempted,'disconnected':disconnected,
+                'stopped':bool(disconnected or (stop is not None and stop.is_set())),'report':str(report_path)}
+        atomic_json(report_path,result)
+        return result
     for index, record in enumerate(targets):
         if stop is not None and stop.is_set():
             progress(f'WOS 导出已暂停：已成功 {len(exported)} 条。')
@@ -226,6 +244,7 @@ def export(targets, bridge, store, inbox,
                 progress(f'浏览器会话不可用，已停止整批；剩余 {len(targets)-attempted} 条未执行。')
                 break
             progress(f'第 {record.row} 行未导出，已记录并继续下一条：{message}')
+            checkpoint()
             continue
         sha = state['candidate']['sha256']
         if not state.get('identity_confirmed'):
@@ -233,22 +252,20 @@ def export(targets, bridge, store, inbox,
             # automatically, so an unverified record must never be dropped into it.
             # The download stays in the archive for the automation page to confirm.
             unconfirmed.append({'sa_id': record.sa_id, 'row': record.row, 'title': record.title,
-                                'doi': record.doi, 'archive': str(Path(store.root) / (sha + '.txt'))})
+                                'doi': record.doi, 'archive': str(Path(store.root) / (sha + '.txt')),
+                                'source':state.get('source',{})})
             progress(f'第 {record.row} 行已导出但身份未获强匹配，未放入待收目录，'
                      f'请核对存档文件后再用于提交准备。')
+            checkpoint()
             continue
         target = inbox / safe_name(record)
         target.write_bytes(raw)
         exported.append({'sa_id': record.sa_id, 'row': record.row, 'title': record.title,
-                         'doi': record.doi, 'file': str(target), 'sha256': sha})
-        progress(prefix+f' · TXT 已保存；本轮已核验 {len(exported)} 篇')
-    per_record = sum(1 for value in failed.values() if value['per_record'])
-    return {'total': len(targets), 'exported': exported, 'failed': failed,
-            'unconfirmed': unconfirmed, 'inbox': str(inbox),
-            'not_exported': per_record, 'session_failures': len(failed) - per_record,
-            'attempted': attempted, 'remaining': len(targets)-attempted,
-            'disconnected': disconnected,
-            'stopped': bool(disconnected or (stop is not None and stop.is_set()))}
+                         'doi': record.doi, 'file': str(target), 'sha256': sha,
+                         'source':state.get('source',{})})
+        progress(prefix+f' · TXT 已保存；本批已核验 {len(exported)} 篇')
+        checkpoint()
+    return checkpoint()
 
 
 def plan(document, classification_dir=None):

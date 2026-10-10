@@ -62,16 +62,16 @@ function workflowBindingError(url,role,sameSATab) {
 function isExpectedWOSDownload(item,recordURL) {
   try {
     const record=new URL(recordURL), download=new URL(item.url);
-    const recordPath=!/%(?:2f|5c)/i.test(record.pathname)&&isWOSPage(recordURL)?decodeURIComponent(record.pathname):"";
-    if(!/^\/wos\/woscc\/full-record\/WOS:\d{15}\/?$/.test(recordPath))return false;
+    const canonicalPath=url=>decodedWOSPath(url.href).replace(/\(overlay:export\/ext\)$/, "");
+    if(!isWOSPage(recordURL) || !/^\/wos\/woscc\/(?:full-record\/WOS:\d{15}|summary\/[^/()]+(?:\/[^/()]+)*)\/?$/.test(canonicalPath(record)))return false;
     // Empty referrers are allowed only for a blob created on the bound origin.
     // Another supported WOS domain must not supply this task's download.
     if(download.protocol==="blob:") {if(download.origin!==record.origin)return false;}
     else if(download.protocol!=="https:" || download.username || download.password)return false;
     if(item.referrer) {
       const ref=new URL(item.referrer);
-      const refPath=/%(?:2f|5c)/i.test(ref.pathname)?"":decodeURIComponent(ref.pathname);
-      return !ref.username && !ref.password && ref.origin===record.origin && refPath===recordPath;
+      return !ref.username && !ref.password && ref.origin===record.origin && canonicalPath(ref)===canonicalPath(record) &&
+        (!record.pathname.includes('/summary/') || ref.search===record.search);
     }
     return download.protocol==="blob:";
   } catch {return false;}
@@ -108,7 +108,7 @@ async function dispatchWorkflow(command,pair) {
     return result;
   };
   if(role==="importTabId") {
-    if(command.action==="import_upload"){
+    if(command.action==="import_upload" || command.action==="import_submit" || (command.action==='import_check'&&command.expect_upload===true)){
       if(typeof command.content!=="string" || command.content.length>700000)throw new Error("TXT 文件大小异常");
       const bytes=Uint8Array.from(atob(command.content),c=>c.charCodeAt(0));
       const hash=[...new Uint8Array(await crypto.subtle.digest("SHA-256",bytes))].map(x=>x.toString(16).padStart(2,"0")).join("");
@@ -125,7 +125,7 @@ async function dispatchWorkflow(command,pair) {
       tab=await chrome.tabs.get(id);
       const path=new URL(tab.url).pathname;
       const alreadySearch=/^\/wos\/woscc\/(?:basic-search|advanced-search|fielded-search)\/?$/.test(path);
-      if(!force&&alreadySearch)return;
+      if(!force&&(alreadySearch||/^\/wos\/?$/.test(path)))return;
       if(force&&new URL(tab.url).origin===workOrigin&&path==="/wos/woscc/basic-search"){
         await chrome.tabs.reload(id);
         // Do not mistake the pre-reload `complete` state for the new document.

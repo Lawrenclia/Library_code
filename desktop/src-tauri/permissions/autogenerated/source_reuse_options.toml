@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-source-reuse-options"
+description = "Enables the source_reuse_options command without any pre-configured scope."
+commands.allow = ["source_reuse_options"]
+
+[[permission]]
+identifier = "deny-source-reuse-options"
+description = "Denies the source_reuse_options command without any pre-configured scope."
+commands.deny = ["source_reuse_options"]
