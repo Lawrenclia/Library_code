@@ -1,0 +1,128 @@
+name: Windows EXE
+
+run-name: Windows EXE · ${{ inputs.source_ref || github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: '要编译的分支、标签或提交（新版代码在 feature/wos-download-workflow）'
+        required: true
+        default: feature/wos-download-workflow
+        type: string
+  push:
+    branches:
+      - feature/wos-download-workflow
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/windows-exe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-exe:
+    name: 编译 Windows x64 安装包
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: desktop
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: 获取指定版本源码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          persist-credentials: false
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+          run_install: false
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: 缓存 Rust 编译依赖
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: 记录源码版本
+        id: source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $config = Get-Content -LiteralPath src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $sourceSha = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw '无法读取源码提交' }
+          "version=$($config.version)" >> $env:GITHUB_OUTPUT
+          "sha=$sourceSha" >> $env:GITHUB_OUTPUT
+          "short_sha=$($sourceSha.Substring(0, 8))" >> $env:GITHUB_OUTPUT
+
+      - name: 安装锁定的前端依赖
+        run: pnpm install --frozen-lockfile
+
+      # Tauri 在打包前自动执行前端编译；不运行测试或启动应用。
+      - name: 编译并生成 EXE 安装包
+        run: pnpm exec tauri build --bundles nsis -- --locked
+
+      - name: 整理安装包及版本信息
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          APP_VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem -LiteralPath src-tauri/target/release/bundle/nsis -Filter '*.exe' -File)
+          if ($installers.Count -ne 1) { throw "预期 1 个 EXE 安装包，实际 $($installers.Count) 个" }
+          $artifactDir = Join-Path $env:RUNNER_TEMP 'library-windows-exe'
+          New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
+          $installer = $installers[0]
+          Copy-Item -LiteralPath $installer.FullName -Destination $artifactDir
+          $hash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash
+          "$hash  $($installer.Name)" | Set-Content -LiteralPath (Join-Path $artifactDir 'SHA256SUMS.txt') -Encoding utf8
+          $runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          [ordered]@{
+            version = $env:APP_VERSION
+            source_commit = $env:SOURCE_SHA
+            file = $installer.Name
+            bytes = $installer.Length
+            sha256 = $hash
+            architecture = 'windows-x64'
+            run_url = $runUrl
+            built_at_utc = (Get-Date).ToUniversalTime().ToString('o')
+            business_tests_run = $false
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $artifactDir 'build-info.json') -Encoding utf8
+          @(
+            '## Windows EXE 已生成'
+            ''
+            "版本：$env:APP_VERSION"
+            "源码提交：$env:SOURCE_SHA"
+            "安装包：$($installer.Name)"
+            ''
+            '在本页下方 Artifacts 下载 Windows-EXE 压缩包，解压后运行其中的 setup.exe。'
+            '本次仅编译打包，未运行测试、未启动应用或访问业务网站。'
+          ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+
+      - name: 上传 EXE 安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-EXE-${{ steps.source.outputs.version }}-${{ steps.source.outputs.short_sha }}
+          path: ${{ runner.temp }}/library-windows-exe/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
