@@ -31,12 +31,30 @@ const state = ref<SourceBrowserState | null>(null),
   origins = ref("");
 const loading = ref(false),
   windowAction = ref("");
+const acquisitionProgress = ref("");
 let queued = false,
   resetQueued = false,
   disposed = false;
 const windows = computed(() => state.value?.windows || []);
 const unlisteners: UnlistenFn[] = [];
 onMounted(() => {
+  void listen<{ id: string; channel: string; message: string }>(
+    "source-acquisition-progress",
+    ({ payload }) => {
+      if (
+        !disposed &&
+        payload.id === props.task.id &&
+        payload.channel === props.channel &&
+        windowAction.value
+      )
+        acquisitionProgress.value = payload.message;
+    },
+  )
+    .then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    })
+    .catch(() => {});
   for (const event of [
     "source-windows-changed",
     "source-download-started",
@@ -83,6 +101,7 @@ watch(
     state.value = null;
     entry.value = "";
     origins.value = "";
+    acquisitionProgress.value = "";
   },
 );
 async function load(resetConfig = true, quiet = false) {
@@ -171,10 +190,15 @@ async function open() {
   );
   await load(false, true);
 }
-async function cnki(action: "search" | "capture", window?: SourceWindowState) {
+async function cnki(
+  action: "search" | "capture" | "auto",
+  window?: SourceWindowState,
+) {
   if (windowAction.value || props.locked) return;
   const { id, revision } = props.task;
   windowAction.value = window?.label || "cnki-search";
+  acquisitionProgress.value =
+    action === "auto" ? "正在检索并获取完整题录…" : "正在打开来源或获取题录…";
   try {
     const page = await props.run<SourcePage>(
       "cnki_source",
@@ -186,7 +210,7 @@ async function cnki(action: "search" | "capture", window?: SourceWindowState) {
     if (props.task.id !== id || props.task.revision !== revision || disposed)
       return;
     if (
-      action === "capture" &&
+      action !== "search" &&
       page?.draft &&
       page.draft.task_revision === revision
     )
@@ -194,6 +218,7 @@ async function cnki(action: "search" | "capture", window?: SourceWindowState) {
     await load(false, true);
   } finally {
     windowAction.value = "";
+    acquisitionProgress.value = "";
   }
 }
 async function preview(download: SourceDownload, resave = false) {
@@ -237,13 +262,30 @@ async function preview(download: SourceDownload, resave = false) {
       <Button
         size="sm"
         :disabled="locked || !!windowAction"
+        @click="cnki('auto')"
+      >
+        {{ windowAction ? "正在获取…" : "自动检索并获取 CNKI 题录" }}
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        :disabled="locked || !!windowAction"
         @click="cnki('search')"
       >
         按名单题名打开 CNKI
       </Button>
       <p class="text-[11px] leading-5 text-muted-foreground">
-        在内置窗口登录并打开目标论文详情，然后点击下方“获取题录”。默认检索使用题名作为关键词，请核对实际匹配；不会自动选择首条。
-        也可在网页导出 Excel/TXT，完成的下载直接保存到工作目录。
+        自动获取先检查完整结果，再进入唯一精确题名的详情页，保存完整题录、原始响应和来源。需登录、验证码或结果多页时，请在窗口处理后继续；也可打开核对后的详情，点击下方“获取题录”。
+        题录用于 AI 整理和模板填表。若网页可导出
+        Excel/TXT，请优先下载原文件；文件直接保存到工作目录。
+      </p>
+      <p
+        v-if="acquisitionProgress"
+        class="text-xs"
+        role="status"
+        aria-live="polite"
+      >
+        {{ acquisitionProgress }}
       </p>
     </div>
     <template v-if="state">

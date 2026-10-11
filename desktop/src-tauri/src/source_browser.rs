@@ -6,7 +6,7 @@ use library_core::{source_downloads::Session, Failure, Result, Store};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{
-    webview::{DownloadEvent, NewWindowResponse},
+    webview::{DownloadEvent, NewWindowResponse, PageLoadEvent},
     AppHandle, Emitter, Manager, Webview, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     WindowEvent,
 };
@@ -29,6 +29,9 @@ fn watch_close(app: &AppHandle, store: &Store, browser: &Browser, window: &Webvi
             browser.interrupt_source_window(&app, &store, &label);
             if let Ok(mut windows) = browser.source_windows.lock() {
                 windows.remove(&label);
+            }
+            if let Ok(mut loaded) = browser.source_loaded.lock() {
+                loaded.remove(&label);
             }
             let _ = app.emit_to("main", "source-windows-changed", json!({"label":label}));
         }
@@ -316,6 +319,7 @@ impl Browser {
         let popup_store = store.clone();
         let popup_session = session.clone();
         let popup_browser = self.clone();
+        let loaded = self.source_loaded.clone();
         let url = session.site.entry_url.parse().map_err(Failure::storage)?;
         let window = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
             .title(format!(
@@ -324,6 +328,15 @@ impl Browser {
             ))
             .inner_size(1180., 820.)
             .data_directory(profile)
+            .on_page_load(move |window, payload| {
+                if let Ok(mut pages) = loaded.lock() {
+                    if payload.event() == PageLoadEvent::Finished {
+                        pages.insert(window.label().to_string(), payload.url().to_string());
+                    } else {
+                        pages.remove(window.label());
+                    }
+                }
+            })
             .on_navigation(|u| matches!(u.scheme(), "http" | "https" | "about"))
             .on_download(move |view, event| {
                 download_browser.receive_source(

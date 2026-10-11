@@ -16,6 +16,72 @@ fn fail(message: &str) -> Failure {
     Failure::new("CNKI_EXPORT_INVALID", message)
 }
 
+/// A complete, bounded result set is required before automatic selection.
+/// The browser and Rust both check scope; a loaded first page is insufficient.
+pub fn select_result(task: &Task, data: &Value) -> Result<Url> {
+    let invalid = || {
+        Failure::new(
+            "SOURCE_SELECTION_REQUIRED",
+            "CNKI 结果范围无法核对，请在窗口打开确认后的单篇详情。",
+        )
+    };
+    let page = data["page_url"]
+        .as_str()
+        .and_then(|s| Url::parse(s).ok())
+        .ok_or_else(invalid)?;
+    let query = page
+        .query_pairs()
+        .find(|(k, _)| k == "kw")
+        .map(|(_, v)| v.into_owned());
+    if !is_site(&page)
+        || !page.path().to_ascii_lowercase().contains("/defaultresult/")
+        || query.as_deref().map(norm) != Some(norm(&task.record.title))
+        || data["query"].as_str().map(norm) != Some(norm(&task.record.title))
+        || data["complete"] != true
+    {
+        return Err(invalid());
+    }
+    let records = data["records"].as_array().ok_or_else(invalid)?;
+    if records.len() > 100 || data["total"].as_u64() != Some(records.len() as u64) {
+        return Err(invalid());
+    }
+    if records.is_empty() {
+        return Err(Failure::new(
+            "SOURCE_NOT_FOUND",
+            "本次 CNKI 检索未返回记录；这不代表其他数据库或机构库中不存在。",
+        ));
+    }
+    let mut matches = Vec::new();
+    let mut urls = std::collections::BTreeSet::new();
+    for record in records {
+        let title = record["title"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(invalid)?;
+        let url = record["url"]
+            .as_str()
+            .and_then(|s| Url::parse(s).ok())
+            .ok_or_else(invalid)?;
+        let path = url.path().to_ascii_lowercase();
+        if !is_site(&url)
+            || !(path.starts_with("/kcms/") || path.starts_with("/kcms2/"))
+            || !urls.insert(url.to_string())
+        {
+            return Err(invalid());
+        }
+        if norm(title) == norm(&task.record.title) {
+            matches.push(url);
+        }
+    }
+    if matches.len() != 1 {
+        return Err(Failure::new(
+            "SOURCE_SELECTION_REQUIRED",
+            "CNKI 没有唯一的精确题名匹配，请人工核对详情页；不会选择首条或相似题名。",
+        ));
+    }
+    Ok(matches.remove(0))
+}
+
 #[derive(Debug)]
 pub struct TaggedRecord {
     pub fields: Vec<(String, String)>,
@@ -185,7 +251,20 @@ pub fn capture(root: &Path, task: &Task, data: &Value) -> Result<(source_files::
     }
     // Carry the exact response and acquisition identity inside the hash-protected
     // source TXT, so later AI rereads do not depend on a mutable sidecar alone.
-    let provenance = json!({"mode":"cnki_export_response","page_url":page,"export_url":endpoint,"export_id":data["export_id"],"response_text":data["response_text"],"record":task.record,"input_hash":task.input_hash});
+    if !data["search"].is_null() {
+        let selected = select_result(task, &data["search"])?;
+        // Redirects may add language/session parameters, but must retain the
+        // selected record's identifiers and path before its response is adopted.
+        if selected.origin() != page_url.origin()
+            || selected.path() != page_url.path()
+            || selected
+                .query_pairs()
+                .any(|(k, v)| !page_url.query_pairs().any(|(pk, pv)| pk == k && pv == v))
+        {
+            return Err(fail("详情页已离开检索选中的记录，请重新核对。"));
+        }
+    }
+    let provenance = json!({"mode":"cnki_export_response","page_url":page,"export_url":endpoint,"export_id":data["export_id"],"response_text":data["response_text"],"search":data["search"],"record":task.record,"input_hash":task.input_hash});
     let raw = serde_json::to_vec(&provenance)?;
     if raw.len() > 600_000 {
         return Err(fail("题录响应过大，请缩小导出范围。"));
@@ -213,7 +292,14 @@ pub fn capture(root: &Path, task: &Task, data: &Value) -> Result<(source_files::
         ("作者", vec!["%A", "A1"]),
         ("作者单位", vec!["%+", "AD"]),
         ("出版年份", vec!["%D", "YR"]),
+        (
+            "来源出版物或出版社",
+            vec!["%J", "%B", "%I", "JF", "JO", "T2", "PB"],
+        ),
+        ("页码或文献号", vec!["%P", "SP", "EP", "AR"]),
+        ("DOI（需核对是否存在）", vec!["%R", "DO", "DI"]),
         ("摘要", vec!["%X", "AB"]),
+        ("关键词", vec!["%K", "K1"]),
     ]
     .into_iter()
     .filter(|(_, tags)| records[0].values(tags).iter().all(|v| v.trim().is_empty()))
@@ -221,13 +307,46 @@ pub fn capture(root: &Path, task: &Task, data: &Value) -> Result<(source_files::
     .collect();
     Ok((
         draft,
-        json!({"mode":"cnki_export_response","source_url":page,"response_path":response,"response_sha256":hash(&raw),"saved_path":saved,"missing":missing}),
+        json!({"mode":"cnki_export_response","source_url":page,"response_path":response,"response_sha256":hash(&raw),"saved_path":saved,"missing":missing,"search":data["search"]}),
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn search_task() -> Task {
+        Task::new(serde_json::from_value(json!({"row":2,"owner":"","sa_id":"cnki-search","title":"Paper","doi":"","wos":"","staff_id":"001","matches":0,"item_ids":"","mark":"","reason":"","done":false,"skipped":false,"source":""})).unwrap(), "input".into())
+    }
+    #[test]
+    fn automatic_selection_requires_complete_unique_exact_scoped_results() {
+        let task = search_task();
+        let mut result = json!({"page_url":format!("{}?kw=Paper&korder=SU",ENTRY),"query":"Paper","complete":true,"total":2,"records":[{"title":"Paper","url":"https://kns.cnki.net/kcms2/article/abstract?v=one"},{"title":"Other","url":"https://kns.cnki.net/kcms2/article/abstract?v=two"}]});
+        assert!(select_result(&task, &result)
+            .unwrap()
+            .as_str()
+            .ends_with("v=one"));
+        result["records"][1]["title"] = json!("Paper");
+        assert_eq!(
+            select_result(&task, &result).unwrap_err().code,
+            "SOURCE_SELECTION_REQUIRED"
+        );
+        result["records"][1]["title"] = json!("Other");
+        result["total"] = json!(20);
+        assert!(select_result(&task, &result).is_err());
+        result["total"] = json!(2);
+        result["page_url"] = json!(format!("{}?kw=Other", ENTRY));
+        assert!(select_result(&task, &result).is_err());
+        result["page_url"] = json!(format!("{}?kw=Paper", ENTRY));
+        result["records"][0]["url"] =
+            json!("https://kns.cnki.net.evil.invalid/kcms2/article/abstract?v=one");
+        assert!(select_result(&task, &result).is_err());
+        result["records"] = json!([]);
+        result["total"] = json!(0);
+        assert_eq!(
+            select_result(&task, &result).unwrap_err().code,
+            "SOURCE_NOT_FOUND"
+        );
+    }
     #[test]
     fn preserves_repeated_authors_unknown_fields_and_multiline_abstracts() {
         let text = "%0 Journal Article\n%T Example\n%A 张三\n%A 李四\n%X first line\nsecond line\n%Z extra field\n";

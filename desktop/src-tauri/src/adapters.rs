@@ -7,10 +7,15 @@ pub struct PageAdapter {
 }
 pub fn resolve(role: &str, action: &str) -> Result<PageAdapter> {
     let (script, handler) = match role {
-        label if label.starts_with("source-") && action == "cnki_capture" => (
-            include_str!("../browser/cnki-adapter.cjs"),
-            "runCNKICommand",
-        ),
+        label
+            if label.starts_with("source-")
+                && ["cnki_capture", "cnki_results"].contains(&action) =>
+        {
+            (
+                include_str!("../browser/cnki-adapter.cjs"),
+                "runCNKICommand",
+            )
+        }
         "wos" => (
             include_str!("../../../extension/wos-adapter.js"),
             "runWOSCommand",

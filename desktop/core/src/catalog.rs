@@ -27,7 +27,7 @@ pub fn channels() -> Value {
         source_formats.push(json!("ris"));
         channel["source_formats"] = json!(source_formats);
         channel["capabilities"] = json!({
-            "search":if native {"implemented"} else if cnki {"title_query_manual_selection"} else {"unimplemented"},
+            "search":if native {"implemented"} else if cnki {"runtime_contract_guarded"} else {"unimplemented"},
             "local_source":"implemented",
             "source_browser":if cnki {"builtin_entry"} else {"configured_manual"},
             "browser_export_response":if cnki {"implemented"} else {"unimplemented"},

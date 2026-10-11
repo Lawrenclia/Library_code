@@ -6,7 +6,76 @@ use library_core::{
     *,
 };
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+
+fn cnki_progress(app: &AppHandle, id: &str, phase: &str, message: &str) {
+    let _ = app.emit_to(
+        "main",
+        "source-acquisition-progress",
+        json!({"id":id,"channel":"cnki","phase":phase,"message":message}),
+    );
+}
+
+fn cnki_unchanged(state: &Engine, task: &Task) -> Result<()> {
+    if state.pause.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(Failure::new(
+            "PAUSED",
+            "CNKI 获取已暂停，保留来源窗口和已保存文件。",
+        ));
+    }
+    let latest = state.store.task(&task.id)?;
+    if latest.revision != task.revision
+        || latest.input_hash != task.input_hash
+        || json!(latest.record) != json!(task.record)
+        || state.store.pending_input(&task.id)?.is_some()
+        || !state.store.unresolved(&task.id)?.is_empty()
+    {
+        return Err(Failure::new(
+            "INPUT_CHANGED",
+            "获取期间名单或任务范围变化，请重新获取。",
+        ));
+    }
+    Ok(())
+}
+
+async fn cnki_navigation(
+    app: &AppHandle,
+    state: &Engine,
+    task: &Task,
+    label: &str,
+    target: &url::Url,
+) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        cnki_unchanged(state, task)?;
+        let window = app
+            .get_webview_window(label)
+            .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "CNKI 来源窗口已关闭。"))?;
+        let actual = window.url().map_err(Failure::storage)?;
+        if actual.origin() == target.origin()
+            && actual.path() == target.path()
+            && state
+                .browser
+                .source_loaded
+                .lock()
+                .map_err(Failure::storage)?
+                .get(label)
+                .is_some_and(|url| url == actual.as_str())
+            && target
+                .query_pairs()
+                .all(|(k, v)| actual.query_pairs().any(|(ak, av)| ak == k && av == v))
+        {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(Failure::new(
+                if cnki::is_site(&actual) { "PAGE_TIMEOUT" } else { "AUTH_REQUIRED" },
+                "CNKI 目标页面尚未加载完成，请在内置窗口核对网络、登录或验证后继续；未判定为无记录。",
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
 
 /// User initiated CNKI search / metadata acquisition in its own authenticated webview.
 #[tauri::command]
@@ -20,10 +89,10 @@ pub(crate) async fn cnki_source(
 ) -> Result<Value> {
     local(&window)?;
     let _lease = state.acquire()?;
-    if action != "search" && action != "capture" {
+    if !["search", "capture", "auto"].contains(&action.as_str()) {
         return Err(Failure::new(
             "INVALID_ACTION",
-            "请选择 CNKI 检索或获取题录。",
+            "请选择 CNKI 检索、自动获取或当前详情题录。",
         ));
     }
     if !state
@@ -40,7 +109,9 @@ pub(crate) async fn cnki_source(
     }
     let current = state.store.source_session(&id, "cnki")?;
     let task = state.store.task(&id)?;
-    if action == "search" {
+    let mut selected_label = label;
+    let mut search = Value::Null;
+    if action == "search" || action == "auto" {
         if task.record.title.trim().is_empty() {
             return Err(Failure::new("INPUT_INVALID", "本篇名单缺少题名。"));
         }
@@ -51,7 +122,10 @@ pub(crate) async fn cnki_source(
                 "机构代理入口请使用‘打开来源窗口’并在网页检索，原始下载仍由工作台接收。",
             ));
         }
-        let opened = state.browser.open_source(&app, &state.store, current)?;
+        cnki_progress(&app, &id, "search", "正在打开名单题名检索页…");
+        let opened = state
+            .browser
+            .open_source(&app, &state.store, current.clone())?;
         let label = opened["label"]
             .as_str()
             .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "来源窗口未返回。"))?;
@@ -62,14 +136,59 @@ pub(crate) async fn cnki_source(
             .query_pairs_mut()
             .append_pair("kw", &task.record.title)
             .append_pair("korder", "SU");
+        state
+            .browser
+            .source_loaded
+            .lock()
+            .map_err(Failure::storage)?
+            .remove(label);
         app.get_webview_window(label)
             .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "来源窗口已关闭。"))?
-            .navigate(query)
+            .navigate(query.clone())
             .map_err(Failure::storage)?;
-        return Ok(opened);
+        if action == "search" {
+            return Ok(opened);
+        }
+        selected_label = Some(label.to_owned());
+        cnki_navigation(&app, &state, &task, label, &query).await?;
+        cnki_progress(&app, &id, "results", "等待完整结果并核对唯一精确题名…");
+        search = state
+            .browser
+            .execute(
+                &app,
+                label,
+                "cnki_results",
+                json!({"title":task.record.title}),
+                30,
+            )
+            .await?;
+        cnki_unchanged(&state, &task)?;
+        let target = cnki::select_result(&task, &search)?;
+        if !current
+            .site
+            .download_origins
+            .contains(&target.origin().ascii_serialization())
+        {
+            return Err(Failure::new(
+                "PAGE_UNSUPPORTED",
+                "目标详情来源未登记，请核对并保存实际下载来源。",
+            ));
+        }
+        cnki_progress(&app, &id, "detail", "已找到唯一精确题名，正在打开详情…");
+        state
+            .browser
+            .source_loaded
+            .lock()
+            .map_err(Failure::storage)?
+            .remove(label);
+        app.get_webview_window(label)
+            .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "来源窗口已关闭。"))?
+            .navigate(target.clone())
+            .map_err(Failure::storage)?;
+        cnki_navigation(&app, &state, &task, label, &target).await?;
     }
-    let label =
-        label.ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "请选择本篇 CNKI 详情窗口。"))?;
+    let label = selected_label
+        .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "请选择本篇 CNKI 详情窗口。"))?;
     let session = state
         .browser
         .source_windows
@@ -88,25 +207,35 @@ pub(crate) async fn cnki_source(
             "窗口属于旧名单或旧入口，请重新打开本篇窗口。",
         ));
     }
-    let response = state
+    cnki_unchanged(&state, &task)?;
+    cnki_progress(&app, &id, "export", "正在获取完整题录，保存原始响应与来源…");
+    let mut response = state
         .browser
-        .execute(&app, &label, "cnki_capture", json!({}), 35)
+        .execute(
+            &app,
+            &label,
+            "cnki_capture",
+            if action == "auto" {
+                json!({"title":task.record.title})
+            } else {
+                json!({})
+            },
+            35,
+        )
         .await?;
-    let latest = state.store.task(&id)?;
-    if latest.revision != task.revision
-        || latest.input_hash != task.input_hash
-        || json!(latest.record) != json!(task.record)
-    {
-        return Err(Failure::new(
-            "INPUT_CHANGED",
-            "获取期间名单变化，请重新获取。",
-        ));
-    }
+    cnki_unchanged(&state, &task)?;
+    response["search"] = search;
     let (draft, acquisition) = cnki::capture(&state.store.root, &task, &response)?;
     let document = source_files::check_draft(&state.store.root, &task, &draft)?;
     let mut page = document.page(&draft, None, 1, 0)?;
     page["acquisition"] = acquisition;
     remember(&state, draft)?;
+    cnki_progress(
+        &app,
+        &id,
+        "saved",
+        "完整题录已保存，请选择记录并核对重要缺项。",
+    );
     state.changed(&app);
     Ok(page)
 }
