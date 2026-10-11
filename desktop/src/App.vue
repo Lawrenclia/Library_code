@@ -1871,7 +1871,7 @@ function frameworkBrowser(role: string, entry?: string) {
                       current.route !== 'missing' ||
                       !!current.batch_recheck ||
                       !libraryCheckReady ||
-                      !['ready', 'downloaded'].includes(current.stage)
+                      !['ready', 'downloaded', 'awaiting_review'].includes(current.stage)
                     "
                     @click="step('import_upload', true)"
                     ><Upload />1. 上传核验文件</Button
@@ -1888,7 +1888,7 @@ function frameworkBrowser(role: string, entry?: string) {
                   ><Button
                     variant="outline"
                     size="sm"
-                    :disabled="locked || !current.artifact"
+                    :disabled="locked || (!current.artifact && !current.batch && !current.evidence.some(e => e.kind === 'submission_packet'))"
                     @click="step('verify_import')"
                     ><RefreshCw />回读上传 / 导入 / 推送结果</Button
                   ><Button

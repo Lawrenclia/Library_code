@@ -36,9 +36,11 @@ pub fn channels() -> Value {
             "export":if native {"implemented"} else {"unimplemented"},
             "parse":if native {"implemented"} else if cnki {"endnote_refworks_excel"} else {"unimplemented"},
             "source_ris":"implemented",
-            "submit":if native {"implemented"} else {"unimplemented"},
+            "submit":if crate::submission::supported_channel(channel["id"].as_str().unwrap_or("")) {"runtime_contract_guarded"} else {"unimplemented"},
             "template":if template {"implemented"} else {"registered_only"}
         });
+        channel["automated"] =
+            crate::submission::supported_channel(channel["id"].as_str().unwrap_or("")).into();
         channel["live_verified"] = false.into();
     }
     channels

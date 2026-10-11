@@ -163,11 +163,8 @@ fn gates(store: &Store, task: &Task, packet: &Packet) -> Vec<Failure> {
     if let Err(e) = validate(store, task, packet) {
         issues.push(e);
     }
-    if packet.material.validation["ready"] != true {
-        issues.push(Failure::new(
-            "INCOMPLETE_METADATA",
-            "原始文件已归档，但仍需核对导出范围、渠道格式和必要字段；不能自动上传。",
-        ));
+    if let Err(e) = material_ready(store, task, packet) {
+        issues.push(e);
     }
     let review = task.review.as_ref();
     if task.route != Route::Missing
@@ -181,15 +178,10 @@ fn gates(store: &Store, task: &Task, packet: &Packet) -> Vec<Failure> {
     } else if let Err(e) = library::assert_absent(task) {
         issues.push(e);
     }
-    if packet.channel != "wos_txt" {
-        issues.push(Failure::new(
-            "CHANNEL_UNSUPPORTED",
-            "本篇材料已保存；所选渠道的上传页面驱动尚未接通，不能自动提交。",
-        ));
-    } else if let Err(e) = task.import_ready() {
-        issues.push(e);
-    }
-    if !matches!(task.stage, Stage::Ready | Stage::Downloaded) {
+    if !matches!(
+        task.stage,
+        Stage::Ready | Stage::Downloaded | Stage::AwaitingReview
+    ) {
         issues.push(Failure::new(
             "INVALID_TRANSITION",
             "当前业务阶段不能新上传；已有平台结果应先回读。",
@@ -329,27 +321,321 @@ pub fn prepare(store: &Store, id: &str, recipe: &str, expected_revision: i64) ->
     store.save(&mut task, "submission_prepared")?;
     Ok(prepared(store, &task, &packet))
 }
-/// Existing WOS driver may use a selected material only after full source recheck.
+/// Supported institution channels are separate from external source containers.
+pub fn supported_channel(channel: &str) -> bool {
+    matches!(
+        channel,
+        "general"
+            | "wos_excel"
+            | "wos_txt"
+            | "cnki"
+            | "cscd"
+            | "cssci"
+            | "wanfang"
+            | "ei"
+            | "vip"
+            | "incopat"
+    )
+}
+fn material_ready(store: &Store, task: &Task, packet: &Packet) -> Result<()> {
+    if !supported_channel(&packet.channel) {
+        return Err(Failure::new(
+            "CHANNEL_UNSUPPORTED",
+            "此来源没有对应机构库导入入口，请使用实际平台模板。",
+        ));
+    }
+    if packet.material.kind == "original" {
+        return task.import_ready();
+    }
+    let extension = Path::new(&packet.material.path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let channel = catalog::channels()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == packet.channel)
+        .cloned()
+        .unwrap();
+    if !channel["formats"]
+        .as_array()
+        .unwrap()
+        .contains(&json!(extension))
+    {
+        return Err(Failure::new(
+            "FILE_INVALID",
+            "材料扩展名不属于该机构库导入渠道。",
+        ));
+    }
+    if let Some(export) = materials::original_source(store, &packet.material)? {
+        source_files::assert_single_export(&export)?;
+    }
+    let digest = hash(json!(packet).to_string().as_bytes());
+    if !task.evidence.iter().any(|e| {
+        e.kind == "submission_review"
+            && serde_json::from_str::<Value>(&e.text).is_ok_and(|v| {
+                v["packet_hash"] == digest
+                    && v["format_confirmed"] == true
+                    && v["fields_complete"] == true
+                    && v["single_record"] == true
+                    && v["proof"].as_str().is_some_and(|s| !s.trim().is_empty())
+            })
+    }) {
+        return Err(Failure::new(
+            "REVIEW_REQUIRED",
+            "请核对单篇导出、实际渠道格式和必要字段，再保存材料核验。",
+        ));
+    }
+    Ok(())
+}
+pub fn review_material(
+    store: &Store,
+    id: &str,
+    packet_id: &str,
+    revision: i64,
+    proof: &str,
+    format: bool,
+    complete: bool,
+) -> Result<Value> {
+    let mut task = store.task(id)?;
+    eligible(store, &task)?;
+    if task.revision != revision {
+        return Err(fail("任务变化，请刷新材料。"));
+    }
+    let packet = current(store, id)?.ok_or_else(|| fail("先选择本篇提交材料。"))?;
+    if packet.id != packet_id {
+        return Err(fail("提交材料已更换。"));
+    }
+    validate(store, &task, &packet)?;
+    if !format || !complete || proof.trim().is_empty() || proof.chars().count() > 2000 {
+        return Err(Failure::new(
+            "REVIEW_REQUIRED",
+            "确认实际渠道格式与必要字段，填写具体核对依据。",
+        ));
+    }
+    if let Some(export) = materials::original_source(store, &packet.material)? {
+        source_files::assert_single_export(&export)?;
+    }
+    task.evidence.push(Evidence { id:uuid::Uuid::new_v4().to_string(), kind:"submission_review".into(), source:packet.material.audit.clone(),
+        text:json!({"packet_hash":hash(json!(packet).to_string().as_bytes()),"format_confirmed":true,"fields_complete":true,"single_record":true,"proof":proof.trim(),"platform_verified":false}).to_string(), created:now() });
+    store.save(&mut task, "submission_review")?;
+    Ok(prepared(store, &task, &packet))
+}
 pub fn check_upload(store: &Store, task: &Task) -> Result<()> {
     if let Some(packet) = current(store, &task.id)? {
         eligible(store, task)?;
         validate(store, task, &packet)?;
-        if packet.material.kind == "original_pending" || packet.material.validation["ready"] != true
+        material_ready(store, task, &packet)?;
+        if task.route != Route::Missing
+            || !task.review.as_ref().is_some_and(|r| {
+                r.library_checked && r.identity_confirmed && r.affiliation_confirmed
+            })
+            || task.batch_recheck.is_some()
         {
             return Err(Failure::new(
-                "INCOMPLETE_METADATA",
-                "所选原始导出未通过渠道格式和必要字段核验，不能使用 WOS 驱动上传。",
+                "REVIEW_REQUIRED",
+                "先核对文献身份、交大署名、本库缺失和旧批次。",
             ));
         }
-        if packet.channel != "wos_txt" {
+        library::assert_absent(task)?;
+        Ok(())
+    } else {
+        task.import_ready()
+    }
+}
+/// Frozen write payload, shared by upload, import, push and their recovery.
+pub fn payload(store: &Store, task: &Task) -> Result<Value> {
+    if let Some(packet) = current(store, &task.id)? {
+        let source = materials::original_source(store, &packet.material)?;
+        let mut candidate = if packet.material.kind == "original" {
+            task.artifact
+                .as_ref()
+                .ok_or_else(|| fail("原始导出缺失。"))?
+                .candidate
+                .clone()
+        } else {
+            let audit: Value = serde_json::from_slice(&std::fs::read(&packet.material.audit)?)?;
+            let fields: std::collections::BTreeMap<String, String> = if let Some(source) = &source {
+                source
+                    .receipt
+                    .fields
+                    .iter()
+                    .map(|f| (f.label.clone(), f.value.clone()))
+                    .collect()
+            } else {
+                serde_json::from_value(audit["plan"]["fields"].clone())?
+            };
+            let field = |aliases: &[&str]| -> String {
+                fields
+                    .iter()
+                    .find(|(k, v)| {
+                        !v.trim().is_empty()
+                            && aliases
+                                .iter()
+                                .any(|a| norm(k.trim_start_matches('*')) == norm(a))
+                    })
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default()
+            };
+            Candidate {
+                title: source
+                    .as_ref()
+                    .map(|s| s.receipt.title.clone())
+                    .unwrap_or_else(|| field(&["题名", "标题", "论文题名", "文献题名", "title"])),
+                doi: normalized_doi(
+                    &source
+                        .as_ref()
+                        .map(|s| s.receipt.doi.clone())
+                        .unwrap_or_else(|| field(&["DOI"])),
+                ),
+                wos: normalized_wos(
+                    &source
+                        .as_ref()
+                        .map(|s| s.receipt.wos.clone())
+                        .unwrap_or_else(|| field(&["WOS记录号", "WOS ID", "wosId"])),
+                ),
+                authors: field(&["作者", "作者姓名", "Authors", "%A", "A1"]),
+                year: field(&["年", "发表年份", "发表时间", "Year", "%D", "YR"]),
+                journal: field(&["来源出版物", "期刊", "刊名", "Source Title", "%J", "JF"]),
+                affiliation: field(&["机构", "作者单位", "Affiliation", "%+", "AD"]),
+                sjtu: true,
+                sha256: packet.material.sha256.clone(),
+                fields,
+            }
+        };
+        candidate.sha256 = packet.material.sha256.clone();
+        if candidate.title.trim().is_empty()
+            || (!task.record.doi.is_empty()
+                && !candidate.doi.is_empty()
+                && normalized_doi(&task.record.doi) != candidate.doi)
+        {
             return Err(Failure::new(
-                "CHANNEL_UNSUPPORTED",
-                "所选 Excel 材料的上传驱动尚未接通。",
+                "IDENTITY_CONFLICT",
+                "提交材料缺少真实题名或 DOI 与名单冲突，请重新核对。",
             ));
         }
-        if !Path::new(&packet.material.path).is_file() {
-            return Err(fail("所选提交文件已缺失。"));
+        let ext = Path::new(&packet.material.path)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        Ok(
+            json!({"sa_id":task.id,"instructions":packet.instructions,"candidate":candidate,
+            "channel":packet.channel,"filename":if packet.material.kind=="original" {format!("SA-WOS-{}.txt",task.id)} else {format!("SA-{}-{}.{}",packet.channel,task.id,ext)},"submission_packet":packet}),
+        )
+    } else {
+        Ok(
+            json!({"sa_id":task.id,"instructions":format!("SA补充-{}",task.id),"candidate":task.artifact.as_ref().map(|a|&a.candidate)}),
+        )
+    }
+}
+/// Recovery verifies the exact saved bytes without requiring an editable stage.
+pub fn read_archive(store: &Store, task: &Task, payload: &Value) -> Result<Vec<u8>> {
+    let Some(value) = payload.get("submission_packet").filter(|v| !v.is_null()) else {
+        return files::read_import_archive(task, payload);
+    };
+    let packet: Packet = serde_json::from_value(value.clone())?;
+    if packet.sa_id != task.id
+        || packet.input_hash != task.input_hash
+        || packet.record.fingerprint() != task.record.fingerprint()
+        || packet.facts != materials::facts(&store.root, task)?
+        || current(store, &task.id)?.is_none_or(|p| json!(p) != json!(packet))
+        || payload["candidate"]["sha256"] != packet.material.sha256
+        || payload["channel"] != packet.channel
+    {
+        return Err(fail("原操作的材料、名单或来源变化，保持结果未知。"));
+    }
+    let path = Path::new(&packet.material.path);
+    if packet.material.recipe.len() != 64
+        || !packet
+            .material
+            .recipe
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(fail("材料版本编号无效。"));
+    }
+    let owned = store
+        .root
+        .join("materials")
+        .join("products")
+        .join(&packet.material.recipe)
+        .canonicalize()?;
+    let meta = std::fs::symlink_metadata(path)?;
+    if !meta.is_file()
+        || meta.file_type().is_symlink()
+        || !path.canonicalize()?.starts_with(owned)
+        || meta.len() > 524288
+    {
+        return Err(Failure::new(
+            "FILE_INVALID",
+            "提交归档路径或大小无效；每篇最多 512 KB。",
+        ));
+    }
+    let bytes = std::fs::read(path)?;
+    if bytes.is_empty() || hash(&bytes) != packet.material.sha256 {
+        return Err(fail("原提交文件字节变化。"));
+    }
+    Ok(bytes)
+}
+/// Cross-channel duplicate protection uses every preserved write intent, including history.
+pub fn assert_no_prior(store: &Store, task: &Task, payload: &Value) -> Result<()> {
+    let target = &payload["candidate"];
+    for other in store.tasks()? {
+        for e in &other.evidence {
+            if !matches!(
+                e.kind.as_str(),
+                "import_receipt" | "import_verified" | "upload_verified"
+            ) {
+                continue;
+            }
+            let v: Value = serde_json::from_str(&e.text)?;
+            let c = &v["payload"]["candidate"];
+            if c.is_null() {
+                continue;
+            }
+            let same = (!target["doi"].as_str().unwrap_or("").is_empty()
+                && c["doi"] == target["doi"])
+                || (!target["wos"].as_str().unwrap_or("").is_empty() && c["wos"] == target["wos"])
+                || c["sha256"] == target["sha256"]
+                || (c["title"]
+                    .as_str()
+                    .is_some_and(|s| norm(s) == norm(target["title"].as_str().unwrap_or(""))));
+            if same {
+                return Err(Failure::new(
+                    "DUPLICATE_WRITE",
+                    "该论文已有保存的平台操作回执，请回读或关联原条目，不能新上传。",
+                ));
+            }
+        }
+        if other.id != task.id
+            && matches!(
+                other.stage,
+                Stage::Uploaded | Stage::Imported | Stage::Pushed | Stage::Claimed | Stage::Unknown
+            )
+            && norm(&other.record.title) == norm(target["title"].as_str().unwrap_or(""))
+        {
+            return Err(Failure::new(
+                "DUPLICATE_WRITE",
+                "同题名任务已有平台操作，请先核对原批次。",
+            ));
         }
     }
     Ok(())
+}
+
+/// Expected source labels are checked against the live list filter before any file write.
+pub fn batch_source(channel: &str) -> Option<&'static str> {
+    Some(match channel {
+        "wos_txt" | "wos_excel" => "WOS",
+        "cnki" => "CNKI",
+        "cscd" => "CSCD",
+        "cssci" => "CSSCI",
+        "wanfang" => "万方",
+        "ei" => "EI",
+        "vip" => "VIP",
+        "incopat" => "IncoPat",
+        "general" => "手工",
+        _ => return None,
+    })
 }

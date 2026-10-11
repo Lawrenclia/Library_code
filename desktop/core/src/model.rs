@@ -237,6 +237,10 @@ pub fn validate_import_readback(
         .ok_or_else(bad)?;
     let candidate: Candidate =
         serde_json::from_value(payload["candidate"].clone()).map_err(|_| bad())?;
+    let channel = payload["channel"].as_str().unwrap_or("wos_txt");
+    let native = channel == "wos_txt"
+        && payload["submission_packet"]["material"]["kind"] != "original_pending";
+    let source = crate::submission::batch_source(channel).ok_or_else(bad)?;
     let batch = &result["batch"];
     if result["verified"] != true
         || payload["instructions"] != format!("SA补充-{id}")
@@ -244,10 +248,11 @@ pub fn validate_import_readback(
         || candidate.title.trim().is_empty()
         || candidate.sha256.len() != 64
         || !candidate.sha256.bytes().all(|b| b.is_ascii_hexdigit())
-        || !regex::Regex::new(r"^WOS:[0-9]{15}$")
-            .unwrap()
-            .is_match(&candidate.wos)
-        || batch["source"] != "WOS"
+        || (native
+            && !regex::Regex::new(r"^WOS:[0-9]{15}$")
+                .unwrap()
+                .is_match(&candidate.wos))
+        || batch["source"] != source
         || batch["instructions"] != payload["instructions"]
         || ["id", "modelId"].iter().any(|k| {
             batch[*k]
@@ -284,9 +289,9 @@ pub fn validate_import_readback(
         .ok_or_else(bad)?;
     let metadata = &items[0]["metadata"];
     let title = scalar(metadata, "title").ok_or_else(bad)?;
-    let wos = scalar(metadata, "wosId").ok_or_else(bad)?;
+    let wos = scalar(metadata, "wosId").unwrap_or("");
     if norm(title) != norm(&candidate.title)
-        || normalized_wos(wos) != candidate.wos
+        || (!candidate.wos.is_empty() && normalized_wos(wos) != candidate.wos)
         || (!candidate.doi.is_empty()
             && scalar(metadata, "doi").map(normalized_doi) != Some(candidate.doi.clone()))
     {
@@ -307,7 +312,12 @@ pub fn validate_upload_readback(result: &Value, payload: &Value, size: usize) ->
         || result["sa_id"] != sa_id
         || result["instructions"] != payload["instructions"]
         || result["sha256"] != sha
-        || result["filename"] != format!("SA-WOS-{sa_id}.txt")
+        || (payload.get("channel").is_some() && result["channel"] != payload["channel"])
+        || result["filename"]
+            != payload
+                .get("filename")
+                .cloned()
+                .unwrap_or(json!(format!("SA-WOS-{sa_id}.txt")))
         || result["size"].as_u64() != Some(size as u64)
         || (payload.get("content_size").is_some()
             && payload["content_size"].as_u64() != Some(size as u64))
@@ -672,6 +682,7 @@ pub fn is_write(action: &str) -> bool {
             | "metadata_save"
             | "link"
             | "complete"
+            | "save_note"
     )
 }
 pub const PUSH_POLICY:&str="查重：是；唯一标识 +（期刊 & 发表时间 & 页码 & 卷 & 期 & 题名相似度）+ 题名相似度；重复元数据：根据优先级合并；不存在的条目：新增；本校成果：是";

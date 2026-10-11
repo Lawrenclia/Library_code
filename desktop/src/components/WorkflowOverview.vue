@@ -270,6 +270,8 @@ function browserState(role: string) {
                     ><span>{{
                       channel.capabilities[key] === "implemented"
                         ? "已接入"
+                        : channel.capabilities[key] === "runtime_contract_guarded"
+                          ? "已接入 · 待自测"
                         : channel.capabilities[key] === "registered_only"
                           ? "需注册模板"
                           : "待接入"

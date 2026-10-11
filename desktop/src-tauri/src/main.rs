@@ -91,6 +91,7 @@ fn main() {
             commands::material_batches::cancel_material_batch,
             commands::submission::submission_options,
             commands::submission::prepare_submission,
+            commands::submission::review_submission,
             commands::submission::export_submission_bundle,
             commands::browsers::browser_result
         ])

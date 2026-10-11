@@ -34,6 +34,7 @@ actions! {
     PrepareIssues => ("prepare_issues", "sa", Prepare),
     PrepareNote => ("prepare_note", "sa", Prepare),
     VerifyNote => ("verify_note", "sa", Recover),
+    SaveNote => ("save_note", "sa", Write),
     ReviewIssue => ("review_issue", "sa", LocalReview),
     PrepareMetadata => ("prepare_metadata", "metadata", Prepare),
     OpenMetadata => ("open_metadata", "authors", Read),

@@ -10,8 +10,7 @@ impl Engine {
         mut t: Task,
         _extra: Value,
     ) -> Result<Value> {
-        let a = t.artifact.as_ref();
-        let common = json!({"sa_id":id,"instructions":format!("SA补充-{id}"),"candidate":a.map(|a|serde_json::to_value(&a.candidate).unwrap())});
+        let common = library_core::submission::payload(&self.store, &t)?;
 
         let attempts = self.store.unresolved(id)?;
         if attempts.iter().any(|a| {
@@ -42,7 +41,7 @@ impl Engine {
             })
             .transpose()?;
         let original = original_payload.as_ref().unwrap_or(&common);
-        let original_raw = files::read_import_archive(&t, original)?;
+        let original_raw = library_core::submission::read_archive(&self.store, &t, original)?;
         let batch_recheck = if t.batch_recheck.is_some() {
             if !attempts.is_empty() {
                 return Err(Failure::new(
@@ -69,7 +68,13 @@ impl Engine {
                 let upload = checkpoint.as_ref().ok_or_else(|| {
                     Failure::new("REMOTE_RESULT_UNKNOWN", "缺少原上传回执，不能重新上传。")
                 })?;
-                if upload["uploaded"] != true || upload["filename"] != format!("SA-WOS-{id}.txt") {
+                if upload["uploaded"] != true
+                    || upload["filename"]
+                        != common
+                            .get("filename")
+                            .cloned()
+                            .unwrap_or(json!(format!("SA-WOS-{id}.txt")))
+                {
                     return Err(Failure::new(
                         "REMOTE_RESULT_UNKNOWN",
                         "原上传回执身份不一致，不能重新上传。",
@@ -94,7 +99,7 @@ impl Engine {
                 .browser
                 .execute(app, "import", "import_check", cmd.clone(), 65)
                 .await?;
-            files::read_import_archive(&t, original)?;
+            library_core::submission::read_archive(&self.store, &t, original)?;
             if let Some(saved) = &batch_recheck {
                 library_core::versions::adopt_batch_recheck(&mut t, saved, &result, &cmd)?;
             } else if result["uploaded"] == true {
@@ -119,7 +124,7 @@ impl Engine {
                 id: uuid::Uuid::new_v4().to_string(),
                 kind: "upload_verified".into(),
                 source: "机构库导入管理 · 原上传只读核验".into(),
-                text: json!({"input_hash":t.input_hash,"attempt":attempts.first(),"previous_upload":checkpoint,"result":result})
+                text: json!({"input_hash":t.input_hash,"payload":original,"attempt":attempts.first(),"previous_upload":checkpoint,"result":result})
                     .to_string(),
                 created: now(),
             });
@@ -169,7 +174,7 @@ impl Engine {
                 "尚未核验到导入/推送成功。",
             ));
         }
-        files::read_import_archive(&t, original)?;
+        library_core::submission::read_archive(&self.store, &t, original)?;
         if let Some(saved) = &batch_recheck {
             library_core::versions::adopt_batch_recheck(&mut t, saved, &d, &cmd)?;
         } else {
@@ -182,7 +187,7 @@ impl Engine {
             id: uuid::Uuid::new_v4().to_string(),
             kind: "import_verified".into(),
             source: "机构库导入管理 · 批次与完整文献回读".into(),
-            text: json!({"input_hash":t.input_hash,"attempt":attempts.first(),"result":d})
+            text: json!({"input_hash":t.input_hash,"payload":original,"attempt":attempts.first(),"result":d})
                 .to_string(),
             created: now(),
         });

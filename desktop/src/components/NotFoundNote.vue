@@ -19,14 +19,15 @@ watch(
     feedback.value = "";
   },
 );
-async function execute(action: "prepare_note" | "verify_note") {
+async function execute(action: "prepare_note" | "verify_note" | "save_note") {
   feedback.value = "";
+  if(action === "save_note" && !window.confirm(`只保存独立备注，保持待处理\n\nSA ID：${props.task.id}\n备注：${props.task.sa_note?.note}\n确认保存？`))return;
   await props.run(
     "run_step",
-    { id: props.task.id, action, approved: false, extra: {} },
+    { id: props.task.id, action, approved: action === "save_note", extra: {} },
     action === "prepare_note"
-      ? "独立备注已准备；请在平台保存备注后回读。"
-      : "已回读到准确备注，SA 仍为待处理。",
+      ? "独立备注已准备，请核对并保存。"
+      : action === "save_note" ? "独立备注已保存并回读，SA 保持待处理。" : "已回读到准确备注，SA 仍为待处理。",
   );
 }
 async function copyNote() {
@@ -49,7 +50,7 @@ async function copyNote() {
     <h3 class="text-sm font-medium">未查询到：仅保存备注</h3>
     <p class="my-2 text-xs leading-6 text-muted-foreground">
       先读取原 SA
-      并准备备注，再在机构库可单独修改备注的入口保存，最后回读核验。此步骤由你在平台操作；“设置已处理”会改变状态，不能用于此分支。
+      并准备备注，核对后通过独立备注入口保存并回读。页面没有独立入口时可复制后手动保存；“设置已处理”不能用于此分支。
     </p>
     <div class="flex flex-wrap gap-2">
       <Button
@@ -59,12 +60,13 @@ async function copyNote() {
         @click="execute('prepare_note')"
         >1. 读取并准备备注</Button
       >
+      <Button size="sm" :disabled="locked || !task.sa_note || task.sa_note.verified || task.stage === 'unknown'" @click="execute('save_note')">2. 保存独立备注</Button>
       <Button
         variant="outline"
         size="sm"
         :disabled="locked || !task.sa_note"
         @click="copyNote"
-        >2. 复制备注</Button
+        >复制备注备用</Button
       >
       <Button
         size="sm"

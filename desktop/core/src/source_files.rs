@@ -966,6 +966,57 @@ pub fn original_exports(root: &Path, task: &Task) -> Result<Vec<OriginalExport>>
     }
     Ok(exports)
 }
+/// Prove the entire original export contains only the explicitly bound record.
+/// Plain text has no reliable record boundaries and must use a checked template.
+pub fn assert_single_export(export: &OriginalExport) -> Result<()> {
+    let r = &export.receipt;
+    let document = read(Path::new(&r.archive_path), &r.format, &r.options)?;
+    if document.text_mode || r.options.export_response {
+        return Err(fail(
+            "无法证明普通文本只含一篇，请重新导出单篇结构化题录或使用模板。",
+        ));
+    }
+    let selected = document.table(&r.selection.sheet)?;
+    if !selected.formulas.is_empty() {
+        return Err(fail("导出含公式，不能作为单篇静态原文件提交。"));
+    }
+    for table in &document.tables {
+        let nonempty: Vec<_> = table
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.iter().any(|v| !v.trim().is_empty()))
+            .collect();
+        if table.name != selected.name {
+            if !nonempty.is_empty() {
+                return Err(fail("原文件含其他工作表数据，请重新导出仅含本篇的文件。"));
+            }
+            continue;
+        }
+        let header = r
+            .selection
+            .header_row
+            .checked_sub(table.start_row + 1)
+            .ok_or_else(|| fail("实际表头行无效。"))? as usize;
+        let row = r
+            .selection
+            .row
+            .checked_sub(table.start_row + 1)
+            .ok_or_else(|| fail("绑定记录行无效。"))? as usize;
+        if r.selection.end_row != r.selection.row
+            || row <= header
+            || nonempty.len() != 2
+            || nonempty[0].0 != header
+            || nonempty[1].0 != row
+        {
+            return Err(fail(
+                "原文件不是一行表头加本篇唯一记录，请重新导出单篇，整批文件不会上传。",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn read_original_export(
     root: &Path,
     task: &Task,

@@ -12,7 +12,11 @@ impl Engine {
         extra: Value,
     ) -> Result<Value> {
         let a = t.artifact.as_ref();
-        let common = json!({"sa_id":id,"instructions":format!("SA补充-{id}"),"candidate":a.map(|a|serde_json::to_value(&a.candidate).unwrap())});
+        let common = if action.starts_with("import_") {
+            library_core::submission::payload(&self.store, &t)?
+        } else {
+            json!({"sa_id":id,"instructions":format!("SA补充-{id}"),"candidate":a.map(|a|serde_json::to_value(&a.candidate).unwrap())})
+        };
         if !approved {
             return Err(Failure::new(
                 "REVIEW_REQUIRED",
@@ -20,6 +24,21 @@ impl Engine {
             ));
         }
         let (label, payload, next) = match action {
+            "save_note" => {
+                let (plan_id, original) = sa::latest_note_plan(&t)?;
+                let live = self.read_sa(app, &mut t).await?;
+                if live != original["original_sa"] {
+                    return Err(Failure::new(
+                        "TASK_CHANGED",
+                        "SA 已变化，请重新读取备注，未发送保存。",
+                    ));
+                }
+                let mut payload = original;
+                payload["plan_id"] = plan_id.into();
+                payload["expected"] = live["row"].clone();
+                payload["reviewed"] = true.into();
+                ("sa", payload, t.stage.clone())
+            }
             "save_metadata" => {
                 let prepared = self
                     .store
@@ -123,15 +142,18 @@ impl Engine {
             }
             "import_upload" => {
                 library_core::submission::check_upload(&self.store, &t)?;
-                t.import_ready()?;
-                if !matches!(t.stage, Stage::Ready | Stage::Downloaded) {
+                library_core::submission::check_upload(&self.store, &t)?;
+                if !matches!(
+                    t.stage,
+                    Stage::Ready | Stage::Downloaded | Stage::AwaitingReview
+                ) {
                     return Err(Failure::new("INVALID_TRANSITION", "当前任务不能再次上传。"));
                 }
                 // An earlier absence receipt is not enough to upload: repeat the
                 // same front-end queries immediately before the write boundary.
                 let target = library::latest(&t)?["target"].clone();
                 self.search_library(app, &mut t, target).await?;
-                t.import_ready()?;
+                library_core::submission::check_upload(&self.store, &t)?;
                 let snapshot = self.read_sa(app, &mut t).await?;
                 if snapshot["row"]["matchCount"] != 0 && snapshot["row"]["matchCount"] != "0" {
                     return Err(Failure::new(
@@ -160,57 +182,35 @@ impl Engine {
                         "已有同说明批次，请先核验。",
                     ));
                 }
-                let artifact = t.artifact.as_ref().unwrap();
-                library_core::legacy::assert_no_prior_import(&self.store, id, &artifact.candidate)?;
-                self.store.assert_no_prior_upload(&artifact.candidate)?;
-                for other in self.store.tasks()? {
-                    if other.id != id
-                        && other
-                            .artifact
-                            .as_ref()
-                            .map(|a| a.candidate.wos == artifact.candidate.wos)
-                            .unwrap_or(false)
-                        && matches!(
-                            other.stage,
-                            Stage::Uploaded
-                                | Stage::Imported
-                                | Stage::Pushed
-                                | Stage::Claimed
-                                | Stage::Completed
-                                | Stage::Unknown
-                        )
-                    {
-                        return Err(Failure::new(
-                            "DUPLICATE_WRITE",
-                            "同一论文已有平台操作，请核验并关联现有条目。",
-                        ));
-                    }
+                let candidate: Candidate = serde_json::from_value(common["candidate"].clone())?;
+                if t.artifact.is_some() {
+                    library_core::legacy::assert_no_prior_import(&self.store, id, &candidate)?;
                 }
-                let raw = files::read_import_archive(&t, &common)?;
+                self.store.assert_no_prior_upload(&candidate)?;
+                library_core::submission::assert_no_prior(&self.store, &t, &common)?;
+                let raw = library_core::submission::read_archive(&self.store, &t, &common)?;
                 let mut p = common;
-                p["submission_packet"] =
-                    serde_json::to_value(library_core::submission::current(&self.store, id)?)?;
                 p["content_size"] = json!(raw.len());
                 p["content"] = base64::engine::general_purpose::STANDARD.encode(raw).into();
-                p["contentSha"] = artifact.candidate.sha256.clone().into();
+                p["contentSha"] = p["candidate"]["sha256"].clone();
                 ("import", p, Stage::Uploaded)
             }
             "import_submit" => {
-                t.import_ready()?;
+                library_core::submission::check_upload(&self.store, &t)?;
                 if t.stage != Stage::Uploaded {
                     return Err(Failure::new("INVALID_TRANSITION", "先等待上传成功。"));
                 }
                 let mut p = common;
                 p["upload"] = t.batch.clone().unwrap_or(Value::Null);
-                let raw = files::read_import_archive(&t, &p)?;
-                p["contentSha"] = t.artifact.as_ref().unwrap().candidate.sha256.clone().into();
+                let raw = library_core::submission::read_archive(&self.store, &t, &p)?;
+                p["contentSha"] = p["candidate"]["sha256"].clone();
                 p["content_size"] = json!(raw.len());
                 validate_upload_readback(&p["upload"], &p, raw.len())?;
                 p["content"] = base64::engine::general_purpose::STANDARD.encode(raw).into();
                 ("import", p, Stage::Unknown)
             }
             "import_push" => {
-                t.import_ready()?;
+                library_core::submission::check_upload(&self.store, &t)?;
                 if t.stage != Stage::Imported {
                     return Err(Failure::new("INVALID_TRANSITION", "先回读导入成功的批次。"));
                 }
@@ -308,6 +308,7 @@ impl Engine {
                     "add_alias",
                     "merge_duplicate",
                     "save_metadata",
+                    "save_note",
                 ]
                 .contains(&action)
                     && d["verified"] != true
@@ -329,7 +330,7 @@ impl Engine {
                     return Err(t.last_error.unwrap());
                 }
                 if action == "import_upload" {
-                    let checked = files::read_import_archive(&t, &audit)
+                    let checked = library_core::submission::read_archive(&self.store, &t, &audit)
                         .and_then(|raw| validate_upload_readback(&d, &audit, raw.len()));
                     if let Err(error) = checked {
                         t.running = false;
@@ -347,6 +348,26 @@ impl Engine {
                         )?;
                         self.changed(app);
                         return Err(t.last_error.unwrap());
+                    }
+                }
+                if action == "save_note" {
+                    let checked = match self.read_sa(app, &mut t).await {
+                        Ok(live) => Self::record_note(&mut t, &audit, &live),
+                        Err(error) => Err(error),
+                    };
+                    if let Err(error) = checked {
+                        t.running = false;
+                        t.stage = Stage::Unknown;
+                        t.last_error = Some(error.clone());
+                        self.store.finish_attempt(
+                            &mut t,
+                            &attempt,
+                            "unknown",
+                            d,
+                            "note_unconfirmed",
+                        )?;
+                        self.changed(app);
+                        return Err(error);
                     }
                 }
                 if action == "merge_duplicate" {

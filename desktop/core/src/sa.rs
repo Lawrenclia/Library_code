@@ -129,8 +129,17 @@ pub fn latest_note_plan(task: &Task) -> Result<(String, Value)> {
 
 /// Only remark and server audit fields may change. Status must remain pending.
 pub fn verify_not_found_note(task: &Task, payload: &Value, snapshot: &Value) -> Result<()> {
+    let mut frozen_task = task.clone();
+    frozen_task.stage = serde_json::from_value(payload["previous_stage"].clone())?;
+    frozen_task.running = false;
+    let mut original = payload.clone();
+    if let Some(v) = original.as_object_mut() {
+        v.remove("plan_id");
+        v.remove("expected");
+        v.remove("reviewed");
+    }
     if payload["schema"] != "sa_not_found_note_v1"
-        || not_found_note_payload(task, &payload["original_sa"])? != *payload
+        || not_found_note_payload(&frozen_task, &payload["original_sa"])? != original
     {
         return Err(Failure::new(
             "INPUT_CHANGED",
@@ -161,7 +170,7 @@ pub fn note_status(task: &Task) -> Option<Value> {
                 e.kind == "sa_note_verified"
                     && serde_json::from_str::<Value>(&e.text).is_ok_and(|saved| {
                         saved["schema"] == "sa_not_found_note_verified_v1"
-                            && saved["write_sent"] == false
+                            && saved["write_sent"].is_boolean()
                             && saved["platform_completed"] == false
                             && saved["plan_id"] == id
                             && saved["payload"] == payload

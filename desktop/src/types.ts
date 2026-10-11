@@ -317,7 +317,7 @@ export interface FrameworkManifest {
     live_verified: boolean;
     capabilities: Record<
       string,
-      "implemented" | "unimplemented" | "registered_only"
+      "implemented" | "unimplemented" | "registered_only" | "runtime_contract_guarded"
     >;
   }[];
   operations: { id: string; service: string; kind: string }[];

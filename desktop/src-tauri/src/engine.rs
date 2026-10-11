@@ -194,7 +194,8 @@ impl Engine {
                 self.handle_prepare_claim(app, id, action, t, extra).await
             }
             StepAction::VerifyImport => self.handle_verify_import(app, id, action, t, extra).await,
-            StepAction::SaveMetadata
+            StepAction::SaveNote
+            | StepAction::SaveMetadata
             | StepAction::MergeDuplicate
             | StepAction::AddAlias
             | StepAction::ImportUpload

@@ -435,7 +435,12 @@ impl Store {
         let same = |c: &Value| -> bool {
             let wos = normalized_wos(c["wos"].as_str().unwrap_or(""));
             let doi = normalized_doi(c["doi"].as_str().unwrap_or(""));
-            (!wos.is_empty() && wos == normalized_wos(&candidate.wos))
+            (!candidate.sha256.is_empty() && c["sha256"] == candidate.sha256)
+                || (!candidate.title.is_empty()
+                    && c["title"]
+                        .as_str()
+                        .is_some_and(|s| norm(s) == norm(&candidate.title)))
+                || (!wos.is_empty() && wos == normalized_wos(&candidate.wos))
                 || (!doi.is_empty() && doi == normalized_doi(&candidate.doi))
         };
         for row in q.query_map([], |r| r.get::<_, String>(0))? {

@@ -7,8 +7,17 @@ impl Engine {
         id: &str,
         action: &str,
         mut t: Task,
-        _extra: Value,
+        extra: Value,
     ) -> Result<Value> {
+        if action == "verify_note"
+            && self
+                .store
+                .unresolved(id)?
+                .iter()
+                .any(|a| a["action"] == "save_note")
+        {
+            return self.handle_verify_sa(app, id, "verify_sa", t, extra).await;
+        }
         if self.store.pending_input(id)?.is_some() || !self.store.unresolved(id)?.is_empty() {
             return Err(Failure::new(
                 "REMOTE_RESULT_UNKNOWN",
@@ -63,6 +72,18 @@ impl Engine {
         }
         self.changed(app);
         Ok(sa::note_status(&t).unwrap_or(Value::Null))
+    }
+    pub(super) fn record_note(task: &mut Task, payload: &Value, snapshot: &Value) -> Result<()> {
+        sa::verify_not_found_note(task, payload, snapshot)?;
+        let mut original = payload.clone();
+        if let Some(v) = original.as_object_mut() {
+            v.remove("plan_id");
+            v.remove("expected");
+            v.remove("reviewed");
+        }
+        task.evidence.push(Evidence { id:uuid::Uuid::new_v4().to_string(),kind:"sa_note_verified".into(),source:"机构库 SA · 独立备注保存与完整回读".into(),
+            text:json!({"schema":"sa_not_found_note_verified_v1","plan_id":payload["plan_id"],"payload":original,"sa_after":snapshot,"write_sent":true,"platform_completed":false}).to_string(),created:now() });
+        Ok(())
     }
     pub(super) fn record_completion(
         task: &mut Task,
@@ -319,6 +340,11 @@ impl Engine {
         let d = self.read_sa(app, &mut t).await?;
         let mut verification = d.clone();
         let next = match action {
+            "save_note" => {
+                Self::record_note(&mut t, payload, &d)?;
+                verification = json!({"payload":payload,"sa_after":d});
+                serde_json::from_value(payload["previous_stage"].clone())?
+            }
             "complete" => {
                 Self::record_completion(&mut t, payload, &d)?;
                 verification = json!({"payload":payload,"sa_after":d});

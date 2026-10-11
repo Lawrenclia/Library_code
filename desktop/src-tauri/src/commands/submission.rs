@@ -58,3 +58,30 @@ pub(crate) async fn export_submission_bundle(
     state.changed(&app);
     result
 }
+
+#[tauri::command]
+pub(crate) fn review_submission(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<Engine>,
+    id: String,
+    packet_id: String,
+    task_revision: i64,
+    proof: String,
+    format_confirmed: bool,
+    fields_complete: bool,
+) -> Result<Value> {
+    local(&window)?;
+    let _lease = state.acquire()?;
+    let result = library_core::submission::review_material(
+        &state.store,
+        &id,
+        &packet_id,
+        task_revision,
+        &proof,
+        format_confirmed,
+        fields_complete,
+    );
+    state.changed(&app);
+    result
+}

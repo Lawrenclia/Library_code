@@ -55,7 +55,7 @@ async function runSACommand(command) {
   };
   try {
     check();
-    if (!["status", "search", "open_metadata", "open_claim", "prepare_claim", "submit_claim", "verify_claim", "link", "complete"].includes(command.action)) stop("不支持的命令");
+    if (!["status", "search", "open_metadata", "open_claim", "prepare_claim", "submit_claim", "verify_claim", "link", "complete", "save_note"].includes(command.action)) stop("不支持的命令");
     if (typeof command.sa_id !== "string" || !command.sa_id || command.sa_id.length > 160) stop("名单 ID 不合法");
     const roots = [...document.querySelectorAll("*")].map(el => el.__vue__).filter(Boolean);
     const found = new Set(), visited = new Set();
@@ -530,6 +530,33 @@ async function runSACommand(command) {
       }
       else drawer.handleClaim();
       return {ok: true, data: {row: before, manual: true}};
+    }
+    if(command.action==="save_note") {
+      if(command.schema!=="sa_not_found_note_v1" || command.mark_status!=="待处理" || before.markStatus!=="待处理" || Number(before.matchCount)!==0 || before.itemId ||
+        command.reviewed!==true || typeof command.note!=="string" || !command.note.includes("未查询到该文献") || command.note.length>2000)
+        stop("独立备注缺少未查询到依据或待处理状态，未保存");
+      await closeReadOnlyDetail();check();
+      // Discover only an actual per-record remark action. Never reuse the status dialog.
+      const buttons=[...vm.$el.querySelectorAll('.el-table__body tr button')].filter(b=>visible(b)&&!b.disabled&&
+        ["编辑备注","修改备注","备注"].includes(b.textContent.trim()));
+      if(buttons.length!==1)stop("未发现唯一的独立备注入口；可复制备注手动保存后回读，不能使用设置已处理");
+      buttons[0].click();await vm.$nextTick();
+      await wait(()=>visibleAll('.el-dialog,.el-message-box').length===1,"打开独立备注窗口",5000);
+      const modal=visibleAll('.el-dialog,.el-message-box')[0];
+      const title=modal.querySelector('.el-dialog__title,.el-message-box__title')?.textContent.trim();
+      if(!["编辑备注","修改备注","备注"].includes(title)||/设置已处理|标记状态/.test(modal.textContent))stop("窗口不是独立备注编辑，未保存");
+      const inputs=[...modal.querySelectorAll('textarea,input:not([type="hidden"])')].filter(visible);
+      const saves=[...modal.querySelectorAll('button')].filter(b=>visible(b)&&!b.disabled&&["保存","确定"].includes(b.textContent.trim()));
+      if(inputs.length!==1 || saves.length!==1 || String(inputs[0].value)!==String(before.remark))stop("备注表单字段、原值或保存入口不唯一，未保存");
+      const input=inputs[0], proto=input.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto,'value').set.call(input,command.note);
+      input.dispatchEvent(new Event('input',{bubbles:true}));await vm.$nextTick();check();
+      if(!visible(modal)||input.value!==command.note||saves[0].disabled)stop("备注窗口变化，未保存");
+      submitted=true;saves[0].click();await wait(()=>!visible(modal),"保存独立备注");
+      row=await fresh();const after=snap(row);
+      if(after.markStatus!=="待处理"||after.remark!==command.note||keys.some(k=>!["remark","updateTime","updateUsername"].includes(k)&&after[k]!==before[k]))
+        stop("独立备注或待处理状态回读不一致，保持结果未知");
+      return {ok:true,data:{verified:true,row:after,platform_completed:false}};
     }
     const presetNotes = ["已认领", "DOI和WOSID SA未提交", "通讯作者修正", "非交大"];
     const note = typeof command.note === "string" ? command.note.trim() : "";

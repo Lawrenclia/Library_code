@@ -15,6 +15,7 @@ const props = defineProps<{
 }>();
 const options = ref<SubmissionOptions | null>(null);
 const selected = ref("");
+const formatConfirmed=ref(false), fieldsComplete=ref(false), reviewProof=ref("");
 const prepared = ref<SubmissionPrepared | null>(null);
 const stale = ref(false);
 const exported = ref<{ path: string; sha256: string } | null>(null);
@@ -54,6 +55,7 @@ async function load() {
   )
     return;
   options.value = result;
+  formatConfirmed.value=false;fieldsComplete.value=false;reviewProof.value="";
   selected.value = "";
   prepared.value = result.prepared;
   stale.value = false;
@@ -74,9 +76,17 @@ async function prepare() {
   )
     return;
   prepared.value = result;
+  formatConfirmed.value=false;fieldsComplete.value=false;reviewProof.value="";
   exported.value = null;
   stale.value = false;
   options.value = { ...scope, task_revision: result.task_revision };
+}
+async function reviewMaterial() {
+  const saved=prepared.value;if(!saved||stale.value)return;
+  const result=await props.run<SubmissionPrepared>("review_submission",{id:props.task.id,packetId:saved.packet.id,taskRevision:saved.task_revision,proof:reviewProof.value,formatConfirmed:formatConfirmed.value,fieldsComplete:fieldsComplete.value},"材料核验已保存；上传前仍会重新查本库和 SA。");
+  if(!result||result.packet.id!==saved.packet.id||result.task_revision!==props.task.revision)return;
+  prepared.value=result;stale.value=false;
+  if(options.value)options.value={...options.value,task_revision:result.task_revision};
 }
 async function exportBundle() {
   const saved = prepared.value;
@@ -216,6 +226,14 @@ async function exportBundle() {
         <p class="break-all">SHA256：{{ prepared.packet.material.sha256 }}</p>
         <p class="break-all">来源：{{ prepared.packet.material.audit }}</p>
       </details>
+      <div v-if="prepared.packet.material.kind !== 'original'" class="my-3 space-y-2 rounded-md bg-muted/40 p-3">
+        <p class="font-medium">上传前核对本篇材料</p>
+        <p>原始导出须仅含一条记录；多篇、其他工作表和无法识别边界的普通文本会被拦截。请核对实际渠道格式及作者、题名、发表时间、来源出版物和该类型要求的其他字段。</p>
+        <label class="flex gap-2"><input v-model="formatConfirmed" type="checkbox" :disabled="locked || stale" />已核对文件格式符合本渠道实际导入要求</label>
+        <label class="flex gap-2"><input v-model="fieldsComplete" type="checkbox" :disabled="locked || stale" />本篇必要字段完整，作者与发表信息已核对</label>
+        <textarea v-model="reviewProof" aria-label="材料核对依据" placeholder="填写实际导出方式、核对字段与依据" :disabled="locked || stale" class="min-h-20 w-full rounded border bg-background p-2" />
+        <Button size="sm" :disabled="locked || stale || !formatConfirmed || !fieldsComplete || !reviewProof.trim()" @click="reviewMaterial">保存材料核验</Button>
+      </div>
       <Button
         variant="outline"
         size="sm"
