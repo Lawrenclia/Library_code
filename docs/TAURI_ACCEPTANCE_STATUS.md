@@ -2,9 +2,11 @@
 
 ## 0.1.7 WOS 站点故障处理（2026-10-11）
 
+GitHub [本次 Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38101128343) 已成功完成，源码 `769480200a635d328c5d819373c2b926ad94da91`，产物 `Windows-EXE-0.1.7-76948020`。已下载 ZIP 并读取实际 EXE：6,749,913 字节，SHA256 为 `877A5E9F89935EC282B66DADF8F7F07889D85020AB8CDE18D18E77475DA60F9B`，与包内版本、源码、大小和哈希清单一致。ZIP 位于 `D:\Library\releases\github\0.1.7\76948020`。没有安装或启动；云端包与下面的本地包分别记录哈希。
+
 新增 Cloudflare 524 等明确 5xx 错误页识别；WOS 页面准备、表单准备、结果等待和导出准备的最终超时暂停原队列，保留当前位置与剩余论文。下载结果未知保留原生回执并阻止队列推进，不重新导出。短暂页面探针超时仍在原期限内观察，明确数据库零结果仍继续下一篇，没有恢复连续三条失败终止规则。保留 0.1.6 的物理 A 列空白筛选和重新导入范围保护。GitHub EXE 自动构建也追踪三个打入原生程序的共享页面适配器，避免仅修改适配器后没有生成新版 EXE。
 
-前端生产构建、Rust release 编译和 NSIS 打包成功。本地安装包 `D:\Library\releases\0.1.7\机构知识库工作台_0.1.7_x64-setup.exe` 为 6,843,471 字节，SHA256 为 `C9B9B33A6476C545283154837C3818C96BF135CC7999F888E7D717678A1CA204`。源码提交记录在同目录 `版本信息.json`。新增队列重启与剩余任务保护的回归用例源码，但按用户要求未运行测试；未安装启动或操作真实网站。完整目标仍未现场验收，编译不能证明实际暂停恢复、防重复提交和平台业务闭环。使用说明见 [0.1.7 自测步骤](TAURI_TESTING_0_1_7.md)。本段没有将 GitHub 构建描述为已成功，云端结果须核对对应的实际 Actions。
+前端生产构建、Rust release 编译和 NSIS 打包成功。本地安装包 `D:\Library\releases\0.1.7\机构知识库工作台_0.1.7_x64-setup.exe` 为 6,843,471 字节，SHA256 为 `C9B9B33A6476C545283154837C3818C96BF135CC7999F888E7D717678A1CA204`。源码提交记录在同目录 `版本信息.json`。新增队列重启与剩余任务保护的回归用例源码，但按用户要求未运行测试；未安装启动或操作真实网站。完整目标仍未现场验收，编译不能证明实际暂停恢复、防重复提交和平台业务闭环。使用说明见 [0.1.7 自测步骤](TAURI_TESTING_0_1_7.md)。
 
 此前 0.1.6 的 A 列筛选源码为 `1c7d981bcb17cb4c4210b22ffc204a059450187e`，本地安装包 `D:\Library\releases\0.1.6\机构知识库工作台_0.1.6_x64-setup.exe` 为 6,828,756 字节，SHA256 为 `3130FC3F8782072CE0E3FD1D6CBDFAC4E886EFA88F472638A9E55F33C4CDD7A2`。该包未包含本节 WOS 站点故障处理。下文保留历史证据。
 
@@ -45,12 +47,12 @@ GitHub Windows EXE 首轮构建已成功结束：[Actions #1](https://github.com
 | 1. PPT 各分支有完整步骤和完成条件 | `core/src/model.rs`、`workflow.rs`、`sa.rs`、`src-tauri/src/engine/` | 各分支实际输入、来源、执行和最终回读；未查询到分支目前是手动备注交接，独立编辑入口尚未确认 |
 | 2. 零匹配四分支，仅缺失交大成果进入导入 | `core/src/library.rs`、`search_scopes.rs`、`model.rs` | 非交大、已有、缺失、未查询到四组结果及错误路径；查无勾选和网络失败不得替代真实查询 |
 | 3. 单匹配按全部原因核对 | `core/src/issues.rs`、`metadata.rs`、`sa.rs` | 多原因任务逐项证据、角色和顺序核对、标识符对应同篇的原始来源 |
-| 4. 重复合并及数字 2 跳过标记分离 | `core/src/files.rs`、`merge.rs`、`src-tauri/src/engine/duplicate_service.rs` | 实际主条目、合并前后完整字段、被合并项、SA 新匹配数；跳过任务不执行合并 |
+| 4. 重复合并及 A 列空白输入范围分离 | `core/src/files.rs`、`store.rs`、`merge.rs`、`src-tauri/src/engine/duplicate_service.rs` | 实际主条目、合并前后完整字段、被合并项、SA 新匹配数；A 列任意非空行不加入范围，旧任务及旧队列不得绕过新范围 |
 | 5. 真实 WOS 完整记录 TXT 下载 | `extension/wos-adapter.js`、`core/src/download.rs`、`src-tauri/src/engine/downloads.rs` | 用户机构登录、核心合集、目标记录、原生完成事件、实际 TXT 字节与身份解析；截图或模拟不能代替 |
-| 6. 原始导出优先、模板约束、AI 引用 | `core/src/catalog.rs`、`source_files.rs`、`materials.rs`、`templates.rs`、`src-tauri/src/ai.rs` | 实际导出和实际模板、完整必填及引用、缺项拒绝。其他数据库自动检索/导出/专用解析仍未实现 |
+| 6. 原始导出优先、模板约束、AI 引用 | `core/src/catalog.rs`、`source_files.rs`、`cnki.rs`、`cnki_excel.rs`、`materials.rs`、`templates.rs`、`src-tauri/src/ai.rs` | 实际导出和实际模板、完整必填及引用、缺项拒绝。CNKI 已有导出响应、专用文本解析及 Excel 另存源码，尚未现场验收；其他数据库自动检索/导出/专用解析仍未实现 |
 | 7. SA 说明、上传后导入、导入后五项推送 | `extension/import-adapter.js`、`core/src/model.rs`、`src-tauri/src/engine/writes.rs` | 真实文件、机构、批次、说明、计数、五项设置及各阶段回执。目前自动提交仅 WOS TXT |
 | 8. 推送后查条目与 SA 核对/认领，未查询到保持未处理 | `core/src/sa.rs`、`claim.rs`、`alias.rs`、`src-tauri/src/engine/sa_service.rs` | 实际平台唯一号、工号/作者关系、必要别名、完整 SA 回读；下载/推送本身不能完成 SA |
-| 9. 暂停/重启恢复、三次普通失败后继续、通道故障保留剩余 | `core/src/queue.rs`、`source_downloads.rs`、`ai_queue.rs`、`store.rs` | 当前源码的暂停和崩溃恢复结果、完整原队列、第四篇实际执行及通道故障未执行项 |
+| 9. 暂停/重启恢复、三次普通失败后继续、通道故障保留剩余 | `core/src/queue.rs`、`source_downloads.rs`、`ai_queue.rs`、`store.rs`、`src-tauri/src/browser.rs` | 当前源码的暂停和崩溃恢复结果、完整原队列、第四篇实际执行及 524/最终超时后的当前目标与未执行范围；现有回归用例未运行 |
 | 10. 未知写入先回读、不自动重复 | `core/src/store.rs`、`versions.rs`、`src-tauri/src/engine/writes.rs`、`submission_service.rs` | 每种写入在接收后中断的恢复和实际调用次数。上传原窗口丢失时已有批次回读路径；无可验证批次/服务器对象时仍保持未知，不可据此重传 |
 | 11. 完整来源 Excel 字段和真实缺项 | `core/src/files.rs`、`submission_bundle.rs` | 当前源码实际生成报告、逐项原值/来源/哈希/阶段/批次和完整长文本对照，无记录处不得补造 |
 | 12. 真实与本地证据分别标识 | 本页、`TAURI_VERIFICATION.md`、`tests/desktop-*-restart.test.cjs` | 本轮尚无测试或平台验收结果。必须保存当前源码的本地结果和真实运行证据后才能宣称整体验收完成 |
@@ -59,4 +61,4 @@ GitHub Windows EXE 首轮构建已成功结束：[Actions #1](https://github.com
 
 ## 后续验证与交付
 
-用户当前要求“先不验证”仍有效；本轮仅按新授权编译打包 0.1.2，未运行测试或真实页面操作。编译成功只能证明能生成程序，不能把上表业务验收改为通过。真实平台验收须在用户完成登录并授权相应操作后进行，不使用虚构记录或自动重发未知写入绕过。
+用户当前要求“先不验证”仍有效；最近交付按授权编译打包 0.1.7，未运行测试或真实页面操作。编译成功只能证明能生成程序，不能把上表业务验收改为通过。真实平台验收须在用户完成登录并授权相应操作后进行，不使用虚构记录或自动重发未知写入绕过。

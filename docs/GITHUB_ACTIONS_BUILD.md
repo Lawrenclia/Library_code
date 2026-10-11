@@ -2,7 +2,9 @@
 
 无需在自己电脑安装 Rust、Node.js，也不需要填写 AI API token 或网站账号。
 
-最新主分支 **0.1.5** 已编译并上传成功：打开 [本次 Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38099085080)，在 **Artifacts** 下载 `Windows-EXE-0.1.5-0a4bda7e`。源码为 `0a4bda7ec1fd67aad20335736d54798eea9d9468`；压缩包内安装 EXE 为 6,741,127 字节，SHA256 为 `EB5817C0F6C10F4092A2AA95036FD040CDDE5CBC7381F036C7B0FB49DC9453E7`。已下载 ZIP 并直接核对实际 EXE 字节与包内版本、大小、哈希清单；没有安装或运行程序。此哈希属于 GitHub 构建，与本地构建的哈希分别记录。需要后续更新时按下方步骤重新编译。
+最新主分支 **0.1.7** 已编译上传成功：[本次 Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38101128343)，源码为 `769480200a635d328c5d819373c2b926ad94da91`，产物为 `Windows-EXE-0.1.7-76948020`。已下载 ZIP 并直接读取 EXE，实际大小 6,749,913 字节，SHA256 为 `877A5E9F89935EC282B66DADF8F7F07889D85020AB8CDE18D18E77475DA60F9B`，与包内版本、大小及哈希清单一致。该包包含 A 列空白筛选和 WOS 524 处理；未安装或运行业务流程。云端和本地包分别记录哈希，旧包不包含新版修复。
+
+已核对的历史 **0.1.6** 云端包来自 [Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38100737396)，产物为 `Windows-EXE-0.1.6-1c7d981b`，源码为 `1c7d981bcb17cb4c4210b22ffc204a059450187e`；实际安装 EXE 为 6,750,105 字节，SHA256 为 `56942E41CDA06D77F8F01F125F5AE7FDA23D6FC565E2F9D00A7D96E715156142`，与包内版本、大小和哈希清单一致。该包仅包含 A 列空白筛选，不包含 0.1.7 的 524 处理。云端和本地包分别记录，没有安装或运行程序。需要后续更新时按下方步骤重新编译。
 
 1. 打开 [Windows EXE 工作流](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml)。
 2. 点击 **Run workflow**，工作流分支保持 **main**。
@@ -12,7 +14,7 @@
 
 产物包含安装包、`SHA256SUMS.txt` 和 `build-info.json`，记录实际编译的源码提交。产物保留 30 天，过期后可重新编译。首次运行需下载和编译 Rust 依赖；后续会复用缓存。
 
-新版 Rust + TypeScript 桌面代码位于主分支的 `desktop`。主分支的 `desktop` 或工作流更新会自动开始编译；也可随时点击 **Run workflow** 手动编译。Python 和扩展目录保留旧版实现，新桌面 EXE 不依赖 Python。
+新版 Rust + TypeScript 桌面代码位于主分支的 `desktop`。主分支的 `desktop`、工作流，以及打入原生程序的 `extension/adapter.js`、`extension/import-adapter.js`、`extension/wos-adapter.js` 更新会自动开始编译；也可随时点击 **Run workflow** 手动编译。Python 和其余扩展界面保留旧版实现，新桌面 EXE 不依赖 Python。
 
 流程只安装构建依赖、编译前端与 Rust、生成 NSIS 安装包并上传，不运行测试，不安装或启动生成的应用，不连接 WOS、CNKI 或机构后台，不上传业务数据。
 

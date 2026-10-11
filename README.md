@@ -6,7 +6,7 @@
 
 当前新版为 **0.1.7，Rust + TypeScript + Tauri 2**，位于主分支 `desktop`。WOS 的 Cloudflare 524 等站点故障和最终页面超时保留队列当前位置，避免连续消耗剩余论文，见 [0.1.7 自测说明](docs/TAURI_TESTING_0_1_7.md)。名单仍仅载入 Excel A 列为空的行，见 [名单规则](docs/TAURI_TESTING_0_1_6.md)。保留 WOS 界面响应修复及 CNKI Excel 应用内另存。Python 是保留的旧版，新桌面 EXE 不依赖它；当前业务仍待自测。
 
-**历史 0.1.5 云端安装包：** [Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38099085080) 全部步骤成功，Artifact 为 `Windows-EXE-0.1.5-0a4bda7e`，源码为 `0a4bda7`。该包不包含新版的 A 列筛选和 524 故障处理。当前新版请在上方 Windows EXE 工作流中编译并下载对应版本；本轮只编译打包，业务流程仍由用户自测。
+**0.1.7 云端安装包已生成：** [本次 Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38101128343) 全部步骤成功，下载 Artifact `Windows-EXE-0.1.7-76948020`。源码为 `7694802`，实际 EXE 的版本、大小和 SHA256 已核对；本轮只编译打包，业务流程仍由用户自测。安装新版后重新导入名单，使 A 列空白筛选对已有工作目录生效。
 
 新增“流程与连接”总览，后端已拆分服务并统一操作、浏览器和渠道注册。结构与扩展规则见 [完整框架说明](docs/FRAMEWORK.md)。已登记渠道与实际自动能力分开显示，真实 WOS/机构后台仍待现场验收。
 
