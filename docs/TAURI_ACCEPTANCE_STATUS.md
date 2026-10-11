@@ -2,6 +2,8 @@
 
 ## 0.1.5 WOS 卡顿修复（2026-10-11）
 
+GitHub [本次 Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38099085080) 全部步骤成功结束，源码 `0a4bda7ec1fd67aad20335736d54798eea9d9468`，产物 `Windows-EXE-0.1.5-0a4bda7e` 已上传。直接读取下载 ZIP，确认版本、源码提交、文件名、实际 EXE 大小 6,741,127 字节和 SHA256 `EB5817C0F6C10F4092A2AA95036FD040CDDE5CBC7381F036C7B0FB49DC9453E7` 与包内记录一致；ZIP 保存在 `D:\Library\releases\github\0.1.5\0a4bda7e`。云端构建与本地构建分别记录，不安装启动、不运行业务测试。
+
 工作台完整状态改为后台读取；任务、WOS 历史、未确认操作和名单版本在同一只读事务批量读取，前端合并刷新事件。WOS 使用新文档与唯一表单就绪探针、减少慢页面的扫描频率，按预期目标等待详情过渡，并显示各阶段等待秒数。检索暂停保留原队列位置；下载已经发出时仍等真实回执，不重复导出。详细限制见 [0.1.5 自测说明](TAURI_TESTING_0_1_5.md)。
 
 前端生产构建、Rust release 与 NSIS 打包成功。安装包 `D:\Library\releases\0.1.5\机构知识库工作台_0.1.5_x64-setup.exe`，6,830,704 字节，SHA256 `FA6A6DB2084FFD220BDE5DDD1A1DC454AD1B0EC6C17DB2C39161B50B457C3EE0`。未运行测试或真实网站；尚无实际 WOS 计时、暂停恢复或业务通过结果，不将静态修复和编译成功写作现场验收完成。以下为旧版本交付记录。

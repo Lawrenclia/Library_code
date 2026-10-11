@@ -2,7 +2,7 @@
 
 无需在自己电脑安装 Rust、Node.js，也不需要填写 AI API token 或网站账号。
 
-最新主分支 **0.1.4** 已编译并上传成功：打开 [本次 Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38064502881)，在 **Artifacts** 下载 `Windows-EXE-0.1.4-f19a13cf`。源码为合并提交 `f19a13cf37e91623dd73cf04ad3b6ca9353fe507`；压缩包内安装 EXE 为 6,721,130 字节，SHA256 为 `1B3EC70C70BC5123D342B33311DC2A7F5FDE6DC63A8B056F045F859394A1AB62`。已下载 ZIP 并直接核对实际 EXE 字节与包内版本、大小、哈希清单；没有安装或运行程序。此哈希属于 GitHub 构建，与本地构建的哈希分别记录。需要后续更新时按下方步骤重新编译。
+最新主分支 **0.1.5** 已编译并上传成功：打开 [本次 Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38099085080)，在 **Artifacts** 下载 `Windows-EXE-0.1.5-0a4bda7e`。源码为 `0a4bda7ec1fd67aad20335736d54798eea9d9468`；压缩包内安装 EXE 为 6,741,127 字节，SHA256 为 `EB5817C0F6C10F4092A2AA95036FD040CDDE5CBC7381F036C7B0FB49DC9453E7`。已下载 ZIP 并直接核对实际 EXE 字节与包内版本、大小、哈希清单；没有安装或运行程序。此哈希属于 GitHub 构建，与本地构建的哈希分别记录。需要后续更新时按下方步骤重新编译。
 
 1. 打开 [Windows EXE 工作流](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml)。
 2. 点击 **Run workflow**，工作流分支保持 **main**。

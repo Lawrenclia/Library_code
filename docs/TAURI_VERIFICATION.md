@@ -8,6 +8,8 @@
 
 ### 0.1.5 WOS 等待与工作台阻塞修复（2026-10-11）
 
+GitHub [本次 Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38099085080) 全部步骤成功，源码 `0a4bda7ec1fd67aad20335736d54798eea9d9468`，产物 `Windows-EXE-0.1.5-0a4bda7e`。直接读取下载 ZIP 并对安装 EXE 流计算 SHA256，确认实际 6,741,127 字节及 `EB5817C0F6C10F4092A2AA95036FD040CDDE5CBC7381F036C7B0FB49DC9453E7` 与 `build-info.json`、`SHA256SUMS.txt` 一致；ZIP 位于 `D:\Library\releases\github\0.1.5\0a4bda7e`。只验证编译交付文件，不作为真实 WOS、暂停恢复、平台写入或其他业务的通过证据。
+
 源码减少等待阶段的重复 DOM 和数据库工作，工作台快照移出 UI 线程并以四次查询完整读取任务诊断；前端合并事件与进行中的刷新。WOS 新检索页使用文档标记与单行表单就绪检查，详情导航等待原唯一目标，慢页面减少轮询并显示轻量进度。暂停检索保留当前目标；已发出的下载仍等原生回执，不自动重发。具体行为和自测步骤见 [0.1.5 说明](TAURI_TESTING_0_1_5.md)。
 
 前端类型检查与生产构建、Rust release、NSIS 打包成功。安装包 `D:\Library\releases\0.1.5\机构知识库工作台_0.1.5_x64-setup.exe`，6,830,704 字节，SHA256 `FA6A6DB2084FFD220BDE5DDD1A1DC454AD1B0EC6C17DB2C39161B50B457C3EE0`。只编译打包，未运行单元/模拟测试、安装启动或操作真实 WOS/机构库；尚无实际性能提升或本版暂停恢复的运行证明，整体目标继续未完成。
