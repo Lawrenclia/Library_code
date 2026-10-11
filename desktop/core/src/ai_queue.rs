@@ -69,6 +69,10 @@ fn bad(message: &str) -> Failure {
     Failure::new("AI_QUEUE_CHANGED", message)
 }
 fn task(db: &Connection, id: &str) -> Result<Task> {
+    crate::store::ensure_roster_scope(db, id)?;
+    stored_task(db, id)
+}
+fn stored_task(db: &Connection, id: &str) -> Result<Task> {
     let raw: String = db.query_row("SELECT data FROM tasks WHERE id=?", [id], |r| r.get(0))?;
     Ok(serde_json::from_str(&raw)?)
 }
@@ -218,7 +222,7 @@ impl Store {
             ));
         }
         let tasks = {
-            let mut s = tx.prepare("SELECT data FROM tasks ORDER BY rowid")?;
+            let mut s = tx.prepare(crate::store::ACTIVE_TASKS_QUERY)?;
             let rows = s.query_map([], |r| r.get::<_, String>(0))?;
             rows.map(|r| Ok(serde_json::from_str::<Task>(&r?)?))
                 .collect::<Result<Vec<_>>>()?
@@ -502,7 +506,8 @@ impl Store {
                 .targets
                 .get(q.cursor)
                 .ok_or_else(|| bad("AI 原请求位置无效。"))?;
-            let saved = result_matches(&self.root, &q, target, &task(&tx, &target.id)?, a);
+            // Audit an already-issued request without scheduling excluded rows.
+            let saved = result_matches(&self.root, &q, target, &stored_task(&tx, &target.id)?, a);
             let error = if saved {
                 None
             } else {

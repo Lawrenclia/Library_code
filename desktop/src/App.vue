@@ -249,7 +249,11 @@ function clearFilters() {
 }
 function frameworkAction(action: string) {
   if (action === "import")
-    return run("import_roster", {}, "名单已读取，原表与历史记录保留。");
+    return run(
+      "import_roster",
+      {},
+      "仅载入 A 列为空的行；非空行已跳过，原表与历史记录保留。",
+    );
   if (action === "report")
     return run("export_report", {}, "任务与来源报告已导出。");
   if (action === "folder") return run("open_folder");
@@ -322,7 +326,13 @@ function frameworkBrowser(role: string, entry?: string) {
         ><Button
           size="sm"
           :disabled="locked"
-          @click="run('import_roster', {}, '名单已读取，历史任务与来源保留。')"
+          @click="
+            run(
+              'import_roster',
+              {},
+              '仅载入 A 列为空的行；非空行已跳过，原表与历史记录保留。',
+            )
+          "
           ><Plus />导入名单</Button
         >
       </div>
@@ -2356,9 +2366,7 @@ function frameworkBrowser(role: string, entry?: string) {
               >
                 <p class="font-medium text-destructive">
                   发现
-                  {{
-                    legacyPreview.conflicts.length
-                  }}
+                  {{ legacyPreview.conflicts.length }}
                   项迁移冲突，请先核对并重新预览；尚未写入任务。
                 </p>
                 <div

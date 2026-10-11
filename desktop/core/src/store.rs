@@ -13,6 +13,32 @@ pub struct TaskView {
     pub attempts: Vec<Value>,
     pub pending_input: Option<crate::versions::Proposal>,
 }
+pub(crate) const ACTIVE_TASKS_QUERY: &str = "SELECT data FROM tasks WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key='roster_scope_enabled') OR id IN (SELECT id FROM roster_scope) ORDER BY rowid";
+
+// Excluded tasks retain their evidence and receipts, but cannot be scheduled or
+// acted on through an old queue, stale view or single-task command.
+pub(crate) fn ensure_roster_scope(db: &Connection, id: &str) -> Result<()> {
+    let allowed: bool = db.query_row(
+        "SELECT NOT EXISTS (SELECT 1 FROM settings WHERE key='roster_scope_enabled') OR EXISTS (SELECT 1 FROM roster_scope WHERE id=?)",
+        [id], |r| r.get(0),
+    )?;
+    if !allowed {
+        return Err(Failure::new(
+            "INPUT_SCOPE_CHANGED",
+            "本行不在当前名单 A 列为空的范围中，已跳过；历史记录保留。",
+        ));
+    }
+    Ok(())
+}
+
+fn replace_roster_scope(tx: &Transaction<'_>, records: &[Record]) -> Result<()> {
+    tx.execute("DELETE FROM roster_scope", [])?;
+    for record in records {
+        tx.execute("INSERT INTO roster_scope(id) VALUES(?)", [&record.sa_id])?;
+    }
+    tx.execute("INSERT INTO settings(key,data) VALUES('roster_scope_enabled','true') ON CONFLICT(key) DO UPDATE SET data=excluded.data", [])?;
+    Ok(())
+}
 fn validate_roster_records(records: &[Record]) -> Result<()> {
     let mut ids = std::collections::BTreeMap::new();
     for record in records {
@@ -50,6 +76,7 @@ impl Store {
         db.execute_batch("CREATE TABLE IF NOT EXISTS material_batches(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL,created INTEGER NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS one_pending_material_batch ON material_batches((1)) WHERE status IN ('running','paused','blocked','interrupted');")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS native_downloads(id TEXT PRIMARY KEY,task_id TEXT NOT NULL,state TEXT NOT NULL,data TEXT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS one_pending_native_download ON native_downloads(task_id) WHERE state IN ('armed','requested','completed');")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS source_downloads(id TEXT PRIMARY KEY,task_id TEXT NOT NULL,state TEXT NOT NULL,data TEXT NOT NULL);")?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS roster_scope(id TEXT PRIMARY KEY);")?;
         Ok(s)
     }
     pub(crate) fn connect(&self) -> Result<Connection> {
@@ -60,7 +87,7 @@ impl Store {
     }
     pub fn tasks(&self) -> Result<Vec<Task>> {
         let db = self.connect()?;
-        let mut q = db.prepare("SELECT data FROM tasks ORDER BY rowid")?;
+        let mut q = db.prepare(ACTIVE_TASKS_QUERY)?;
         let rows = q.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
@@ -71,7 +98,7 @@ impl Store {
         let mut db = self.connect()?;
         let tx = db.transaction()?;
         let tasks: Vec<Task> = {
-            let mut q = tx.prepare("SELECT data FROM tasks ORDER BY rowid")?;
+            let mut q = tx.prepare(ACTIVE_TASKS_QUERY)?;
             let rows = q.query_map([], |r| r.get::<_, String>(0))?;
             rows.map(|r| Ok(serde_json::from_str(&r?)?))
                 .collect::<Result<_>>()?
@@ -123,6 +150,7 @@ impl Store {
     }
     pub fn task(&self, id: &str) -> Result<Task> {
         let db = self.connect()?;
+        ensure_roster_scope(&db, id)?;
         let data: Option<String> = db
             .query_row("SELECT data FROM tasks WHERE id=?", [id], |r| r.get(0))
             .optional()?;
@@ -138,6 +166,7 @@ impl Store {
         Ok(())
     }
     pub(crate) fn write_task(tx: &Transaction<'_>, task: &Task, kind: &str) -> Result<Task> {
+        ensure_roster_scope(tx, &task.id)?;
         let rev = task.revision;
         let mut next = task.clone();
         next.revision += 1;
@@ -206,6 +235,9 @@ impl Store {
         let mut db = self.connect()?;
         let tx = db.transaction()?;
         let count = records.len();
+        if !source_file.is_empty() {
+            replace_roster_scope(&tx, &records)?;
+        }
         for record in records {
             let existing: Option<String> = tx
                 .query_row("SELECT data FROM tasks WHERE id=?", [&record.sa_id], |r| {
@@ -486,6 +518,7 @@ impl Store {
             std::path::Path::new(&plan.preview.root),
             &plan.materials,
         )?;
+        replace_roster_scope(&tx, &plan.records)?;
         for record in &plan.records {
             let old: Option<String> = tx
                 .query_row("SELECT data FROM tasks WHERE id=?", [&record.sa_id], |r| {
@@ -809,6 +842,7 @@ impl Store {
     ) -> Result<String> {
         let mut db = self.connect()?;
         let tx = db.transaction()?;
+        ensure_roster_scope(&tx, &task.id)?;
         let unresolved: u32 = tx.query_row(
             "SELECT count(*) FROM attempts WHERE task_id=? AND state IN ('intent','unknown')",
             [&task.id],

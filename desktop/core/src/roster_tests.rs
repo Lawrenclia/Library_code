@@ -79,14 +79,14 @@ fn write_roster(path: &Path, extra_headers: &[&str], duplicate: bool, invalid_co
 }
 
 #[test]
-fn original_sheet_row_offsets_and_numeric_skip_are_independent_from_match_count() {
+fn physical_column_a_and_original_row_offsets_are_independent_from_match_count() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("list.xlsx");
     write_roster(&path, &[], false, false);
     let (records, _) = files::read_roster(&path).unwrap();
     assert_eq!(records[0].row, 6);
     assert_eq!(records[1].row, 7);
-    assert!(records[0].skipped);
+    assert!(!records[0].skipped);
     assert_eq!(records[0].matches, 0);
     assert!(!records[1].skipped);
     assert_eq!(records[1].matches, 2);
@@ -106,17 +106,102 @@ fn original_sheet_row_offsets_and_numeric_skip_are_independent_from_match_count(
 }
 
 #[test]
-fn ambiguous_source_or_workflow_headers_are_reported_instead_of_silently_ignored() {
+fn source_headers_remain_unique_but_remark_headers_do_not_define_scope() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("list.xlsx");
-    for extra in [vec!["数据来源"], vec!["备注", "备注"]] {
-        write_roster(&path, &extra, false, false);
-        assert_eq!(files::read_roster(&path).unwrap_err().code, "INPUT_INVALID");
+    write_roster(&path, &["数据来源"], false, false);
+    assert_eq!(files::read_roster(&path).unwrap_err().code, "INPUT_INVALID");
+    write_roster(&path, &["备注", "备注"], false, false);
+    assert_eq!(files::read_roster(&path).unwrap().0.len(), 2);
+}
+
+#[test]
+fn only_empty_a_cells_are_loaded_before_business_validation() {
+    use rust_xlsxwriter::Workbook;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("list.xlsx");
+    let mut book = Workbook::new();
+    let sheet = book.add_worksheet();
+    let headers = [
+        "本地状态",
+        "负责人",
+        "sa_lzk表ID",
+        "题名",
+        "DOI",
+        "WOS_ID",
+        "工号",
+        "匹配到的条目数量",
+        "平台唯一号",
+        "标记状态",
+        "标记为待处理原因",
+    ];
+    for (i, h) in headers.iter().enumerate() {
+        sheet.write_string(3, i as u16, *h).unwrap();
     }
-    // Preserve the explicitly supported two-remark layout: first numeric workflow,
-    // second platform annotation. The workflow column remains the first one.
-    write_roster(&path, &["备注"], false, false);
-    assert!(files::read_roster(&path).unwrap().0[0].skipped);
+    for (i, marker) in ["已处理", "跳过", "1", "2", "其他内容", "", " \t "]
+        .iter()
+        .enumerate()
+    {
+        let row = 4 + i as u32;
+        sheet.write_string(row, 0, *marker).unwrap();
+        // Marked rows are intentionally malformed and must be ignored first.
+        if marker.trim().is_empty() {
+            sheet.write_string(row, 1, "one").unwrap();
+            sheet.write_string(row, 2, format!("sa-{i}")).unwrap();
+            sheet.write_string(row, 3, "Paper").unwrap();
+            sheet.write_number(row, 7, 0.).unwrap();
+        }
+    }
+    sheet.write_number(11, 0, 0.).unwrap();
+    sheet.write_boolean(12, 0, false).unwrap();
+    book.save(&path).unwrap();
+    let (records, _) = files::read_roster(&path).unwrap();
+    assert_eq!(
+        records.iter().map(|r| r.row).collect::<Vec<_>>(),
+        vec![10, 11]
+    );
+    assert!(records.iter().all(|r| !r.done && !r.skipped));
+}
+
+#[test]
+fn reimport_fences_old_tasks_and_all_marked_roster_can_clear_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path()).unwrap();
+    store
+        .import(vec![record("keep", 2), record("marked", 3)], "old".into())
+        .unwrap();
+    let mut stale = store.task("marked").unwrap();
+    store
+        .import_from(vec![record("keep", 2)], "new".into(), "archive.xlsx")
+        .unwrap();
+    assert_eq!(store.tasks().unwrap().len(), 1);
+    assert_eq!(
+        store.task("marked").unwrap_err().code,
+        "INPUT_SCOPE_CHANGED"
+    );
+    assert_eq!(
+        store.save(&mut stale, "stale").unwrap_err().code,
+        "INPUT_SCOPE_CHANGED"
+    );
+    assert_eq!(
+        store.begin_attempt(&mut stale, "import").unwrap_err().code,
+        "INPUT_SCOPE_CHANGED"
+    );
+    assert_eq!(
+        store.start_download_queue("one", true).unwrap_err().code,
+        "QUEUE_EMPTY"
+    );
+    store
+        .import_from(vec![], "all-marked".into(), "archive2.xlsx")
+        .unwrap();
+    assert!(store.tasks().unwrap().is_empty());
+    assert!(store.task_views().unwrap().is_empty());
+    let preserved: u32 = store
+        .connect()
+        .unwrap()
+        .query_row("SELECT count(*) FROM tasks", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(preserved, 2);
 }
 
 #[test]

@@ -147,6 +147,7 @@ fn guarded_task(tx: &Connection, queue: &DownloadQueue) -> Result<Task> {
         .targets
         .get(queue.cursor)
         .ok_or_else(|| Failure::new("QUEUE_CHANGED", "队列原范围位置变化。"))?;
+    crate::store::ensure_roster_scope(tx, &target.id)?;
     let task: Task = serde_json::from_str(&tx.query_row::<String, _, _>(
         "SELECT data FROM tasks WHERE id=?",
         [&target.id],
@@ -248,7 +249,7 @@ impl Store {
         let mut db = self.connect()?;
         let tx = db.transaction()?;
         let mut tasks: Vec<Task> = {
-            let mut stmt = tx.prepare("SELECT data FROM tasks ORDER BY rowid")?;
+            let mut stmt = tx.prepare(crate::store::ACTIVE_TASKS_QUERY)?;
             let raw = stmt.query_map([], |r| r.get::<_, String>(0))?;
             let mut tasks = Vec::new();
             for row in raw {
@@ -339,7 +340,7 @@ impl Store {
         // Preserve roster insertion order, exact owner and skip scope. New input
         // rows imported later cannot silently join this run.
         let targets = {
-            let mut stmt = tx.prepare("SELECT data FROM tasks ORDER BY rowid")?;
+            let mut stmt = tx.prepare(crate::store::ACTIVE_TASKS_QUERY)?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             let mut targets = Vec::new();
             for row in rows {

@@ -56,6 +56,7 @@ impl Store {
     ) -> Result<DownloadReceipt> {
         let mut db = self.connect()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        crate::store::ensure_roster_scope(&tx, &task.id)?;
         let current: Task = serde_json::from_str(&tx.query_row::<String, _, _>(
             "SELECT data FROM tasks WHERE id=?",
             [&task.id],

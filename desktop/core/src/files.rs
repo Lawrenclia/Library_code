@@ -110,27 +110,6 @@ pub fn read_roster(path: &Path) -> Result<(Vec<Record>, String)> {
         "标记为待处理原因",
     ];
     let cols: Vec<_> = keys.iter().map(|k| column(k)).collect::<Result<_>>()?;
-    let remark_cols: Vec<_> = labels
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| s.as_str() == "备注")
-        .map(|(i, _)| i)
-        .collect();
-    let remark = if remark_cols.len() == 1 {
-        Some(remark_cols[0])
-    } else if remark_cols.len() == 2
-        && remark_cols[0] == 0
-        && labels.get(1).map(|s| s.as_str()) == Some("负责人")
-    {
-        Some(0)
-    } else if remark_cols.is_empty() {
-        None
-    } else {
-        return Err(Failure::new(
-            "INPUT_INVALID",
-            "备注列不唯一，无法明确识别数字 1/2 的完成或跳过标记；请先核对表头。",
-        ));
-    };
     let source_columns: Vec<_> = labels
         .iter()
         .enumerate()
@@ -147,7 +126,18 @@ pub fn read_roster(path: &Path) -> Result<(Vec<Record>, String)> {
     let mut ids = BTreeMap::new();
     let mut records = vec![];
     let first_row = range.start().map(|p| p.0).unwrap_or(0);
+    let starts_in_column_a = range.start().is_some_and(|p| p.1 == 0);
     for (index, row) in range.rows().enumerate().skip(1) {
+        // Column A is the physical Excel column, independent of its header or
+        // the used range's offset. Filter before validating unrelated row data.
+        // Zero, false, errors and all status text count as nonempty content.
+        if starts_in_column_a
+            && row
+                .first()
+                .is_some_and(|cell| !cell.to_string().trim().is_empty())
+        {
+            continue;
+        }
         let row_number = first_row + index as u32 + 1;
         for column in [cols[1], cols[5], cols[7]] {
             let imprecise = match row.get(column) {
@@ -172,7 +162,7 @@ pub fn read_roster(path: &Path) -> Result<(Vec<Record>, String)> {
         };
         let sa_id = get(cols[1]);
         if sa_id.is_empty() {
-            if row.iter().all(|x| matches!(x, Data::Empty)) {
+            if row.iter().all(|x| x.to_string().trim().is_empty()) {
                 continue;
             }
             return Err(Failure::new(
@@ -200,12 +190,6 @@ pub fn read_roster(path: &Path) -> Result<(Vec<Record>, String)> {
                 format!("第 {row_number} 行负责人或题名缺失。"),
             ));
         }
-        let workflow = remark.and_then(|i| row.get(i));
-        let numeric = match workflow {
-            Some(Data::Int(v)) => Some(*v as f64),
-            Some(Data::Float(v)) => Some(*v),
-            _ => None,
-        };
         records.push(Record {
             row: row_number,
             owner: get(cols[0]),
@@ -218,13 +202,10 @@ pub fn read_roster(path: &Path) -> Result<(Vec<Record>, String)> {
             item_ids: get(cols[7]),
             mark: get(cols[8]),
             reason: get(cols[9]),
-            skipped: numeric == Some(2.),
-            done: numeric == Some(1.),
+            skipped: false,
+            done: false,
             source: source.map(get).unwrap_or_default(),
         });
-    }
-    if records.is_empty() {
-        return Err(Failure::new("INPUT_INVALID", "名单没有任务。"));
     }
     if input_hash != hash(&std::fs::read(path)?) {
         return Err(Failure::new(
@@ -2091,16 +2072,16 @@ mod tests {
             .iter()
             .enumerate()
             {
-                sheet.write_string(0, col as u16, *label).unwrap();
+                sheet.write_string(0, col as u16 + 1, *label).unwrap();
             }
-            sheet.write_string(1, 0, "负责人").unwrap();
-            sheet.write_string(1, 2, "Paper").unwrap();
-            sheet.write_string(1, 5, "001").unwrap();
-            sheet.write_number(1, 6, 0.).unwrap();
+            sheet.write_string(1, 1, "负责人").unwrap();
+            sheet.write_string(1, 3, "Paper").unwrap();
+            sheet.write_string(1, 6, "001").unwrap();
+            sheet.write_number(1, 7, 0.).unwrap();
             if text_id {
-                sheet.write_string(1, 1, "1234567890123456789").unwrap();
+                sheet.write_string(1, 2, "1234567890123456789").unwrap();
             } else {
-                sheet.write_number(1, 1, 1234567890123456789_f64).unwrap();
+                sheet.write_number(1, 2, 1234567890123456789_f64).unwrap();
             }
             book.save(&path).unwrap();
             if text_id {

@@ -672,7 +672,12 @@ export function useWorkbench() {
         "cancelled" in result &&
         result.cancelled
           ? "已取消。"
-          : success;
+          : command === "import_roster" &&
+              result &&
+              typeof result === "object" &&
+              "count" in result
+            ? `已载入 ${result.count} 行 A 列为空的记录；A 列非空的行已跳过，原表与历史记录保留。`
+            : success;
       return result;
     } catch (e) {
       error.value = true;
