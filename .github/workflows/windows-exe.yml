@@ -15,6 +15,9 @@ on:
       - main
     paths:
       - 'desktop/**'
+      - 'extension/adapter.js'
+      - 'extension/import-adapter.js'
+      - 'extension/wos-adapter.js'
       - '.github/workflows/windows-exe.yml'
 
 permissions:

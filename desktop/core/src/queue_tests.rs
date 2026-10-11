@@ -209,6 +209,45 @@ fn pause_during_current_result_stops_before_next_target() {
         QueueStatus::Completed
     );
 }
+
+#[test]
+fn wos_service_faults_preserve_target_remaining_tasks_and_restart_position() {
+    for code in [
+        "SITE_UNAVAILABLE",
+        "WOS_CHANNEL_TIMEOUT",
+        "DOWNLOAD_RESULT_UNKNOWN",
+    ] {
+        let (dir, store) = setup();
+        let queue = store.start_download_queue("one", false).unwrap();
+        let next_before = serde_json::to_value(store.task("d").unwrap()).unwrap();
+        let stopped = store
+            .record_download_failure(
+                &queue.id,
+                "a",
+                Failure::new(code, "site or download response unavailable"),
+            )
+            .unwrap();
+        assert_eq!(stopped.status, QueueStatus::Blocked);
+        assert_eq!(stopped.cursor, 0);
+        assert!(stopped.outcomes.is_empty());
+        assert_eq!(
+            serde_json::to_value(store.task("d").unwrap()).unwrap(),
+            next_before
+        );
+        assert!(store.task("a").unwrap().artifact.is_none());
+        assert!(!store.task("a").unwrap().record.done);
+        let reopened = Store::new(dir.path()).unwrap();
+        reopened.recover().unwrap();
+        let resumed = reopened.resume_download_queue(&queue.id).unwrap();
+        assert_eq!(resumed.cursor, 0);
+        assert_eq!(resumed.targets[0].id, "a");
+        assert_eq!(resumed.targets.len(), queue.targets.len());
+        assert_eq!(
+            serde_json::to_value(reopened.task("d").unwrap()).unwrap(),
+            next_before
+        );
+    }
+}
 #[test]
 fn stale_task_revision_rolls_back_queue_cursor_and_failure_together() {
     let (_dir, store) = setup();

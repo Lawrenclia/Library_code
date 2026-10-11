@@ -1,7 +1,7 @@
 /* Semantic, fail-closed WOS UI adapter. No scraping API or cookie access.
  * Export uses WOS's own controls. Layout/language changes stop for the user. */
 async function runWOSCommand(command) {
-  const fail = text => {throw new Error(text);};
+  const fail = (text,code) => {const error=new Error(text);if(code)error.code=code;throw error;};
   // background.js may need up to eight seconds to POST the result back to the
   // desktop bridge. Finish every page-side WOS step with a separate margin so a
   // completed action is not reported as an unknown desktop timeout.
@@ -28,7 +28,13 @@ async function runWOSCommand(command) {
     if(!Number.isFinite(command.expires) || Date.now()>=command.expires-resultMargin)fail("WOS 操作超时，请人工查看网页");
     // Reading innerText here forces layout on every wait tick. Site-error text
     // needs no rendered geometry; controls still use their visibility guards.
-    if(/Oops,?\s*something went wrong!?/i.test(document.body?.textContent||""))
+    const pageText=document.body?.textContent||"";
+    const errorHeading=[...document.querySelectorAll('h1')].map(el=>norm(el.textContent)).join(' ');
+    const cloudflareError=/\b(?:Error code|Error)\s*:?\s*(5\d{2})\b/i.exec(pageText);
+    if(cloudflareError && (document.querySelector('#cf-error-details') ||
+        (/cloudflare/i.test(pageText) && /A timeout occurred|Bad gateway|Connection timed out|Web server is down|Origin is unreachable|SSL handshake failed|Invalid SSL certificate|Host Error/i.test(errorHeading))))
+      fail(`WOS 站点暂不可用：Cloudflare ${cloudflareError[1]}。保留当前论文和剩余范围，请待网页恢复后继续；这不是数据库零结果。`,"SITE_UNAVAILABLE");
+    if(/Oops,?\s*something went wrong!?/i.test(pageText))
       fail("WOS 网站自身报错：Oops, something went wrong! 这不是导入管理页的问题。请先点击 WOS 网页顶部 Search 或导航菜单重新进入检索；若仍报错，请人工检查登录、校园网/机构访问。网页恢复前不继续检索或导入");
     if(!location.pathname.startsWith("/wos/woscc/") && !(["wos_search","wos_start_search","wos_read_search_page"].includes(command.action) && /^\/wos\/?$/.test(location.pathname)))fail("请在 WOS 核心合集的文献检索页登录，不能使用作者检索");
     if(all('iframe[src*="captcha"],input[type="password"],#challenge-form').length)fail("登录或验证码需要人工处理");
@@ -476,6 +482,6 @@ async function runWOSCommand(command) {
     state.submitted=true;
     click(button(["Export","导出"],state.dialog));
     return {ok:true,data:{submitted:true,record_url:recordURL}};
-  } catch(error){return {ok:false,error:"[WOS 已暂停] "+error.message};}
+  } catch(error){return {ok:false,error:"[WOS 已暂停] "+error.message,...(error.code==="SITE_UNAVAILABLE"?{code:error.code}:{})};}
 }
 if(typeof module!=="undefined")module.exports={runWOSCommand};

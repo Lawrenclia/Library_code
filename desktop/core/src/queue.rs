@@ -241,7 +241,11 @@ fn advance(queue: &mut DownloadQueue, channel_blocked: bool) {
     };
 }
 fn blocks_download_channel(error: &Failure) -> bool {
-    error.channel() || matches!(error.code.as_str(), "REMOTE_RESULT_UNKNOWN" | "BUSY")
+    error.channel()
+        || matches!(
+            error.code.as_str(),
+            "REMOTE_RESULT_UNKNOWN" | "DOWNLOAD_RESULT_UNKNOWN" | "BUSY"
+        )
 }
 impl Store {
     /// A consistent read-only view for the task/source/queue Excel report.

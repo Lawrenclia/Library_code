@@ -23,7 +23,11 @@ impl Failure {
     pub fn channel(&self) -> bool {
         matches!(
             self.code.as_str(),
-            "AUTH_REQUIRED" | "BROWSER_DISCONNECTED" | "PAGE_UNSUPPORTED"
+            "AUTH_REQUIRED"
+                | "BROWSER_DISCONNECTED"
+                | "PAGE_UNSUPPORTED"
+                | "SITE_UNAVAILABLE"
+                | "WOS_CHANNEL_TIMEOUT"
         )
     }
 }

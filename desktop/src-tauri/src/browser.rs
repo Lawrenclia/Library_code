@@ -373,9 +373,13 @@ impl Browser {
         check_wos_pause(pause)?;
         let previous = self
             .execute(app, "wos", "wos_read_search_page", payload.clone(), 3)
-            .await
-            .ok()
-            .and_then(|d| d["document_token"].as_str().map(str::to_owned));
+            .await;
+        let previous = match previous {
+            Ok(data) => data["document_token"].as_str().map(str::to_owned),
+            // Do not navigate away from a confirmed server error and hide it.
+            Err(error) if error.code == "SITE_UNAVAILABLE" => return Err(error),
+            Err(_) => None,
+        };
         check_wos_pause(pause)?;
         w.navigate(format!("{origin}/wos/woscc/basic-search").parse().unwrap())
             .map_err(Failure::storage)?;
@@ -408,8 +412,8 @@ impl Browser {
             }
         }
         Err(Failure::new(
-            "PAGE_TIMEOUT",
-            "WOS 新检索页和单行表单尚未加载完成，未提交查询。",
+            "WOS_CHANNEL_TIMEOUT",
+            "WOS 新检索页和单行表单未能及时加载，尚未提交查询。队列保留当前位置和剩余论文；请恢复网页后继续。",
         ))
     }
     pub async fn search(
@@ -457,9 +461,10 @@ impl Browser {
                 self.navigate_wos_search(app, &w, &origin, &payload, pause)
                     .await?;
                 self.execute(app, "wos", "wos_start_search", start_payload, 35)
-                    .await?
+                    .await
+                    .map_err(wos_channel_timeout)?
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(wos_channel_timeout(e)),
         };
         journal.record(
             "prepared",
@@ -616,8 +621,8 @@ impl Browser {
             }
         }
         Err(Failure::new(
-            "PAGE_TIMEOUT",
-            "WOS 结果等待超时，没有重复提交检索。",
+            "WOS_CHANNEL_TIMEOUT",
+            "WOS 结果等待超时，未确认本次检索结果。队列保留当前位置和剩余论文，没有重复提交检索；请恢复网页后继续。",
         ))
     }
     pub async fn download(
@@ -631,7 +636,8 @@ impl Browser {
         wos_progress(app, &payload, "preparing_export", started);
         let prepared = self
             .execute(app, "wos", "wos_prepare_export", payload.clone(), 35)
-            .await?;
+            .await
+            .map_err(wos_channel_timeout)?;
         let record = prepared["record_url"]
             .as_str()
             .ok_or_else(|| Failure::new("PAGE_UNSUPPORTED", "导出未提供记录来源。"))?
@@ -739,7 +745,9 @@ fn wos_progress(app: &AppHandle, payload: &Value, phase: &str, started: Instant)
     let _ = app.emit_to("main", "wos-progress", json!({"task_id":payload["sa_id"],"phase":phase,"elapsed_seconds":started.elapsed().as_secs()}));
 }
 fn page_error(message: &str) -> Failure {
-    let code = if message.contains("未找到记录") {
+    let code = if message.contains("WOS 站点暂不可用：Cloudflare") {
+        "SITE_UNAVAILABLE"
+    } else if message.contains("未找到记录") {
         "NO_RESULT"
     } else if message.contains("唯一记录") {
         "AMBIGUOUS_RESULT"
@@ -753,4 +761,17 @@ fn page_error(message: &str) -> Failure {
         "PAGE_UNSUPPORTED"
     };
     Failure::new(code, message)
+}
+
+fn wos_channel_timeout(mut error: Failure) -> Failure {
+    // Promote terminal preparation/export timeouts, not the short probes used
+    // while an expected navigation is still in progress. Preserve write-unknown
+    // failures and native download receipts without issuing another export.
+    if error.code == "PAGE_TIMEOUT" {
+        error.code = "WOS_CHANNEL_TIMEOUT".into();
+        error
+            .message
+            .push_str(" 队列保留当前位置和剩余论文；请恢复 WOS 网页后继续。");
+    }
+    error
 }
