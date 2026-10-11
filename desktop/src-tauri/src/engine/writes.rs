@@ -144,7 +144,6 @@ impl Engine {
             }
             "import_upload" => {
                 library_core::submission::check_upload(&self.store, &t)?;
-                library_core::submission::check_upload(&self.store, &t)?;
                 if !matches!(
                     t.stage,
                     Stage::Ready | Stage::Downloaded | Stage::AwaitingReview

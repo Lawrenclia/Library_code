@@ -4,7 +4,7 @@
 
 **GitHub 在线编译 EXE：** 打开 [Windows EXE](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml)，点击 **Run workflow**，保留默认源码分支，编译成功后在 **Artifacts** 下载安装包。完整步骤见 [GitHub 编译说明](docs/GITHUB_ACTIONS_BUILD.md)。
 
-当前新版为 **0.1.12，Rust + TypeScript + Tauri 2**，位于主分支 `desktop`。新增 CNKI 完整结果核对、唯一精确题名选篇、详情加载等待和完整会话题录保存，见 [0.1.12 使用说明](docs/TAURI_TESTING_0_1_12.md)。跨名单版本原文件与批次恢复沿用 [0.1.11](docs/TAURI_TESTING_0_1_11.md)，按渠道上传和独立备注沿用 [0.1.9](docs/TAURI_TESTING_0_1_9.md)。WOS 的 524 暂停、普通失败继续和物理 A 列空白规则保留。仅编译打包，网站兼容性由用户自测。Python 是保留的旧版，新桌面 EXE 不依赖它。
+当前新版为 **0.1.13，Rust + TypeScript + Tauri 2**，位于主分支 `desktop`。修复上传后补充核验说明或新 AI 建议造成的原提交恢复阻塞，回读原材料来源并继续核验当前任务，见 [0.1.13 使用说明](docs/TAURI_TESTING_0_1_13.md)。CNKI 自动获取沿用 [0.1.12](docs/TAURI_TESTING_0_1_12.md)，跨名单原批次恢复和按渠道上传继续保留。WOS 的 524 暂停、普通失败继续和物理 A 列空白规则保留。仅编译打包，网站兼容性由用户自测。Python 是保留的旧版，新桌面 EXE 不依赖它。
 
 **0.1.12 安装包已生成：** 对应业务源码 `6f796acd`，本地生产编译及 NSIS 打包成功；[GitHub Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38117236215) 也已全部成功，下载 Artifact `Windows-EXE-0.1.12-6f796acd`。云端实际 EXE 的版本、源码和哈希均已核对，详见 [交付状态](docs/TAURI_ACCEPTANCE_STATUS.md)。仅编译打包，未运行测试或真实网站。安装新版后重新导入名单，使 A 列空白筛选对已有工作目录生效。
 

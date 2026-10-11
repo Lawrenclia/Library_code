@@ -324,7 +324,10 @@ export interface FrameworkManifest {
     live_verified: boolean;
     capabilities: Record<
       string,
-      "implemented" | "unimplemented" | "registered_only" | "runtime_contract_guarded"
+      | "implemented"
+      | "unimplemented"
+      | "registered_only"
+      | "runtime_contract_guarded"
     >;
   }[];
   operations: { id: string; service: string; kind: string }[];
@@ -377,6 +380,7 @@ export interface MaterialProblem {
   rule_source: string;
 }
 export interface SubmissionPrepared {
+  archive_verified?: boolean;
   packet: {
     id: string;
     sa_id: string;

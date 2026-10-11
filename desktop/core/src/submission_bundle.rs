@@ -93,7 +93,7 @@ pub(crate) fn build(store: &Store, id: &str, packet_id: &str, revision: i64) -> 
     if packet.channel == "wos_txt" {
         instructions.push_str(&format!("\nWOS TXT（PPT 第 8 页）步骤：\n1. 文献身份、交大归属和本库缺失核验通过后，选择 WOS 数据导入（Txt），核对所属机构及上述 SA 说明，再选择本篇材料.txt。\n2. 核对上传成功；上传不等于导入。\n3. 导入后核对单篇批次说明、题名、WOS ID 和原 DOI。\n4. 推送前核对：{}。\n5. 回读推送结果与实际条目 ID，再回到 SA 核对、关联和认领；推送不等于 SA 已处理。\n", PUSH_POLICY));
     } else {
-        instructions.push_str("\n该渠道的自动上传驱动尚未接通。请在实际平台确认本渠道上传窗口、模板类型和导入规则；不要把 WOS 推送选项直接套用到其他渠道。上传、导入、推送各自核验后，回到原 SA 继续核对。本包不生成平台成功回执。\n");
+        instructions.push_str("\n该渠道已通过运行时表单契约接入，真实页面兼容性仍待自测。核对本渠道入口、单篇范围、文件格式与必要字段；模板还须核对实际成果类型。所属机构和 SA 说明见上文。\n1. 明确确认上传，成功后回读原文件和服务端对象。\n2. 明确确认导入，成功后核对单篇批次、题名、已有标识符及实际渠道。\n3. 推送前逐项核对 PPT 指定的五项设置；实际选项缺失或含义改变时停止。\n4. 回读实际条目，再回到原 SA 核对及认领。未知结果先回读，不重新上传。\n本包不执行平台操作，也不生成成功回执；题录整理文件不能冒充原始导出。\n");
     }
     let mut entries = vec![
         (format!("本篇材料.{extension}"), material),

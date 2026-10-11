@@ -227,6 +227,30 @@ pub(crate) fn bundle_scope(
 }
 pub fn options(store: &Store, id: &str) -> Result<Value> {
     let task = store.task(id)?;
+    if task.batch.is_some()
+        || task.batch_recheck.is_some()
+        || matches!(
+            task.stage,
+            Stage::Uploaded
+                | Stage::Imported
+                | Stage::Pushed
+                | Stage::Claimed
+                | Stage::Unknown
+                | Stage::Completed
+        )
+    {
+        let original = recovery_payload(store, &task)?;
+        let prepared = if original["submission_packet"].is_null() {
+            Value::Null
+        } else {
+            let packet: Packet = serde_json::from_value(original["submission_packet"].clone())?;
+            let error = read_archive(store, &task, &original).err();
+            json!({"packet":packet,"task_revision":task.revision,"can_upload":false,"archive_verified":error.is_none(),"issues":error.into_iter().collect::<Vec<_>>(),"platform_verified":false})
+        };
+        return Ok(
+            json!({"sa_id":id,"task_revision":task.revision,"choices":[],"prepared":prepared}),
+        );
+    }
     let facts = materials::facts(&store.root, &task)?;
     let mut choices = vec![];
     if let Some(original) = &task.artifact {
@@ -459,8 +483,25 @@ pub fn check_upload(store: &Store, task: &Task) -> Result<()> {
 }
 /// Follow-up writes keep the original material and require a current review.
 pub fn check_followup(store: &Store, task: &Task, payload: &Value) -> Result<()> {
-    if versions::submission_origin(task, payload)?.is_none() {
+    // New-format follow-ups are checked against the issued intent and its
+    // frozen material sources, not today's expanded set of human notes.
+    if payload.get("submission_packet").is_none_or(Value::is_null)
+        && versions::submission_origin(task, payload)?.is_none()
+    {
         return check_upload(store, task);
+    }
+    let original = recovery_payload(store, task)?;
+    for key in [
+        "sa_id",
+        "instructions",
+        "candidate",
+        "channel",
+        "filename",
+        "submission_packet",
+    ] {
+        if payload[key] != original[key] {
+            return Err(fail("后续操作与原提交意图不一致，不能导入或推送。"));
+        }
     }
     eligible(store, task)?;
     if task.batch_recheck.is_some()
@@ -473,7 +514,7 @@ pub fn check_followup(store: &Store, task: &Task, payload: &Value) -> Result<()>
     {
         return Err(Failure::new(
             "REVIEW_REQUIRED",
-            "先回读原批次，并重新核验新名单的身份、交大署名及本库缺失。",
+            "先回读原批次，并核验当前名单的身份、交大署名及本库缺失。",
         ));
     }
     library::assert_absent(task)?;
@@ -603,10 +644,11 @@ fn read_archive_in_scope(store: &Store, task: &Task, payload: &Value) -> Result<
         return files::read_import_archive(task, payload);
     };
     let packet: Packet = serde_json::from_value(value.clone())?;
+    let basis = material_source_scope(store, task, &packet)?;
     if packet.sa_id != task.id
         || packet.input_hash != task.input_hash
         || packet.record.fingerprint() != task.record.fingerprint()
-        || packet.facts != materials::facts(&store.root, task)?
+        || packet.facts != materials::facts(&store.root, &basis)?
         || !task.evidence.iter().any(|e| {
             e.kind == "submission_packet"
                 && serde_json::from_str::<Value>(&e.text).is_ok_and(|v| {
@@ -655,6 +697,84 @@ fn read_archive_in_scope(store: &Store, task: &Task, payload: &Value) -> Result<
         return Err(fail("原提交文件字节变化。"));
     }
     Ok(bytes)
+}
+
+/// Recover the source set saved when the material was produced. The complete
+/// plan already has an immutable recipe hash and a persisted validation receipt;
+/// additional notes must not make an issued upload unrecoverable. This never
+/// reconstructs missing sources or adopts changed original source bytes.
+fn material_source_scope(store: &Store, task: &Task, packet: &Packet) -> Result<Task> {
+    if materials::facts(&store.root, task).is_ok_and(|facts| facts == packet.facts) {
+        return Ok(task.clone());
+    }
+    let audit = task
+        .evidence
+        .iter()
+        .filter(|e| e.kind == "material_validation" && e.source == packet.material.audit)
+        .filter_map(|e| serde_json::from_str::<Value>(&e.text).ok())
+        .find(|a| {
+            a["schema"] == "template_material_v1"
+                && a["recipe"] == packet.material.recipe
+                && a["sa_id"] == task.id
+                && a["output"] == packet.material.path
+                && a["output_hash"] == packet.material.sha256
+                && a["plan"]["schema"] == "material_recipe_v1"
+                && a["plan"]["facts"] == packet.facts
+                && a["plan"]["record"] == json!(task.record)
+                && hash(a["plan"].to_string().as_bytes()) == packet.material.recipe
+        })
+        .ok_or_else(|| fail("原材料来源快照缺失或变化，不能从当前资料重建原提交。"))?;
+    let sources: Vec<Evidence> = serde_json::from_value(audit["plan"]["sources"].clone())?;
+    if sources.iter().any(|source| {
+        source.kind != "roster_input" && !task.evidence.iter().any(|e| json!(e) == json!(source))
+    }) {
+        return Err(fail("原材料引用的证据缺失或变化，保留原操作等待核验。"));
+    }
+    let mut basis = task.clone();
+    basis
+        .evidence
+        .retain(|e| !classification::factual_kind(&e.kind));
+    basis
+        .evidence
+        .extend(sources.into_iter().filter(|e| e.kind != "roster_input"));
+    // A later AI suggestion is also separate from an already issued material.
+    // Restore only a complete, hash-matched provider audit, never partial fields.
+    let classification_hash = &packet.facts["classification_hash"];
+    if classification_hash.is_null() {
+        basis.classification = None;
+    } else if basis
+        .classification
+        .as_ref()
+        .map(|v| json!(hash(v.to_string().as_bytes())))
+        .as_ref()
+        != Some(classification_hash)
+    {
+        basis.classification = task
+            .evidence
+            .iter()
+            .filter(|e| e.kind == "ai_classification")
+            .filter_map(|e| serde_json::from_str::<Value>(&e.text).ok())
+            .find(|a| {
+                a["schema"] == "ai_classification_v2"
+                    && a["sa_id"] == task.id
+                    && a["input_hash"] == packet.input_hash
+                    && a["record_fingerprint"] == packet.record.fingerprint()
+                    && a["result"].is_object()
+                    && json!(hash(a["result"].to_string().as_bytes())) == *classification_hash
+            })
+            .map(|a| a["result"].clone());
+        if basis.classification.is_none() {
+            return Err(fail(
+                "原材料使用的完整 AI 审计缺失，不能用新建议替换原提交。",
+            ));
+        }
+    }
+    if materials::facts(&store.root, &basis)? != packet.facts {
+        return Err(fail(
+            "原材料名单、分类、文件或来源字节变化，不能回读原提交。",
+        ));
+    }
+    Ok(basis)
 }
 /// Cross-channel duplicate protection uses every preserved write intent, including history.
 pub fn assert_no_prior(store: &Store, task: &Task, payload: &Value) -> Result<()> {
@@ -862,7 +982,17 @@ mod recovery_tests {
     }
     fn uploaded_non_wos(store: &Store, mut task: Task) -> (Task, Value) {
         let bytes = b"single original record";
-        let recipe = hash(b"non-wos version fixture");
+        task.evidence.push(Evidence {
+            id: "original-review".into(),
+            kind: "human_review".into(),
+            source: "original paper".into(),
+            text: "original identity and affiliation".into(),
+            created: now(),
+        });
+        let facts = materials::facts(&store.root, &task).unwrap();
+        let sources = classification::sources(&store.root, &task).unwrap();
+        let plan = json!({"schema":"material_recipe_v1","sa_id":task.id,"record":task.record,"facts":facts,"kind":"original_source","sources":sources,"template":null,"fields":null,"platform_verified":false});
+        let recipe = hash(plan.to_string().as_bytes());
         let folder = store.root.join("materials/products").join(&recipe);
         std::fs::create_dir_all(&folder).unwrap();
         let path = folder.join("original.txt");
@@ -872,14 +1002,14 @@ mod recovery_tests {
             sa_id: task.id.clone(),
             input_hash: task.input_hash.clone(),
             record: task.record.clone(),
-            facts: materials::facts(&store.root, &task).unwrap(),
+            facts,
             material: Product {
                 sa_id: task.id.clone(),
                 recipe,
                 kind: "original_pending".into(),
                 path: path.to_string_lossy().into(),
                 sha256: hash(bytes),
-                audit: "unused".into(),
+                audit: folder.join("来源.json").to_string_lossy().into(),
                 validation: json!({"ready":false}),
                 reused: false,
             },
@@ -890,6 +1020,15 @@ mod recovery_tests {
             instructions: format!("SA补充-{}", task.id),
             created: now(),
         };
+        let audit = json!({"schema":"template_material_v1","recipe":packet.material.recipe,"sa_id":task.id,"output":packet.material.path,"output_hash":packet.material.sha256,"plan":plan});
+        std::fs::write(&packet.material.audit, audit.to_string()).unwrap();
+        task.evidence.push(Evidence {
+            id: "material-audit".into(),
+            kind: "material_validation".into(),
+            source: packet.material.audit.clone(),
+            text: audit.to_string(),
+            created: now(),
+        });
         task.evidence.push(Evidence {
             id: "packet-evidence".into(),
             kind: "submission_packet".into(),
@@ -927,6 +1066,84 @@ mod recovery_tests {
             .finish_attempt(&mut task, &attempt, "verified", receipt, "uploaded")
             .unwrap();
         (task, payload)
+    }
+    #[test]
+    fn additional_reviews_do_not_replace_original_sources_after_upload_or_restart() {
+        let (dir, store, task) = setup();
+        let (mut uploaded, payload) = uploaded_non_wos(&store, task);
+        uploaded.evidence.push(Evidence {
+            id: "later-review".into(),
+            kind: "human_review".into(),
+            source: "later identity check".into(),
+            text: "additional confirmation".into(),
+            created: now(),
+        });
+        assert_ne!(
+            materials::facts(&store.root, &uploaded).unwrap(),
+            payload["submission_packet"]["facts"]
+        );
+        assert_eq!(
+            read_archive(&store, &uploaded, &payload).unwrap(),
+            b"single original record"
+        );
+        store.save(&mut uploaded, "later review").unwrap();
+        drop(store);
+        let store = Store::new(dir.path()).unwrap();
+        let mut current = store.task(&uploaded.id).unwrap();
+        assert_eq!(
+            read_archive(&store, &current, &payload).unwrap(),
+            b"single original record"
+        );
+        current.classification =
+            Some(json!({"suggestion":"a later proposal, not the uploaded file"}));
+        assert_eq!(
+            read_archive(&store, &current, &payload).unwrap(),
+            b"single original record"
+        );
+        current.route = Route::Missing;
+        current.review = Some(Review {
+            route: Route::Missing,
+            evidence_id: "later-review".into(),
+            library_checked: true,
+            platform_id: "".into(),
+            affiliation_confirmed: true,
+            identity_confirmed: true,
+            issues_resolved: false,
+            note: "confirmed".into(),
+        });
+        let target = library::target(&current, &current.record.title).unwrap();
+        let result = json!({"verified":true,"sa_id":current.id,"target":target,"institution_id":"1244586319225556993","source":"https://www.ir.lib.sjtu.edu.cn/advancedSearch","checked_at":now(),"items":[],"queries":[{"kind":"title","value":current.record.title,"field":"title","precise":false,"total":0,"pages":[{"current":1,"size":10,"total":0,"records":[]}]}]});
+        library::record(&mut current, &target, &result).unwrap();
+        store.save(&mut current, "current review").unwrap();
+        check_followup(&store, &current, &payload).unwrap();
+        // Original proof cannot be silently substituted by a new one.
+        let mut changed = current.clone();
+        changed
+            .evidence
+            .iter_mut()
+            .find(|e| e.id == "original-review")
+            .unwrap()
+            .text = "different original fact".into();
+        assert!(read_archive(&store, &changed, &payload).is_err());
+        let mut missing = current.clone();
+        missing.evidence.retain(|e| e.id != "material-audit");
+        assert!(read_archive(&store, &missing, &payload).is_err());
+        let mut wrong = payload.clone();
+        wrong["channel"] = json!("general");
+        assert!(check_followup(&store, &current, &wrong).is_err());
+        let next = accept_new_roster(&store, &current, 4, "new-input");
+        assert_eq!(
+            read_archive(&store, &next, &payload).unwrap(),
+            b"single original record"
+        );
+        std::fs::write(
+            payload["submission_packet"]["material"]["path"]
+                .as_str()
+                .unwrap(),
+            b"changed export",
+        )
+        .unwrap();
+        assert!(read_archive(&store, &next, &payload).is_err());
     }
     fn accept_new_roster(store: &Store, task: &Task, row: u32, input: &str) -> Task {
         let mut r = task.record.clone();
