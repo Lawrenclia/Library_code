@@ -1,0 +1,7 @@
+{
+  "identifier": "source-browser-reply",
+  "local": false,
+  "windows": ["source-*"],
+  "remote": { "urls": ["https://*/*", "http://*/*"] },
+  "permissions": ["allow-browser-result"]
+}

@@ -25,6 +25,7 @@ pub mod sa;
 pub mod search_scopes;
 pub mod source_downloads;
 pub mod source_files;
+pub mod source_flows;
 pub mod source_reuse;
 pub mod store;
 pub mod submission;
@@ -68,6 +69,8 @@ mod roster_tests;
 mod sa_tests;
 #[cfg(test)]
 mod source_download_tests;
+#[cfg(test)]
+mod source_flow_tests;
 #[cfg(test)]
 mod source_material_tests;
 #[cfg(test)]

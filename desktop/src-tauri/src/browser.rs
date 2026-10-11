@@ -50,6 +50,7 @@ pub struct Browser {
     pub(crate) source_transfers: Arc<Mutex<HashMap<String, crate::source_browser::Transfer>>>,
     pub(crate) source_windows: Arc<Mutex<HashMap<String, library_core::source_downloads::Session>>>,
     pub(crate) source_loaded: Arc<Mutex<HashMap<String, String>>>,
+    pub(crate) source_exports: Arc<Mutex<HashMap<String, crate::source_browser::ExportCapture>>>,
     #[cfg(feature = "smoke-test")]
     lost_upload_reply: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -120,10 +121,12 @@ impl Browser {
         if valid(label, url) {
             return true;
         }
-        library_core::cnki::is_site(url)
+        label.starts_with("source-")
             && self.source_windows.lock().ok().is_some_and(|windows| {
                 windows.get(label).is_some_and(|s| {
-                    s.site.channel == "cnki"
+                    matches!(url.scheme(), "http" | "https")
+                        && url.username().is_empty()
+                        && url.password().is_none()
                         && s.site
                             .download_origins
                             .contains(&url.origin().ascii_serialization())

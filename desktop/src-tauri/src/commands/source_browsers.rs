@@ -251,7 +251,7 @@ pub(crate) fn source_browser_state(
     let task = state.store.task(&id)?;
     let sites = state.store.source_sites()?;
     Ok(
-        json!({"sites":sites,"downloads":state.store.source_downloads(&id)?,"windows":state.browser.source_window_states(&app,&task,&sites)?}),
+        json!({"sites":sites,"flows":state.store.source_flows()?,"source_queue":state.store.source_queue()?,"acquisitions":state.store.source_acquisitions(&id)?,"downloads":state.store.source_downloads(&id)?,"windows":state.browser.source_window_states(&app,&task,&sites)?}),
     )
 }
 #[tauri::command]
@@ -322,12 +322,10 @@ pub(crate) fn preview_source_download(
     let receipt = state.store.source_download_for_preview(&id, &download_id)?;
     let task = state.store.task(&id)?;
     let mut draft = if resave.unwrap_or(false) {
-        if receipt.session.site.channel != "cnki" {
-            return Err(Failure::new("SOURCE_INVALID", "另存仅用于 CNKI Excel。"));
-        }
-        cnki_excel::normalize(
+        cnki_excel::normalize_for_channel(
             &state.store.root,
             &task,
+            &receipt.session.site.channel,
             std::path::Path::new(&receipt.path),
             &receipt.original_name,
             &options.encoding,

@@ -731,6 +731,137 @@ pub(crate) fn report_bytes(tasks: &[Task]) -> Result<Vec<u8>> {
     let mut book = report_workbook(tasks, &[], &[], &[], &[])?;
     book.save_to_buffer().map_err(Failure::storage)
 }
+/// Include unbound acquisitions and complete queue records without treating
+/// captured page fields as uploaded database-original files.
+pub fn export_report_with_source_runs(store: &Store, path: &Path) -> Result<()> {
+    let (tasks, queues) = store.report_snapshot()?;
+    let mut book = report_workbook(
+        &tasks,
+        &queues,
+        &store.legacy_snapshots()?,
+        &store.ai_queues()?,
+        &store.material_batches()?,
+    )?;
+    let sheet = book.add_worksheet();
+    sheet.set_name("渠道获取记录").map_err(Failure::storage)?;
+    for (i, h) in [
+        "SA ID",
+        "负责人",
+        "原表行号",
+        "名单版本",
+        "渠道",
+        "方式及状态",
+        "来源地址",
+        "原文件/详情来源",
+        "哈希",
+        "重要缺项",
+        "原导出错误",
+        "获取编号",
+        "完整记录分段",
+        "分段号",
+    ]
+    .iter()
+    .enumerate()
+    {
+        sheet
+            .write_string(0, i as u16, *h)
+            .map_err(Failure::storage)?;
+    }
+    let mut row = 1u32;
+    for task in &tasks {
+        for op in store.source_acquisitions(&task.id)? {
+            let raw = serde_json::to_string(&op)?;
+            let chars: Vec<_> = raw.chars().collect();
+            let values = vec![
+                task.id.clone(),
+                op["session"]["record"]["owner"]
+                    .as_str()
+                    .unwrap_or("")
+                    .into(),
+                op["session"]["record"]["row"].to_string(),
+                op["session"]["input_hash"].as_str().unwrap_or("").into(),
+                op["session"]["site"]["channel"]
+                    .as_str()
+                    .unwrap_or("")
+                    .into(),
+                op["state"].as_str().unwrap_or("").into(),
+                op["acquisition"]["source_url"]
+                    .as_str()
+                    .or_else(|| op["page"]["page_url"].as_str())
+                    .unwrap_or("")
+                    .into(),
+                op["draft"]["path"]
+                    .as_str()
+                    .or_else(|| op["receipt"]["path"].as_str())
+                    .unwrap_or("")
+                    .into(),
+                op["draft"]["sha256"]
+                    .as_str()
+                    .or_else(|| op["receipt"]["sha256"].as_str())
+                    .unwrap_or("")
+                    .into(),
+                op["acquisition"]["missing"]
+                    .as_array()
+                    .map(|v| serde_json::json!(v).to_string())
+                    .unwrap_or_default(),
+                op["error"]["message"].as_str().unwrap_or("").into(),
+                op["id"].as_str().unwrap_or("").into(),
+            ];
+            for (part, chunk) in chars.chunks(15000).enumerate() {
+                for (col, value) in values.iter().enumerate() {
+                    sheet
+                        .write_string(row, col as u16, value)
+                        .map_err(Failure::storage)?;
+                }
+                sheet
+                    .write_string(row, 12, chunk.iter().collect::<String>())
+                    .map_err(Failure::storage)?;
+                sheet
+                    .write_number(row, 13, (part + 1) as f64)
+                    .map_err(Failure::storage)?;
+                row += 1;
+            }
+        }
+    }
+    let source_queues = store.source_queues()?;
+    if !source_queues.is_empty() {
+        let sheet = book.add_worksheet();
+        sheet.set_name("来源批量队列").map_err(Failure::storage)?;
+        for (i, heading) in [
+            "队列编号",
+            "状态",
+            "分段号",
+            "完整队列记录（按编号和分段号拼接）",
+        ]
+        .iter()
+        .enumerate()
+        {
+            sheet
+                .write_string(0, i as u16, *heading)
+                .map_err(Failure::storage)?;
+        }
+        let mut row = 1;
+        for queue in source_queues {
+            let chars: Vec<_> = serde_json::to_string(&queue)?.chars().collect();
+            for (i, chunk) in chars.chunks(15000).enumerate() {
+                sheet
+                    .write_string(row, 0, queue["id"].as_str().unwrap_or(""))
+                    .map_err(Failure::storage)?;
+                sheet
+                    .write_string(row, 1, queue["status"].as_str().unwrap_or(""))
+                    .map_err(Failure::storage)?;
+                sheet
+                    .write_number(row, 2, (i + 1) as f64)
+                    .map_err(Failure::storage)?;
+                sheet
+                    .write_string(row, 3, chunk.iter().collect::<String>())
+                    .map_err(Failure::storage)?;
+                row += 1;
+            }
+        }
+    }
+    book.save(path).map_err(Failure::storage)
+}
 fn report_workbook(
     tasks: &[Task],
     queues: &[crate::queue::DownloadQueue],

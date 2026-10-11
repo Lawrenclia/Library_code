@@ -6,6 +6,7 @@ pub mod material_batches;
 pub mod materials;
 pub mod models;
 pub mod source_browsers;
+pub mod source_flows;
 pub mod sources;
 pub mod submission;
 pub mod tasks;

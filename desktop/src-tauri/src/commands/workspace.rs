@@ -118,15 +118,7 @@ pub(crate) async fn export_report(
     let Some(path) = path else {
         return Ok(json!({"cancelled":true}));
     };
-    let (tasks, queues) = state.store.report_snapshot()?;
-    files::export_report_with_materials(
-        &tasks,
-        &queues,
-        &state.store.legacy_snapshots()?,
-        &state.store.ai_queues()?,
-        &state.store.material_batches()?,
-        path.path(),
-    )?;
+    files::export_report_with_source_runs(&state.store, path.path())?;
     Ok(json!({"path":path.path().to_string_lossy()}))
 }
 #[tauri::command]

@@ -328,6 +328,9 @@ export interface FrameworkManifest {
       | "unimplemented"
       | "registered_only"
       | "runtime_contract_guarded"
+      | "configurable_runtime_guarded"
+      | "container_and_ris"
+      | "endnote_refworks_excel"
     >;
   }[];
   operations: { id: string; service: string; kind: string }[];
@@ -509,7 +512,12 @@ export interface SourceSite {
 }
 export interface SourceDownload {
   id: string;
-  session: { site: SourceSite; record: Task["record"]; input_hash: string };
+  session: {
+    id: string;
+    site: SourceSite;
+    record: Task["record"];
+    input_hash: string;
+  };
   original_name: string;
   page_url: string;
   path: string;
@@ -520,8 +528,62 @@ export interface SourceDownload {
 }
 export interface SourceBrowserState {
   sites: SourceSite[];
+  flows?: SourceFlow[];
+  acquisitions?: SourceAcquisition[];
+  source_queue?: SourceQueue | null;
   downloads: SourceDownload[];
   windows?: SourceWindowState[];
+}
+export interface SourceFlow {
+  channel: string;
+  search_url: string;
+  input: string;
+  search_button: string;
+  result_rows: string;
+  result_title: string;
+  result_link: string;
+  result_total: string;
+  empty_result: string;
+  detail_title: string;
+  export_steps: {
+    selector: string;
+    action: "click" | "select" | "check";
+    text: string;
+  }[];
+}
+export interface SourceAcquisition {
+  id: string;
+  session: {
+    id: string;
+    site: SourceSite;
+    record: Task["record"];
+    input_hash: string;
+  };
+  state:
+    | "export_pending"
+    | "downloading"
+    | "completed"
+    | "unknown"
+    | "failed"
+    | "captured";
+  receipt_id?: string | null;
+  error?: Failure | null;
+}
+export interface SourceQueue {
+  id: string;
+  owner: string;
+  channel: string;
+  index: number;
+  entries: { id: string }[];
+  status:
+    | "running"
+    | "paused"
+    | "blocked"
+    | "interrupted"
+    | "completed"
+    | "cancelled";
+  pause_requested: boolean;
+  results: { id: string; state: string; error?: Failure }[];
 }
 export interface SourceWindowState {
   label: string;
@@ -539,12 +601,17 @@ export interface SourceWindowState {
 }
 export interface SourcePage {
   acquisition?: {
-    mode: "cnki_export_response";
+    mode:
+      | "cnki_export_response"
+      | "database_page_metadata"
+      | "native_source_download";
     source_url: string;
     response_path: string;
     response_sha256: string;
     saved_path: string;
     missing: string[];
+    original_export_error?: Failure;
+    operation_id?: string;
   };
   draft: SourceDraft;
   layout?: "text" | "table";

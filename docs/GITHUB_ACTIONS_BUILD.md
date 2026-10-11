@@ -1,25 +1,30 @@
 # 在 GitHub 编译 Windows EXE
 
-无需在自己电脑安装 Rust、Node.js，也不需要填写 AI API token 或网站账号。
-
-主分支 **0.1.8** 已编译上传成功：[Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38102276931)，源码为 `112a539f32925aba3bc22a3c73cc3910c7249cd9`，产物为 `Windows-EXE-0.1.8-112a539f`。已下载 ZIP 并读取实际 EXE：6,747,538 字节，SHA256 为 `DDE1ACAF47283C99E192D9FEE15482D5D8ACEBA283316FD0AF568871D4E3482A`，与包内版本、源码、大小和哈希清单一致。新增来源格式配置及 RIS 题录读取；没有安装启动或运行业务流程。云端与本地包分别记录哈希，后续更新按下方工作流编译。
-
-已核对的 **0.1.7** 云端包：[Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38101128343)，源码为 `769480200a635d328c5d819373c2b926ad94da91`，产物为 `Windows-EXE-0.1.7-76948020`。已下载 ZIP 并直接读取 EXE，实际大小 6,749,913 字节，SHA256 为 `877A5E9F89935EC282B66DADF8F7F07889D85020AB8CDE18D18E77475DA60F9B`，与包内版本、大小及哈希清单一致。该包包含 A 列空白筛选和 WOS 524 处理，不含 0.1.8 的来源更新；未安装或运行业务流程。云端和本地包分别记录哈希。
-
-已核对的历史 **0.1.6** 云端包来自 [Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38100737396)，产物为 `Windows-EXE-0.1.6-1c7d981b`，源码为 `1c7d981bcb17cb4c4210b22ffc204a059450187e`；实际安装 EXE 为 6,750,105 字节，SHA256 为 `56942E41CDA06D77F8F01F125F5AE7FDA23D6FC565E2F9D00A7D96E715156142`，与包内版本、大小和哈希清单一致。该包仅包含 A 列空白筛选，不包含 0.1.7 的 524 处理。云端和本地包分别记录，没有安装或运行程序。需要后续更新时按下方步骤重新编译。
+当前应用为 Rust + TypeScript 的 Tauri 桌面版，版本以 `desktop/src-tauri/tauri.conf.json` 为准。编译无需 AI token 或机构库账号，也不需要本机安装 Rust、Node.js。
 
 1. 打开 [Windows EXE 工作流](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml)。
 2. 点击 **Run workflow**，工作流分支保持 **main**。
-3. `source_ref` 默认是 **main**，即当前 Tauri 新版源码；也可填包含 `desktop` 的其他分支、标签或提交 SHA。
-4. 点击绿色 **Run workflow**，等待编译结束。
-5. 打开成功的运行，在下方 **Artifacts** 下载 `Windows-EXE-版本-提交`，解压后运行其中的 `机构知识库工作台_版本_x64-setup.exe`。
+3. `source_ref` 默认 **main**；可填写包含 `desktop/` 的具体分支、标签或完整提交 SHA。需要重建同一版本时使用原提交 SHA。
+4. 开始运行，等待“编译 Windows x64 安装包”成功。
+5. 打开该次运行，在 **Artifacts** 下载 `Windows-EXE-版本-提交前8位`。
+6. 解压后核对 `build-info.json` 和 `SHA256SUMS.txt`，再使用其中的 `机构知识库工作台_版本_x64-setup.exe`。
 
-产物包含安装包、`SHA256SUMS.txt` 和 `build-info.json`，记录实际编译的源码提交。产物保留 30 天，过期后可重新编译。首次运行需下载和编译 Rust 依赖；后续会复用缓存。
+产物保留 30 天，过期可重新编译。首次运行需要下载 Rust 和前端依赖，后续会复用缓存。构建或观察超时不应连续启动多次同一任务；先查看已有运行状态。
 
-新版 Rust + TypeScript 桌面代码位于主分支的 `desktop`。主分支的 `desktop`、工作流，以及打入原生程序的 `extension/adapter.js`、`extension/import-adapter.js`、`extension/wos-adapter.js` 更新会自动开始编译；也可随时点击 **Run workflow** 手动编译。Python 和其余扩展界面保留旧版实现，新桌面 EXE 不依赖 Python。
+## 自动编译范围
 
-流程只安装构建依赖、编译前端与 Rust、生成 NSIS 安装包并上传，不运行测试，不安装或启动生成的应用，不连接 WOS、CNKI 或机构后台，不上传业务数据。
+主分支的以下文件发生变化时自动构建：
 
-编译失败时，展开标红的步骤查看原因；修复源码后重新运行。成功上传安装包才能说明云端打包完成，业务效果仍由用户自测。
+- `desktop/**`
+- `extension/adapter.js`、`extension/import-adapter.js`、`extension/wos-adapter.js`
+- `.github/workflows/windows-exe.yml`
 
-配置依据：[Tauri 官方 GitHub 构建说明](https://v2.tauri.app/distribute/pipelines/github/)及 [GitHub 手动运行工作流说明](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)。
+单独更新 README 或交付记录不会重新编译。工作流使用实际检出的源码 SHA，默认不依赖旧 Python 程序或 Chrome 扩展界面。
+
+## 产物核对
+
+`build-info.json` 记录应用版本、40 位源码提交、安装包文件名、实际字节数、SHA256、架构、运行链接和编译时间。`SHA256SUMS.txt` 可与实际 EXE 哈希比较。GitHub 包与本地编译包分别记录哈希，不要求两次构建字节相同。
+
+本流程只安装依赖、编译前端和 Rust、生成 NSIS 安装包并上传。**不运行测试、不安装或启动应用、不连接业务网站、不上传业务数据。** 云端成功表示安装包生成，不能代替真实网站验收。
+
+版本具体结果见 [交付记录](TAURI_ACCEPTANCE_STATUS.md)，0.2.0 使用步骤见 [版本说明](TAURI_TESTING_0_2_0.md)。

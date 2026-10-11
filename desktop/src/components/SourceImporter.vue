@@ -467,13 +467,15 @@ const conflictNames: Record<string, string> = {
       ><Upload />选择原始来源文件</Button
     >
     <Button
-      v-if="channel === 'cnki'"
+      v-if="
+        channels.find((c) => c.id === channel)?.source_formats?.includes('xlsx')
+      "
       class="w-full"
       variant="outline"
       size="sm"
       :disabled="locked"
       @click="preview(true)"
-      >选择 CNKI Excel 并另存为 XLSX</Button
+      >选择数据库 Excel 并另存为 XLSX</Button
     >
     <Button
       class="w-full"
@@ -578,7 +580,7 @@ const conflictNames: Record<string, string> = {
         class="space-y-1 rounded border p-2 text-[11px] leading-5"
       >
         <p>
-          这份文件来自内置会话的题录响应，用于分类和填表。已保留全部字段与原始响应；直接导入机构库时，请使用网页原始导出或对应模板。
+          这份文件来自数据库题录响应或详情页真实字段，用于分类和填表。完整原文、重复字段和未知字段均保留；直接导入机构库时使用网页原始导出或对应模板。
         </p>
         <template v-if="data.acquisition">
           <p class="break-all">题录：{{ data.acquisition.saved_path }}</p>
@@ -589,9 +591,15 @@ const conflictNames: Record<string, string> = {
             v-if="data.acquisition.missing.length"
             class="text-amber-700 dark:text-amber-400"
           >
-            导出字段缺项：{{
+            来源重要缺项：{{
               data.acquisition.missing.join("、")
             }}。需从其他可靠来源补充，AI 不得猜写。
+          </p>
+          <p
+            v-if="data.acquisition.original_export_error"
+            class="text-amber-700 dark:text-amber-400"
+          >
+            原始导出：{{ data.acquisition.original_export_error.message }}
           </p>
         </template>
       </div>

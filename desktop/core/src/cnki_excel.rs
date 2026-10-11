@@ -1,4 +1,4 @@
-//! Explicit CNKI Excel resave. Originals stay immutable; conversions are audited.
+//! Explicit database Excel resave. Originals stay immutable; conversions are audited.
 use crate::*;
 use calamine::{Data, Reader};
 use scraper::{ElementRef, Html, Node, Selector};
@@ -32,14 +32,14 @@ fn bytes(path: &Path) -> Result<Vec<u8>> {
         || meta.file_type().is_symlink()
         || meta.len() > source_files::MAX_BYTES as u64
     {
-        return Err(fail("CNKI Excel 不是普通文件或超过 16 MB。"));
+        return Err(fail("数据库 Excel 不是普通文件或超过 16 MB。"));
     }
     let mut raw = Vec::new();
     fs::File::open(path)?
         .take(source_files::MAX_BYTES as u64 + 1)
         .read_to_end(&mut raw)?;
     if raw.len() > source_files::MAX_BYTES || raw.is_empty() {
-        return Err(fail("CNKI Excel 为空或读取期间变大。"));
+        return Err(fail("数据库 Excel 为空或读取期间变大。"));
     }
     Ok(raw)
 }
@@ -171,13 +171,26 @@ pub fn normalize(
     original_name: &str,
     encoding: &str,
 ) -> Result<source_files::Draft> {
+    normalize_for_channel(root, task, "cnki", path, original_name, encoding)
+}
+
+pub fn normalize_for_channel(
+    root: &Path,
+    task: &Task,
+    channel: &str,
+    path: &Path,
+    original_name: &str,
+    encoding: &str,
+) -> Result<source_files::Draft> {
     let format = path
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_lowercase();
     if !matches!(format.as_str(), "xls" | "xlsx") {
-        return Err(fail("另存只接受 CNKI Excel，题录 TXT 不转换为原始 Excel。"));
+        return Err(fail(
+            "另存只接受数据库 Excel，题录 TXT 不转换为原始 Excel。",
+        ));
     }
     let raw = bytes(path)?;
     let original = store_original(root, &raw, &format)?;
@@ -242,7 +255,7 @@ pub fn normalize(
     let mut draft = source_files::prepare(
         root,
         task,
-        "cnki",
+        channel,
         &saved,
         source_files::ReadOptions::default(),
     )?;

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-source-queue-control"
+description = "Enables the source_queue_control command without any pre-configured scope."
+commands.allow = ["source_queue_control"]
+
+[[permission]]
+identifier = "deny-source-queue-control"
+description = "Denies the source_queue_control command without any pre-configured scope."
+commands.deny = ["source_queue_control"]

@@ -19,6 +19,12 @@ pub(crate) struct Transfer {
     path: PathBuf,
     _lease: Lease,
 }
+pub(crate) struct ExportCapture {
+    pub(crate) session_id: String,
+    pub(crate) operation_id: String,
+    pub(crate) lease: Option<Lease>,
+    pub(crate) receipt_id: Option<String>,
+}
 fn watch_close(app: &AppHandle, store: &Store, browser: &Browser, window: &WebviewWindow) {
     let app = app.clone();
     let store = store.clone();
@@ -38,6 +44,47 @@ fn watch_close(app: &AppHandle, store: &Store, browser: &Browser, window: &Webvi
     });
 }
 impl Browser {
+    pub(crate) fn arm_source_export(
+        &self,
+        label: &str,
+        session: &Session,
+        operation_id: &str,
+        lease: Lease,
+    ) -> Result<()> {
+        let mut pending = self.source_exports.lock().map_err(Failure::storage)?;
+        if pending.contains_key(label) {
+            return Err(Failure::new("BUSY", "本窗口原导出尚未结束。"));
+        }
+        pending.insert(
+            label.into(),
+            ExportCapture {
+                session_id: session.id.clone(),
+                operation_id: operation_id.into(),
+                lease: Some(lease),
+                receipt_id: None,
+            },
+        );
+        Ok(())
+    }
+    pub(crate) fn finish_source_export_watch(
+        &self,
+        label: &str,
+        store: &Store,
+        error: Option<&Failure>,
+    ) {
+        if let Ok(mut pending) = self.source_exports.lock() {
+            if let Some(capture) = pending.remove(label) {
+                if let Some(error) = error {
+                    let _ = store.source_export_update(
+                        &capture.operation_id,
+                        "unknown",
+                        None,
+                        Some(error),
+                    );
+                }
+            }
+        }
+    }
     fn register_source_window(
         &self,
         app: &AppHandle,
@@ -139,10 +186,49 @@ impl Browser {
                     let engine = app.try_state::<Engine>().ok_or_else(|| {
                         Failure::new("BROWSER_UNAVAILABLE", "工作台运行服务不可用。")
                     })?;
-                    let lease = engine.acquire_source_download()?;
+                    // Transfer the exact automation lease to the native file
+                    // receiver. A concurrent/manual download cannot borrow it.
+                    let mut pending = self.source_exports.lock().map_err(Failure::storage)?;
+                    let related: Vec<_> = pending
+                        .iter()
+                        .filter(|(_, c)| c.session_id == session.id)
+                        .map(|(k, _)| k.clone())
+                        .collect();
+                    if related.len() > 1 {
+                        return Err(Failure::new(
+                            "SOURCE_DOWNLOAD_INVALID",
+                            "来源会话有多份未结束导出，无法对应原请求。",
+                        ));
+                    }
+                    let capture_key = related.first().cloned();
+                    let lease = if let Some(capture) =
+                        capture_key.as_ref().and_then(|k| pending.get_mut(k))
+                    {
+                        if capture.session_id != session.id || capture.receipt_id.is_some() {
+                            return Err(Failure::new(
+                                "SOURCE_DOWNLOAD_INVALID",
+                                "本次导出已有原下载请求，不接收第二份文件。",
+                            ));
+                        }
+                        capture.lease.take().ok_or_else(|| {
+                            Failure::new("SOURCE_DOWNLOAD_INVALID", "原导出接收状态已变化。")
+                        })?
+                    } else {
+                        engine.acquire_source_download()?
+                    };
                     let page = view.url().map_err(Failure::storage)?;
                     let receipt =
                         store.request_source_download(session, &page, &url, destination)?;
+                    if let Some(capture) = capture_key.as_ref().and_then(|k| pending.get_mut(k)) {
+                        store.source_export_update(
+                            &capture.operation_id,
+                            "downloading",
+                            Some(&receipt),
+                            None,
+                        )?;
+                        capture.receipt_id = Some(receipt.id.clone());
+                    }
+                    drop(pending);
                     transfers.insert(
                         receipt.id.clone(),
                         Transfer {
@@ -171,6 +257,20 @@ impl Browser {
                         true
                     }
                     Err(error) => {
+                        if let Ok(pending) = self.source_exports.lock() {
+                            if let Some(c) = pending.values().find(|c| {
+                                c.session_id == session.id
+                                    && c.lease.is_none()
+                                    && c.receipt_id.is_none()
+                            }) {
+                                let _ = store.source_export_update(
+                                    &c.operation_id,
+                                    "unknown",
+                                    None,
+                                    Some(&error),
+                                );
+                            }
+                        }
                         let _ = app.emit_to(
                             "main",
                             "source-download-event",
@@ -212,6 +312,38 @@ impl Browser {
                             path.as_deref(),
                             success,
                         );
+                        if let Ok(pending) = self.source_exports.lock() {
+                            if let Some(capture) = pending
+                                .values()
+                                .find(|c| c.receipt_id.as_deref() == Some(id.as_str()))
+                            {
+                                match &result {
+                                    Ok(Some(r)) => {
+                                        let _ = store.source_export_update(
+                                            &capture.operation_id,
+                                            if r.state == "completed" {
+                                                "completed"
+                                            } else {
+                                                "failed"
+                                            },
+                                            Some(r),
+                                            r.error.as_ref(),
+                                        );
+                                    }
+                                    _ => {
+                                        let _ = store.source_export_update(
+                                            &capture.operation_id,
+                                            "unknown",
+                                            None,
+                                            Some(&Failure::new(
+                                                "SOURCE_EXPORT_UNKNOWN",
+                                                "原下载结束没有可核对的回执。",
+                                            )),
+                                        );
+                                    }
+                                }
+                            }
+                        }
                         if result.is_err() {
                             let _ = store.interrupt_source_download_ids(&[id]);
                         }
@@ -240,6 +372,14 @@ impl Browser {
         }
     }
     fn interrupt_source_window(&self, app: &AppHandle, store: &Store, label: &str) {
+        self.finish_source_export_watch(
+            label,
+            store,
+            Some(&Failure::new(
+                "SOURCE_EXPORT_UNKNOWN",
+                "原来源窗口关闭，先核对原下载结果，不自动再次导出。",
+            )),
+        );
         let result = (|| -> Result<bool> {
             let mut transfers = self.source_transfers.lock().map_err(Failure::storage)?;
             let ids: Vec<_> = transfers
@@ -356,6 +496,7 @@ impl Browser {
                 let store = popup_store.clone();
                 let session = popup_session.clone();
                 let browser = popup_browser.clone();
+                let popup_loaded = popup_browser.source_loaded.clone();
                 let child = WebviewWindowBuilder::new(
                     &popup_app,
                     label,
@@ -364,6 +505,15 @@ impl Browser {
                 .title("原始来源 · 机构访问窗口")
                 .data_directory(popup_profile.clone())
                 .window_features(features)
+                .on_page_load(move |window, payload| {
+                    if let Ok(mut pages) = popup_loaded.lock() {
+                        if payload.event() == PageLoadEvent::Finished {
+                            pages.insert(window.label().to_string(), payload.url().to_string());
+                        } else {
+                            pages.remove(window.label());
+                        }
+                    }
+                })
                 .on_navigation(|u| matches!(u.scheme(), "http" | "https" | "about"))
                 .on_download(move |view, event| {
                     browser.receive_source(&app, &store, &session, view, event)

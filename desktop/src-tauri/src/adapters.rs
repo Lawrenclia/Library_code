@@ -9,6 +9,22 @@ pub fn resolve(role: &str, action: &str) -> Result<PageAdapter> {
     let (script, handler) = match role {
         label
             if label.starts_with("source-")
+                && [
+                    "source_search",
+                    "source_ping",
+                    "source_results",
+                    "source_capture",
+                    "source_export",
+                ]
+                .contains(&action) =>
+        {
+            (
+                include_str!("../browser/source-adapter.cjs"),
+                "runSourceCommand",
+            )
+        }
+        label
+            if label.starts_with("source-")
                 && ["cnki_capture", "cnki_results"].contains(&action) =>
         {
             (

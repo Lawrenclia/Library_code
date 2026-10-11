@@ -197,7 +197,7 @@ pub fn read(path: &Path, format: &str, options: &ReadOptions) -> Result<Document
             if format == "xls"
                 && !raw.starts_with(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])
             {
-                return Err(fail("此 XLS 是网页表格或不支持的 Excel。CNKI 可点击‘另存为 XLSX’；其他情况请用 Excel 核对后另存，原下载保留。"));
+                return Err(fail("此 XLS 是网页表格或不支持的 Excel。可点击‘另存为 XLSX’核对转换；无法完整保留时请用 Excel 核对后另存，原下载保留。"));
             }
             if format == "xlsx" {
                 let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&raw))

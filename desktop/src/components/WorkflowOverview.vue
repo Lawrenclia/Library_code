@@ -249,7 +249,10 @@ function browserState(role: string) {
                       ? "已接入 · 待现场验收"
                       : channel.capabilities.template === "implemented"
                         ? "使用实际模板"
-                        : "渠道已登记"
+                        : channel.capabilities.browser_page_metadata ===
+                            "implemented"
+                          ? "来源驱动已接入"
+                          : "渠道已登记"
                   }}</Badge>
                 </div>
                 <p class="mt-2 text-[10px] text-muted-foreground">
@@ -259,6 +262,9 @@ function browserState(role: string) {
                   <span
                     v-for="[key, label] in [
                       ['export', '原生导出'],
+                      ['search', '渠道检索'],
+                      ['browser_page_metadata', '详情来源'],
+                      ['source_queue', '批量获取'],
                       ['local_source', '本地来源读取'],
                       ['parse', '文件解析'],
                       ['submit', '自动提交'],
@@ -270,11 +276,20 @@ function browserState(role: string) {
                     ><span>{{
                       channel.capabilities[key] === "implemented"
                         ? "已接入"
-                        : channel.capabilities[key] === "runtime_contract_guarded"
+                        : channel.capabilities[key] ===
+                            "runtime_contract_guarded"
                           ? "已接入 · 待自测"
-                        : channel.capabilities[key] === "registered_only"
-                          ? "需注册模板"
-                          : "待接入"
+                          : channel.capabilities[key] ===
+                              "configurable_runtime_guarded"
+                            ? "通用驱动 · 核对页面"
+                            : [
+                                  "container_and_ris",
+                                  "endnote_refworks_excel",
+                                ].includes(channel.capabilities[key])
+                              ? "已接入"
+                              : channel.capabilities[key] === "registered_only"
+                                ? "需注册模板"
+                                : "待接入"
                     }}</span></span
                   >
                 </div>

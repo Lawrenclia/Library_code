@@ -24,17 +24,24 @@ pub fn channels() -> Value {
         let template = channel["id"] == "general" || channel["id"] == "other";
         // Source containers and platform upload formats are separate contracts.
         let mut source_formats = channel["formats"].as_array().unwrap().clone();
+        let excel = source_formats.iter().any(|v| v == "xlsx");
+        if excel && !source_formats.iter().any(|v| v == "xls") {
+            source_formats.push(json!("xls"));
+        }
         source_formats.push(json!("ris"));
         channel["source_formats"] = json!(source_formats);
         channel["capabilities"] = json!({
-            "search":if native {"implemented"} else if cnki {"runtime_contract_guarded"} else {"unimplemented"},
+            "search":if native {"implemented"} else if cnki {"runtime_contract_guarded"} else {"configurable_runtime_guarded"},
             "local_source":"implemented",
-            "source_browser":if cnki {"builtin_entry"} else {"configured_manual"},
+            "source_browser":if cnki {"builtin_entry"} else {"configured_driver"},
+            "browser_page_metadata":"implemented",
+            "source_queue":"implemented",
+            "driver_configuration":"implemented",
             "browser_export_response":if cnki {"implemented"} else {"unimplemented"},
             "native_source_download":"implemented",
-            "excel_resave":if cnki {"implemented"} else {"unimplemented"},
-            "export":if native {"implemented"} else {"unimplemented"},
-            "parse":if native {"implemented"} else if cnki {"endnote_refworks_excel"} else {"unimplemented"},
+            "excel_resave":if excel {"implemented"} else {"unimplemented"},
+            "export":if native {"implemented"} else {"configurable_runtime_guarded"},
+            "parse":if native {"implemented"} else if cnki {"endnote_refworks_excel"} else {"container_and_ris"},
             "source_ris":"implemented",
             "submit":if crate::submission::supported_channel(channel["id"].as_str().unwrap_or("")) {"runtime_contract_guarded"} else {"unimplemented"},
             "template":if template {"implemented"} else {"registered_only"}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-acquire-source"
+description = "Enables the acquire_source command without any pre-configured scope."
+commands.allow = ["acquire_source"]
+
+[[permission]]
+identifier = "deny-acquire-source"
+description = "Denies the acquire_source command without any pre-configured scope."
+commands.deny = ["acquire_source"]

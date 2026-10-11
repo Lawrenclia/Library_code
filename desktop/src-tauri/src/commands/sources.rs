@@ -111,17 +111,15 @@ pub(crate) async fn preview_source_file(
         return Ok(json!({"cancelled":true}));
     };
     let draft = if resave.unwrap_or(false) {
-        if channel != "cnki" {
-            return Err(Failure::new("SOURCE_INVALID", "另存仅用于 CNKI Excel。"));
-        }
         let name = file
             .path()
             .file_name()
             .unwrap_or_default()
             .to_string_lossy();
-        cnki_excel::normalize(
+        cnki_excel::normalize_for_channel(
             &state.store.root,
             &task,
+            &channel,
             file.path(),
             &name,
             &options.encoding,

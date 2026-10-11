@@ -7,6 +7,7 @@ import type {
   SourceDownload,
   SourcePage,
   SourceWindowState,
+  SourceFlow,
 } from "@/types";
 import { callDesktop, type DesktopCommand } from "@/services/desktop";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,50 @@ const state = ref<SourceBrowserState | null>(null),
 const loading = ref(false),
   windowAction = ref("");
 const acquisitionProgress = ref("");
+const flowText = ref(""),
+  flowError = ref("");
+const exportReviewNote = ref("");
+const selectedExportReceipt = ref<Record<string, string>>({});
+const defaultFlow = (): SourceFlow => ({
+  channel: props.channel,
+  search_url: "",
+  input: "",
+  search_button: "",
+  result_rows: "",
+  result_title: "",
+  result_link: "",
+  result_total: "",
+  empty_result: "",
+  detail_title: "",
+  export_steps: [],
+});
+const savedFlow = computed(
+  () =>
+    state.value?.flows?.find((f) => f.channel === props.channel) ||
+    defaultFlow(),
+);
+const flowDirty = computed(() => {
+  try {
+    return (
+      JSON.stringify(JSON.parse(flowText.value || "{}")) !==
+      JSON.stringify(savedFlow.value)
+    );
+  } catch {
+    return true;
+  }
+});
+const acquisitions = computed(
+  () =>
+    state.value?.acquisitions?.filter(
+      (a) => a.session.site.channel === props.channel,
+    ) || [],
+);
+const sourceQueue = computed(() => state.value?.source_queue);
+const lastQueueResult = computed(
+  () => sourceQueue.value?.results[sourceQueue.value.results.length - 1],
+);
+const queueWorking = ref(false),
+  queueError = ref("");
 let queued = false,
   resetQueued = false,
   disposed = false;
@@ -59,6 +104,7 @@ onMounted(() => {
     "source-windows-changed",
     "source-download-started",
     "source-download-event",
+    "source-queue-changed",
   ]) {
     void listen(event, () => {
       if (state.value && !disposed) void load(false, true);
@@ -135,6 +181,12 @@ async function load(resetConfig = true, quiet = false) {
       const site = result.sites.find((s) => s.channel === channel);
       entry.value = site?.entry_url || "";
       origins.value = site?.download_origins.join("\n") || "";
+      flowText.value = JSON.stringify(
+        result.flows?.find((f) => f.channel === channel) || defaultFlow(),
+        null,
+        2,
+      );
+      flowError.value = "";
     }
   } finally {
     loading.value = false;
@@ -144,6 +196,104 @@ async function load(resetConfig = true, quiet = false) {
       resetQueued = false;
       void load(reset, true);
     }
+  }
+}
+async function saveFlow() {
+  flowError.value = "";
+  try {
+    const flow = JSON.parse(flowText.value) as SourceFlow;
+    flow.channel = props.channel;
+    const result = await props.run(
+      "save_source_flow",
+      { flow },
+      "已保存渠道流程，后续执行会核对实际页面文字。",
+    );
+    if (result) await load();
+  } catch {
+    flowError.value = "流程配置不是完整 JSON，请检查后保存。";
+  }
+}
+async function acquire(
+  action: "auto" | "capture" | "export",
+  window?: SourceWindowState,
+) {
+  if (windowAction.value || props.locked) return;
+  const id = props.task.id,
+    channel = props.channel;
+  windowAction.value = window?.label || "source-acquisition";
+  acquisitionProgress.value = "正在获取渠道来源…";
+  try {
+    const page = await props.run<SourcePage>(
+      "acquire_source",
+      { id, channel, action, label: window?.label || null },
+      "来源已保存；请核对原始文件或详情来源及重要缺项。",
+    );
+    if (
+      !disposed &&
+      props.task.id === id &&
+      props.channel === channel &&
+      page?.draft &&
+      page.draft.task_revision === props.task.revision
+    )
+      emit("preview", page, page.acquisition?.source_url || window?.url || "");
+    await load(false, true);
+  } finally {
+    windowAction.value = "";
+    acquisitionProgress.value = "";
+  }
+}
+async function recheck(operationId: string) {
+  await props.run(
+    "recheck_source_export",
+    {
+      id: props.task.id,
+      operationId,
+      downloadId: selectedExportReceipt.value[operationId] || null,
+    },
+    "已检查原下载回执；结果未知时不会重新导出。",
+  );
+  await load(false, true);
+}
+async function previewCapture(operationId: string) {
+  const id = props.task.id;
+  const page = await props.run<SourcePage>(
+    "preview_source_capture",
+    { id, operationId },
+    "已重新读取保存的详情来源；原文件字节已核对。",
+  );
+  if (
+    page &&
+    props.task.id === id &&
+    page.draft.task_revision === props.task.revision
+  )
+    emit("preview", page, page.acquisition?.source_url || "");
+}
+async function cancelExport(operationId: string) {
+  const result = await props.run(
+    "cancel_source_export",
+    { id: props.task.id, operationId, note: exportReviewNote.value },
+    "原导出记录已取消，文件与历史回执保留。",
+  );
+  if (result) {
+    exportReviewNote.value = "";
+    await load(false, true);
+  }
+}
+async function queueControl(action: "start" | "pause" | "resume" | "cancel") {
+  if (queueWorking.value && action !== "pause") return;
+  queueError.value = "";
+  if (action !== "pause") queueWorking.value = true;
+  try {
+    await callDesktop("source_queue_control", {
+      action,
+      owner: props.task.record.owner,
+      channel: props.channel,
+    });
+    await load(false, true);
+  } catch (e) {
+    queueError.value = (e as { message?: string }).message || String(e);
+  } finally {
+    if (action !== "pause") queueWorking.value = false;
   }
 }
 async function manage(window: SourceWindowState, close: boolean) {
@@ -178,7 +328,7 @@ async function save() {
           .filter(Boolean),
       },
     },
-    "数据库入口已保存；网站检索和导出由你在内置窗口操作。",
+    "数据库入口已保存；可在本篇窗口获取来源或执行原始导出。",
   );
   if (result && props.task.id === id && props.channel === channel) await load();
 }
@@ -186,7 +336,7 @@ async function open() {
   await props.run(
     "open_source_browser",
     { id: props.task.id, channel: props.channel },
-    "已打开或切回本篇来源窗口。请自行完成登录、检索与原始导出；下载由应用保存。",
+    "已打开或切回本篇来源窗口。请先完成机构登录；下载由应用保存。",
   );
   await load(false, true);
 }
@@ -256,7 +406,7 @@ async function preview(download: SourceDownload, resave = false) {
       >
     </div>
     <p class="text-[11px] leading-6 text-muted-foreground">
-      配置实际访问入口，在内置窗口自行登录、检索和导出。应用保存本篇的下载文件与来源，不把下载当作论文身份或交大归属确认。
+      登录数据库后，可以自动获取本篇来源，也可从详情页下载原文件。应用记录来源与缺项；论文身份、交大归属和本库是否缺失仍需分别核验。
     </p>
     <div v-if="channel === 'cnki'" class="space-y-2 rounded-md bg-muted/40 p-2">
       <Button
@@ -279,15 +429,15 @@ async function preview(download: SourceDownload, resave = false) {
         题录用于 AI 整理和模板填表。若网页可导出
         Excel/TXT，请优先下载原文件；文件直接保存到工作目录。
       </p>
-      <p
-        v-if="acquisitionProgress"
-        class="text-xs"
-        role="status"
-        aria-live="polite"
-      >
-        {{ acquisitionProgress }}
-      </p>
     </div>
+    <p
+      v-if="acquisitionProgress"
+      class="text-xs"
+      role="status"
+      aria-live="polite"
+    >
+      {{ acquisitionProgress }}
+    </p>
     <template v-if="state">
       <label class="field"
         >数据库入口<Input
@@ -326,6 +476,193 @@ async function preview(download: SourceDownload, resave = false) {
       <p v-if="changedSite" class="text-[11px] text-muted-foreground">
         先保存入口与下载来源，再打开窗口。
       </p>
+      <div class="space-y-2 rounded-md bg-muted/40 p-2">
+        <Button
+          size="sm"
+          :disabled="
+            locked || !!windowAction || !savedSite || changedSite || flowDirty
+          "
+          @click="acquire('auto')"
+          >检索并获取原始来源</Button
+        >
+        <p class="text-[11px] leading-5 text-muted-foreground">
+          先核对完整结果与唯一精确题名，再优先下载数据库原始文件。原导出不可用时保存详情真实字段供
+          AI
+          和模板使用，不作为原始导入文件。遇到登录、验证或不明确结果会停在当前篇。
+        </p>
+        <Button
+          size="sm"
+          variant="outline"
+          :disabled="
+            locked ||
+            queueWorking ||
+            !!windowAction ||
+            !savedSite ||
+            changedSite ||
+            flowDirty ||
+            (!!sourceQueue &&
+              ['running', 'paused', 'blocked', 'interrupted'].includes(
+                sourceQueue.status,
+              ))
+          "
+          @click="queueControl('start')"
+          >获取当前负责人全部未处理论文的来源</Button
+        >
+        <div v-if="sourceQueue" class="space-y-1 text-xs">
+          <p>
+            {{ sourceQueue.owner }} · {{ sourceQueue.channel }} ·
+            {{ sourceQueue.index }} / {{ sourceQueue.entries.length }} ·
+            {{
+              sourceQueue.status === "running"
+                ? "获取中"
+                : sourceQueue.status === "completed"
+                  ? "已结束"
+                  : sourceQueue.status === "cancelled"
+                    ? "已取消"
+                    : "已暂停，等待继续"
+            }}
+          </p>
+          <div class="flex gap-2">
+            <Button
+              v-if="sourceQueue.status === 'running'"
+              size="sm"
+              variant="outline"
+              :disabled="sourceQueue.pause_requested"
+              @click="queueControl('pause')"
+              >{{
+                sourceQueue.pause_requested ? "本篇结束后暂停" : "暂停队列"
+              }}</Button
+            >
+            <Button
+              v-if="
+                ['paused', 'blocked', 'interrupted'].includes(
+                  sourceQueue.status,
+                )
+              "
+              size="sm"
+              variant="outline"
+              :disabled="locked || queueWorking"
+              @click="queueControl('resume')"
+              >继续原队列</Button
+            >
+            <Button
+              v-if="
+                ['paused', 'blocked', 'interrupted'].includes(
+                  sourceQueue.status,
+                )
+              "
+              size="sm"
+              variant="outline"
+              :disabled="locked || queueWorking"
+              @click="queueControl('cancel')"
+              >取消剩余队列</Button
+            >
+          </div>
+          <p v-if="lastQueueResult?.error" class="text-muted-foreground">
+            {{ lastQueueResult?.error?.message }}
+          </p>
+        </div>
+        <p v-if="queueError" class="text-xs text-destructive">
+          {{ queueError }}
+        </p>
+      </div>
+      <details class="rounded-md border p-2">
+        <summary class="cursor-pointer text-[11px]">
+          渠道页面变化时调整自动步骤
+        </summary>
+        <p class="my-2 text-[11px] text-muted-foreground">
+          默认识别页面实际检索和导出文字。需要适配特定页面时，保存本渠道定位条件；search_url
+          可使用 {title} 和 {doi}，export_steps
+          填写实际控件与文字。配置不包含可执行脚本。
+        </p>
+        <Textarea
+          v-model="flowText"
+          :disabled="locked || !!windowAction"
+          class="min-h-48 font-mono text-xs"
+          aria-label="渠道自动步骤配置"
+        />
+        <p v-if="flowError" class="text-xs text-destructive">{{ flowError }}</p>
+        <Button
+          size="sm"
+          variant="outline"
+          :disabled="locked || !!windowAction || !savedSite || changedSite"
+          @click="saveFlow"
+          >保存渠道步骤</Button
+        >
+      </details>
+      <div
+        v-for="a in acquisitions"
+        :key="a.id"
+        class="rounded-md border p-2 text-[11px]"
+      >
+        <p>
+          {{ a.state === "captured" ? "详情来源" : "原始导出" }} ·
+          {{
+            {
+              export_pending: "请求已记录",
+              downloading: "正在下载",
+              completed: "已确认原下载",
+              unknown: "结果待确认",
+              failed: "本次未完成",
+              captured: "已保存，待选择记录",
+            }[a.state]
+          }}
+        </p>
+        <p v-if="a.error" class="text-muted-foreground">
+          {{ a.error.message }}
+        </p>
+        <select
+          v-if="a.state === 'unknown'"
+          v-model="selectedExportReceipt[a.id]"
+          class="h-8 w-full rounded-md border bg-background p-1"
+          aria-label="选择原会话下载文件"
+        >
+          <option :value="undefined">自动核对唯一原下载</option>
+          <option
+            v-for="d in downloads.filter(
+              (d) => d.session.id === a.session.id && d.state === 'completed',
+            )"
+            :key="d.id"
+            :value="d.id"
+          >
+            {{ d.original_name }}
+          </option>
+        </select>
+        <Button
+          v-if="!['failed', 'captured'].includes(a.state)"
+          size="sm"
+          variant="outline"
+          :disabled="!!windowAction"
+          @click="recheck(a.id)"
+          >检查原下载结果</Button
+        >
+        <Button
+          v-if="a.state === 'captured'"
+          size="sm"
+          variant="outline"
+          :disabled="locked || !!windowAction"
+          @click="previewCapture(a.id)"
+          >重新打开保存的详情来源</Button
+        >
+        <details v-if="a.state === 'unknown'" class="mt-2">
+          <summary class="cursor-pointer">原下载未完成，另行处理</summary>
+          <p class="my-2 text-muted-foreground">
+            先关闭原会话所有窗口并核对下载。如果原会话有已完成文件，应先采用它；取消仅保留历史记录，不删除文件、不修改论文状态。
+          </p>
+          <Input
+            v-model="exportReviewNote"
+            placeholder="填写原下载核对情况，至少 6 字"
+            :disabled="locked"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            :disabled="locked || exportReviewNote.trim().length < 6"
+            @click="cancelExport(a.id)"
+            >核对后取消原导出记录</Button
+          >
+        </details>
+      </div>
       <div
         v-if="windows.length"
         class="space-y-2 border-t pt-2"
@@ -361,6 +698,37 @@ async function preview(download: SourceDownload, resave = false) {
             窗口的入口或下载来源配置已改变，请使用已保存配置重新打开后下载。
           </p>
           <div class="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              :disabled="
+                locked ||
+                !!windowAction ||
+                window.downloading ||
+                !window.current_record ||
+                !window.current_site ||
+                changedSite ||
+                flowDirty ||
+                window.channel !== channel
+              "
+              @click="acquire('capture', window)"
+              >读取当前详情来源</Button
+            >
+            <Button
+              size="sm"
+              :disabled="
+                locked ||
+                !!windowAction ||
+                window.downloading ||
+                !window.current_record ||
+                !window.current_site ||
+                changedSite ||
+                flowDirty ||
+                window.channel !== channel
+              "
+              @click="acquire('export', window)"
+              >下载当前论文原始文件</Button
+            >
             <Button
               v-if="window.channel === 'cnki'"
               size="sm"
@@ -413,7 +781,7 @@ async function preview(download: SourceDownload, resave = false) {
           <p class="break-all">SHA256：{{ d.sha256 || "未确认" }}</p>
         </details>
         <Button
-          v-if="channel === 'cnki' && /\.(xls|xlsx)$/i.test(d.path)"
+          v-if="/\.(xls|xlsx)$/i.test(d.path)"
           size="sm"
           variant="outline"
           :disabled="
