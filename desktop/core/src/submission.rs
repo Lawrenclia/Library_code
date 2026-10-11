@@ -229,15 +229,7 @@ pub fn options(store: &Store, id: &str) -> Result<Value> {
     let task = store.task(id)?;
     if task.batch.is_some()
         || task.batch_recheck.is_some()
-        || matches!(
-            task.stage,
-            Stage::Uploaded
-                | Stage::Imported
-                | Stage::Pushed
-                | Stage::Claimed
-                | Stage::Unknown
-                | Stage::Completed
-        )
+        || store.latest_import_intent(id)?.is_some()
     {
         let original = recovery_payload(store, &task)?;
         let prepared = if original["submission_packet"].is_null() {
@@ -912,6 +904,16 @@ mod recovery_tests {
             "INVALID_TRANSITION"
         );
         assert!(store.unresolved(&task.id).unwrap().is_empty());
+    }
+    #[test]
+    fn completed_non_import_branch_does_not_require_an_upload_archive() {
+        let (_dir, store, mut task) = setup();
+        task.stage = Stage::Completed;
+        task.route = Route::NonSjtu;
+        store.save(&mut task, "non sjtu completed").unwrap();
+        let view = options(&store, &task.id).unwrap();
+        assert!(view["prepared"].is_null());
+        assert_eq!(view["choices"], json!([]));
     }
     #[test]
     fn recovery_adopts_the_preserved_packet_not_the_latest_material_selection() {
