@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import type { Task, SubmissionOptions, SubmissionPrepared } from "@/types";
 import type { DesktopCommand } from "@/services/desktop";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ const props = defineProps<{
     success?: string,
   ) => Promise<T | undefined>;
 }>();
+const materialLocked=computed(()=>!!props.task.batch || !!props.task.batch_recheck || ["uploaded","imported","pushed","claimed","unknown","completed"].includes(props.task.stage));
 const options = ref<SubmissionOptions | null>(null);
 const selected = ref("");
 const formatConfirmed=ref(false), fieldsComplete=ref(false), reviewProof=ref("");
@@ -63,7 +64,7 @@ async function load() {
 async function prepare() {
   const scope = options.value,
     recipe = selected.value;
-  if (!scope || !recipe || stale.value) return;
+  if (!scope || !recipe || stale.value || materialLocked.value) return;
   const result = await props.run<SubmissionPrepared>(
     "prepare_submission",
     { id: scope.sa_id, recipe, taskRevision: scope.task_revision },
@@ -82,7 +83,7 @@ async function prepare() {
   options.value = { ...scope, task_revision: result.task_revision };
 }
 async function reviewMaterial() {
-  const saved=prepared.value;if(!saved||stale.value)return;
+  const saved=prepared.value;if(!saved||stale.value||materialLocked.value)return;
   const result=await props.run<SubmissionPrepared>("review_submission",{id:props.task.id,packetId:saved.packet.id,taskRevision:saved.task_revision,proof:reviewProof.value,formatConfirmed:formatConfirmed.value,fieldsComplete:fieldsComplete.value},"材料核验已保存；上传前仍会重新查本库和 SA。");
   if(!result||result.packet.id!==saved.packet.id||result.task_revision!==props.task.revision)return;
   prepared.value=result;stale.value=false;
@@ -149,7 +150,7 @@ async function exportBundle() {
             v-model="selected"
             type="radio"
             :value="choice.recipe"
-            :disabled="locked || stale || !choice.usable"
+            :disabled="locked || materialLocked || stale || !choice.usable"
             class="mt-1"
           />
           <span class="min-w-0 flex-1">
@@ -195,7 +196,7 @@ async function exportBundle() {
         </label>
         <Button
           size="sm"
-          :disabled="locked || stale || !selected"
+          :disabled="locked || materialLocked || stale || !selected"
           @click="prepare"
           >保存本篇提交材料</Button
         >
@@ -204,6 +205,7 @@ async function exportBundle() {
         此篇还没有可选择的材料。先获取原始导出，或按实际模板生成材料。
       </p>
     </template>
+    <p v-if="materialLocked" class="mt-2 leading-6 text-muted-foreground">提交材料已锁定。后续导入、推送及恢复使用原文件和原操作记录，不能更换材料。</p>
     <p v-if="stale" class="mt-2 text-amber-700 dark:text-amber-400">
       论文资料已更新，请刷新材料并重新核对。
     </p>
@@ -229,10 +231,10 @@ async function exportBundle() {
       <div v-if="prepared.packet.material.kind !== 'original'" class="my-3 space-y-2 rounded-md bg-muted/40 p-3">
         <p class="font-medium">上传前核对本篇材料</p>
         <p>原始导出须仅含一条记录；多篇、其他工作表和无法识别边界的普通文本会被拦截。请核对实际渠道格式及作者、题名、发表时间、来源出版物和该类型要求的其他字段。</p>
-        <label class="flex gap-2"><input v-model="formatConfirmed" type="checkbox" :disabled="locked || stale" />已核对文件格式符合本渠道实际导入要求</label>
-        <label class="flex gap-2"><input v-model="fieldsComplete" type="checkbox" :disabled="locked || stale" />本篇必要字段完整，作者与发表信息已核对</label>
-        <textarea v-model="reviewProof" aria-label="材料核对依据" placeholder="填写实际导出方式、核对字段与依据" :disabled="locked || stale" class="min-h-20 w-full rounded border bg-background p-2" />
-        <Button size="sm" :disabled="locked || stale || !formatConfirmed || !fieldsComplete || !reviewProof.trim()" @click="reviewMaterial">保存材料核验</Button>
+        <label class="flex gap-2"><input v-model="formatConfirmed" type="checkbox" :disabled="locked || materialLocked || stale" />已核对文件格式符合本渠道实际导入要求</label>
+        <label class="flex gap-2"><input v-model="fieldsComplete" type="checkbox" :disabled="locked || materialLocked || stale" />本篇必要字段完整，作者与发表信息已核对</label>
+        <textarea v-model="reviewProof" aria-label="材料核对依据" placeholder="填写实际导出方式、核对字段与依据" :disabled="locked || materialLocked || stale" class="min-h-20 w-full rounded border bg-background p-2" />
+        <Button size="sm" :disabled="locked || materialLocked || stale || !formatConfirmed || !fieldsComplete || !reviewProof.trim()" @click="reviewMaterial">保存材料核验</Button>
       </div>
       <Button
         variant="outline"

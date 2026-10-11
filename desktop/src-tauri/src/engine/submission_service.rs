@@ -10,8 +10,6 @@ impl Engine {
         mut t: Task,
         _extra: Value,
     ) -> Result<Value> {
-        let common = library_core::submission::payload(&self.store, &t)?;
-
         let attempts = self.store.unresolved(id)?;
         if attempts.iter().any(|a| {
             serde_json::from_str::<Value>(a["data"].as_str().unwrap_or("{}"))
@@ -40,7 +38,11 @@ impl Engine {
                     .map(|saved| saved["payload"].clone())
             })
             .transpose()?;
-        let original = original_payload.as_ref().unwrap_or(&common);
+        let common = match original_payload {
+            Some(saved) => saved,
+            None => library_core::submission::recovery_payload(&self.store, &t)?,
+        };
+        let original = &common;
         let original_raw = library_core::submission::read_archive(&self.store, &t, original)?;
         let batch_recheck = if t.batch_recheck.is_some() {
             if !attempts.is_empty() {

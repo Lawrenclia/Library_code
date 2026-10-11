@@ -12,7 +12,9 @@ impl Engine {
         extra: Value,
     ) -> Result<Value> {
         let a = t.artifact.as_ref();
-        let common = if action.starts_with("import_") {
+        let common = if matches!(action, "import_submit" | "import_push") {
+            library_core::submission::recovery_payload(&self.store, &t)?
+        } else if action == "import_upload" {
             library_core::submission::payload(&self.store, &t)?
         } else {
             json!({"sa_id":id,"instructions":format!("SA补充-{id}"),"candidate":a.map(|a|serde_json::to_value(&a.candidate).unwrap())})

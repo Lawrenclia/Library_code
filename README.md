@@ -4,7 +4,7 @@
 
 **GitHub 在线编译 EXE：** 打开 [Windows EXE](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml)，点击 **Run workflow**，保留默认源码分支，编译成功后在 **Artifacts** 下载安装包。完整步骤见 [GitHub 编译说明](docs/GITHUB_ACTIONS_BUILD.md)。
 
-当前新版为 **0.1.9，Rust + TypeScript + Tauri 2**，位于主分支 `desktop`。新增按渠道上传、材料单篇范围检查、原批次回读与独立备注保存，见 [0.1.9 自测说明](docs/TAURI_TESTING_0_1_9.md)。非 WOS 渠道只在实际页面符合运行时契约时执行；网站表单尚待用户自测。WOS 的 524 暂停和物理 A 列空白输入规则保留。Python 是保留的旧版，新桌面 EXE 不依赖它。
+当前新版为 **0.1.10，Rust + TypeScript + Tauri 2**，位于主分支 `desktop`。新增上传后材料锁定和原意图恢复，见 [0.1.10 自测说明](docs/TAURI_TESTING_0_1_10.md)。此前按渠道上传、单篇范围检查和独立备注保存见 [0.1.9 自测说明](docs/TAURI_TESTING_0_1_9.md)。非 WOS 渠道只在实际页面符合运行时契约时执行；网站表单尚待用户自测。WOS 的 524 暂停和物理 A 列空白输入规则保留。Python 是保留的旧版，新桌面 EXE 不依赖它。
 
 **0.1.9 云端安装包已生成：** [Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38106568395) 全部步骤成功，下载 Artifact `Windows-EXE-0.1.9-ec31b672`。对应业务源码为 `ec31b672`，实际 EXE 大小和 SHA256 已核对。仅编译打包，未运行测试或真实网站。安装新版后重新导入名单，使 A 列空白筛选对已有工作目录生效。
 

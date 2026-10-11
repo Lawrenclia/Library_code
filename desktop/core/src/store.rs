@@ -948,6 +948,24 @@ impl Store {
         self.connect()?.execute("UPDATE attempts SET state=?,data=json_set(data,'$.response',json(?)) WHERE id=? AND state='intent'",params![state,data.to_string(),id])?;
         Ok(())
     }
+    /// Read the original import intent even after its result has been verified.
+    /// A newer browser draft, material selection or response never replaces it.
+    pub fn latest_import_intent(&self, id: &str) -> Result<Option<Value>> {
+        let raw: Option<String> = self.connect()?.query_row(
+            "SELECT data FROM attempts WHERE task_id=? AND action IN ('import_upload','import_submit','import_push') AND state IN ('intent','unknown','verified') ORDER BY created DESC,rowid DESC LIMIT 1",
+            [id], |r|r.get(0)).optional()?;
+        raw.map(|raw| {
+            let saved: Value = serde_json::from_str(&raw)?;
+            if !saved["payload"].is_object() {
+                return Err(Failure::new(
+                    "REMOTE_RESULT_UNKNOWN",
+                    "原导入意图不完整，不能从当前表单重新生成。",
+                ));
+            }
+            Ok(saved["payload"].clone())
+        })
+        .transpose()
+    }
     pub fn unresolved(&self, id: &str) -> Result<Vec<Value>> {
         let db = self.connect()?;
         let mut q = db.prepare(

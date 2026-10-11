@@ -37,6 +37,19 @@ fn eligible(store: &Store, task: &Task) -> Result<()> {
     }
     Ok(())
 }
+fn editable(store: &Store, task: &Task) -> Result<()> {
+    eligible(store, task)?;
+    if task.batch.is_some()
+        || task.batch_recheck.is_some()
+        || matches!(
+            task.stage,
+            Stage::Uploaded | Stage::Imported | Stage::Pushed | Stage::Claimed
+        )
+    {
+        return Err(Failure::new("INVALID_TRANSITION","已经发出上传或保留原批次，提交材料已锁定；先回读原操作，不能换文件或重新核验为其他材料。"));
+    }
+    Ok(())
+}
 fn product(audit: &Value, evidence: &Evidence) -> Option<Product> {
     if audit["schema"] != "template_material_v1" {
         return None;
@@ -258,7 +271,7 @@ pub fn options(store: &Store, id: &str) -> Result<Value> {
 }
 pub fn prepare(store: &Store, id: &str, recipe: &str, expected_revision: i64) -> Result<Value> {
     let mut task = store.task(id)?;
-    eligible(store, &task)?;
+    editable(store, &task)?;
     if task.revision != expected_revision {
         return Err(fail("论文资料已更新，请刷新可用材料后选择。"));
     }
@@ -399,7 +412,7 @@ pub fn review_material(
     complete: bool,
 ) -> Result<Value> {
     let mut task = store.task(id)?;
-    eligible(store, &task)?;
+    editable(store, &task)?;
     if task.revision != revision {
         return Err(fail("任务变化，请刷新材料。"));
     }
@@ -529,6 +542,34 @@ pub fn payload(store: &Store, task: &Task) -> Result<Value> {
         )
     }
 }
+/// Recover from persisted intents, including verified uploads after a restart.
+pub fn recovery_payload(store: &Store, task: &Task) -> Result<Value> {
+    if let Some(saved) = store.latest_import_intent(&task.id)? {
+        if saved["sa_id"] != task.id || saved["instructions"] != format!("SA补充-{}", task.id) {
+            return Err(Failure::new(
+                "INPUT_CHANGED",
+                "原操作与当前 SA 任务不对应，未采用。",
+            ));
+        }
+        return Ok(saved);
+    }
+    // Imported legacy checkpoints predate the local intent store. Only their
+    // native WOS archive can provide this compatibility path; never rebuild a
+    // new-format submission from today's material fields.
+    if current(store, &task.id)?.is_some() {
+        return Err(Failure::new(
+            "REMOTE_RESULT_UNKNOWN",
+            "缺少原提交意图，不能从当前材料重新生成；请人工核对原批次。",
+        ));
+    }
+    let artifact = task
+        .artifact
+        .as_ref()
+        .ok_or_else(|| Failure::new("FILE_INVALID", "缺少原导入归档或意图。"))?;
+    Ok(
+        json!({"sa_id":task.id,"instructions":format!("SA补充-{}",task.id),"candidate":artifact.candidate}),
+    )
+}
 /// Recovery verifies the exact saved bytes without requiring an editable stage.
 pub fn read_archive(store: &Store, task: &Task, payload: &Value) -> Result<Vec<u8>> {
     let Some(value) = payload.get("submission_packet").filter(|v| !v.is_null()) else {
@@ -539,7 +580,17 @@ pub fn read_archive(store: &Store, task: &Task, payload: &Value) -> Result<Vec<u
         || packet.input_hash != task.input_hash
         || packet.record.fingerprint() != task.record.fingerprint()
         || packet.facts != materials::facts(&store.root, task)?
-        || current(store, &task.id)?.is_none_or(|p| json!(p) != json!(packet))
+        || !task.evidence.iter().any(|e| {
+            e.kind == "submission_packet"
+                && serde_json::from_str::<Value>(&e.text).is_ok_and(|v| {
+                    v["schema"] == "submission_packet_v1" && v["packet"] == json!(packet)
+                })
+        })
+        || payload["sa_id"] != task.id
+        || payload["instructions"] != packet.instructions
+        || payload
+            .get("contentSha")
+            .is_some_and(|v| *v != json!(packet.material.sha256))
         || payload["candidate"]["sha256"] != packet.material.sha256
         || payload["channel"] != packet.channel
     {
@@ -638,4 +689,148 @@ pub fn batch_source(channel: &str) -> Option<&'static str> {
         "general" => "手工",
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    fn setup() -> (tempfile::TempDir, Store, Task) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path()).unwrap();
+        let record:Record=serde_json::from_value(json!({"row":2,"owner":"负责人","sa_id":"frozen-sa","title":"Paper","doi":"","wos":"","staff_id":"001","matches":0,"item_ids":"","mark":"待处理","reason":"","done":false,"skipped":false,"source":""})).unwrap();
+        store.import(vec![record], "input".into()).unwrap();
+        let task = store.task("frozen-sa").unwrap();
+        (dir, store, task)
+    }
+    #[test]
+    fn original_verified_intent_survives_restart_and_new_unsent_draft() {
+        let (dir, store, mut task) = setup();
+        let original = json!({"sa_id":task.id,"instructions":"SA补充-frozen-sa","channel":"cnki","candidate":{"title":"Original paper","sha256":"original"},"filename":"SA-cnki-frozen-sa.txt"});
+        let attempt = store
+            .begin_attempt_with_payload(&mut task, "import_upload", original.clone())
+            .unwrap();
+        task.running = false;
+        task.stage = Stage::Uploaded;
+        store
+            .finish_attempt(
+                &mut task,
+                &attempt,
+                "verified",
+                json!({"uploaded":true}),
+                "uploaded",
+            )
+            .unwrap();
+        let later = store
+            .begin_attempt_with_payload(
+                &mut task,
+                "import_submit",
+                json!({"candidate":{"title":"New draft"}}),
+            )
+            .unwrap();
+        task.running = false;
+        store
+            .finish_attempt(&mut task, &later, "not_sent", json!({}), "not_sent")
+            .unwrap();
+        drop(store);
+        let reopened = Store::new(dir.path()).unwrap();
+        assert_eq!(
+            recovery_payload(&reopened, &reopened.task(&task.id).unwrap()).unwrap(),
+            original
+        );
+    }
+    #[test]
+    fn material_cannot_be_reselected_or_reviewed_after_upload() {
+        let (_dir, store, mut task) = setup();
+        task.stage = Stage::Uploaded;
+        task.batch = Some(json!({"uploaded":true}));
+        store.save(&mut task, "uploaded").unwrap();
+        assert_eq!(
+            prepare(&store, &task.id, "original-export", task.revision)
+                .unwrap_err()
+                .code,
+            "INVALID_TRANSITION"
+        );
+        assert_eq!(
+            review_material(
+                &store,
+                &task.id,
+                "new-packet",
+                task.revision,
+                "proof",
+                true,
+                true
+            )
+            .unwrap_err()
+            .code,
+            "INVALID_TRANSITION"
+        );
+        assert!(store.unresolved(&task.id).unwrap().is_empty());
+    }
+    #[test]
+    fn recovery_adopts_the_preserved_packet_not_the_latest_material_selection() {
+        let (dir, store, mut task) = setup();
+        let bytes = b"original source bytes";
+        let recipe = hash(b"original product");
+        let folder = dir.path().join("materials/products").join(&recipe);
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("original.txt");
+        std::fs::write(&file, bytes).unwrap();
+        let packet = Packet {
+            id: "original-packet".into(),
+            sa_id: task.id.clone(),
+            input_hash: task.input_hash.clone(),
+            record: task.record.clone(),
+            facts: materials::facts(&store.root, &task).unwrap(),
+            material: Product {
+                sa_id: task.id.clone(),
+                recipe,
+                kind: "original_pending".into(),
+                path: file.to_string_lossy().into(),
+                sha256: hash(bytes),
+                audit: folder.join("missing-audit.json").to_string_lossy().into(),
+                validation: json!({"ready":false}),
+                reused: false,
+            },
+            channel: "cnki".into(),
+            channel_label: "CNKI 数据导入 (Excel/Txt)".into(),
+            work_type: None,
+            organisation: "上海交通大学".into(),
+            instructions: "SA补充-frozen-sa".into(),
+            created: now(),
+        };
+        for p in [packet.clone(), {
+            let mut p = packet.clone();
+            p.id = "later-selection".into();
+            p
+        }] {
+            task.evidence.push(Evidence {
+                id: uuid::Uuid::new_v4().to_string(),
+                kind: "submission_packet".into(),
+                source: "local".into(),
+                text: json!({"schema":"submission_packet_v1","packet":p}).to_string(),
+                created: now(),
+            });
+        }
+        task.stage = Stage::Unknown;
+        store.save(&mut task, "unknown").unwrap();
+        let payload = json!({"sa_id":task.id,"instructions":packet.instructions,"channel":packet.channel,"candidate":{"sha256":packet.material.sha256},"contentSha":packet.material.sha256,"submission_packet":packet});
+        assert_eq!(read_archive(&store, &task, &payload).unwrap(), bytes);
+        std::fs::write(&file, b"changed bytes").unwrap();
+        assert_eq!(
+            read_archive(&store, &task, &payload).unwrap_err().code,
+            "SUBMISSION_CHANGED"
+        );
+    }
+    #[test]
+    fn mismatched_original_sa_intent_is_not_rebuilt_from_current_fields() {
+        let (_dir, store, mut task) = setup();
+        let saved = json!({"sa_id":"other-sa","instructions":"SA补充-other-sa"});
+        store
+            .begin_attempt_with_payload(&mut task, "import_upload", saved)
+            .unwrap();
+        assert_eq!(
+            recovery_payload(&store, &task).unwrap_err().code,
+            "INPUT_CHANGED"
+        );
+    }
 }
