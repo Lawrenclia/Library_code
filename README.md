@@ -6,7 +6,7 @@
 
 当前新版为 **0.1.8，Rust + TypeScript + Tauri 2**，位于主分支 `desktop`。新增 RIS 完整题录读取，区分来源整理格式与平台上传格式，见 [0.1.8 自测说明](docs/TAURI_TESTING_0_1_8.md)。WOS 的 Cloudflare 524 等站点故障和最终页面超时保留队列当前位置，见 [0.1.7 自测说明](docs/TAURI_TESTING_0_1_7.md)。名单仍仅载入 Excel A 列为空的行，见 [名单规则](docs/TAURI_TESTING_0_1_6.md)。Python 是保留的旧版，新桌面 EXE 不依赖它；当前业务仍待自测。
 
-**已核对的 0.1.7 云端安装包：** [Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38101128343) 全部步骤成功，下载 Artifact `Windows-EXE-0.1.7-76948020`。源码为 `7694802`，实际 EXE 的版本、大小和 SHA256 已核对；该历史包不包含 0.1.8 的来源读取更新。最新源码仍按上方工作流编译，只编译打包，业务流程由用户自测。安装新版后重新导入名单，使 A 列空白筛选对已有工作目录生效。
+**0.1.8 云端安装包已生成：** [Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38102276931) 全部步骤成功，下载 Artifact `Windows-EXE-0.1.8-112a539f`。源码为 `112a539`，实际 EXE 的版本、大小和 SHA256 已核对；本轮只编译打包，业务流程由用户自测。安装新版后重新导入名单，使 A 列空白筛选对已有工作目录生效。
 
 新增“流程与连接”总览，后端已拆分服务并统一操作、浏览器和渠道注册。结构与扩展规则见 [完整框架说明](docs/FRAMEWORK.md)。已登记渠道与实际自动能力分开显示，真实 WOS/机构后台仍待现场验收。
 
