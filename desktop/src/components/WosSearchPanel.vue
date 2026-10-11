@@ -25,7 +25,9 @@ const searches = computed(() => {
           ? "文献页已定位，下载另行确认"
           : last.data.error?.code === "NO_RESULT"
             ? "本次检索未定位文献，仍需核验"
-            : "本次检索失败"
+            : last.data.error?.code === "PAUSED"
+              ? "本次检索已暂停，原任务待继续"
+              : "本次检索失败"
         : labels[last.phase] || "结果尚未确认";
     const source = [...events].reverse().find((e) => e.source_url)?.source_url;
     return { id, events, last, context, outcome, source };

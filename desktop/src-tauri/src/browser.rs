@@ -3,12 +3,15 @@ use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Arc, Mutex},
-    time::Duration,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
 };
 use tauri::{
     webview::{DownloadEvent, NewWindowResponse},
-    AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 use tokio::sync::oneshot;
 use url::Url;
@@ -359,12 +362,66 @@ impl Browser {
         }
         Ok(response["data"].clone())
     }
+    async fn navigate_wos_search(
+        &self,
+        app: &AppHandle,
+        w: &WebviewWindow,
+        origin: &str,
+        payload: &Value,
+        pause: &AtomicBool,
+    ) -> Result<()> {
+        check_wos_pause(pause)?;
+        let previous = self
+            .execute(app, "wos", "wos_read_search_page", payload.clone(), 3)
+            .await
+            .ok()
+            .and_then(|d| d["document_token"].as_str().map(str::to_owned));
+        check_wos_pause(pause)?;
+        w.navigate(format!("{origin}/wos/woscc/basic-search").parse().unwrap())
+            .map_err(Failure::storage)?;
+        let deadline = Instant::now() + Duration::from_secs(25);
+        while Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            check_wos_pause(pause)?;
+            let url = w.url().map_err(Failure::storage)?;
+            if !is_wos(&url) || url.origin().ascii_serialization() != origin {
+                return Err(Failure::new(
+                    "AUTH_REQUIRED",
+                    "检索页导航离开 WOS，请先完成机构访问。",
+                ));
+            }
+            match self
+                .execute(app, "wos", "wos_read_search_page", payload.clone(), 3)
+                .await
+            {
+                Ok(data)
+                    if data["ready"] == true
+                        && data["document_token"]
+                            .as_str()
+                            .is_some_and(|token| Some(token) != previous.as_deref()) =>
+                {
+                    return Ok(())
+                }
+                Ok(_) => {}
+                Err(e) if e.code == "PAGE_TIMEOUT" || e.code == "REPLY_EXPIRED" => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Err(Failure::new(
+            "PAGE_TIMEOUT",
+            "WOS 新检索页和单行表单尚未加载完成，未提交查询。",
+        ))
+    }
     pub async fn search(
         &self,
         app: &AppHandle,
         payload: Value,
         journal: &library_core::wos_search::Journal,
+        pause: &AtomicBool,
     ) -> Result<Value> {
+        let started = Instant::now();
+        check_wos_pause(pause)?;
+        wos_progress(app, &payload, "preparing", started);
         let w = app
             .get_webview_window("wos")
             .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "请打开 WOS 并完成机构访问。"))?;
@@ -378,18 +435,16 @@ impl Browser {
         let origin = u.origin().ascii_serialization();
         let path = u.path().trim_end_matches('/');
         if ![
-            "/wos",
             "/wos/woscc/basic-search",
             "/wos/woscc/advanced-search",
             "/wos/woscc/fielded-search",
         ]
         .contains(&path)
         {
-            w.navigate(format!("{origin}/wos/woscc/basic-search").parse().unwrap())
-                .map_err(Failure::storage)?;
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            self.navigate_wos_search(app, &w, &origin, &payload, pause)
+                .await?;
         }
-        let end = now() + 120000;
+        let end = Instant::now() + Duration::from_secs(120);
         let mut start_payload = payload.clone();
         start_payload["defer_click"] = true.into();
         let start = self
@@ -398,9 +453,9 @@ impl Browser {
         let start = match start {
             Ok(value) => value,
             Err(e) if e.message.contains("保留上一条零结果") => {
-                w.navigate(format!("{origin}/wos/woscc/basic-search").parse().unwrap())
-                    .map_err(Failure::storage)?;
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                check_wos_pause(pause)?;
+                self.navigate_wos_search(app, &w, &origin, &payload, pause)
+                    .await?;
                 self.execute(app, "wos", "wos_start_search", start_payload, 35)
                     .await?
             }
@@ -440,11 +495,40 @@ impl Browser {
         // The deferred click is issued outside the result callback: navigation can destroy
         // the JavaScript document without destroying the desktop command channel.
         let expected_command = serde_json::to_string(&context["command_id"])?;
+        if pause.load(Ordering::SeqCst) {
+            let _ = w.eval(format!("if(window.__wosNativeSearch?.id==={expected_command})delete window.__wosNativeSearch;"));
+            return Err(Failure::new(
+                "PAUSED",
+                "WOS 检索已暂停，原任务保留待继续，没有提交本次检索或导出。",
+            ));
+        }
         w.eval(format!("if(window.__wosNativeSearch?.id==={expected_command}){{const p=window.__wosNativeSearch;delete window.__wosNativeSearch;if(typeof p.submit==='function')p.submit();}}"))
             .map_err(Failure::storage)?;
-        let mut navigated = false;
-        while now() < end {
-            tokio::time::sleep(Duration::from_millis(700)).await;
+        let mut navigation_target: Option<Url> = None;
+        let mut last_progress = Instant::now() - Duration::from_secs(3);
+        while Instant::now() < end {
+            check_wos_pause(pause)?;
+            // Fast initial probes, then less frequent DOM work on a slow page.
+            let delay = if started.elapsed().as_secs() < 8 {
+                500
+            } else {
+                1500
+            };
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            check_wos_pause(pause)?;
+            if last_progress.elapsed() >= Duration::from_secs(2) {
+                wos_progress(
+                    app,
+                    &payload,
+                    if navigation_target.is_some() {
+                        "opening_record"
+                    } else {
+                        "waiting_results"
+                    },
+                    started,
+                );
+                last_progress = Instant::now();
+            }
             let current = w.url().map_err(Failure::storage)?;
             if !is_wos(&current) || current.origin().ascii_serialization() != origin {
                 return Err(Failure::new(
@@ -460,6 +544,35 @@ impl Browser {
                 Err(e) if e.code == "PAGE_TIMEOUT" => continue,
                 Err(e) => return Err(e),
             };
+            check_wos_pause(pause)?;
+            // WebView navigation completes after navigate() returns. Until the
+            // expected document mounts, the previous list/record is not a result.
+            if let Some(expected) = &navigation_target {
+                match data["state"].as_str() {
+                    Some("record")
+                        if !data["record_url"]
+                            .as_str()
+                            .and_then(|s| Url::parse(s).ok())
+                            .is_some_and(|u| same_wos_record(expected, &u)) =>
+                    {
+                        continue
+                    }
+                    Some("single") => {
+                        if data["navigate_url"]
+                            .as_str()
+                            .and_then(|s| Url::parse(s).ok())
+                            .is_some_and(|u| same_wos_record(expected, &u))
+                        {
+                            continue;
+                        }
+                        return Err(Failure::new(
+                            "IDENTITY_CONFLICT",
+                            "导航期间 WOS 唯一目标发生变化，未再次打开或导出。",
+                        ));
+                    }
+                    _ => {}
+                }
+            }
             if data["state"] != "loading" {
                 journal.record("observed_result", Some(current.as_str()), data.clone())?;
             }
@@ -483,12 +596,6 @@ impl Browser {
                     return Ok(data);
                 }
                 Some("single") => {
-                    if navigated {
-                        return Err(Failure::new(
-                            "PAGE_UNSUPPORTED",
-                            "打开目标后仍停在结果列表。",
-                        ));
-                    }
                     let url = data["navigate_url"]
                         .as_str()
                         .and_then(|s| Url::parse(s).ok())
@@ -502,8 +609,8 @@ impl Browser {
                             "目标链接不是核心合集的单篇 WOS 记录。",
                         ));
                     }
-                    w.navigate(url).map_err(Failure::storage)?;
-                    navigated = true;
+                    w.navigate(url.clone()).map_err(Failure::storage)?;
+                    navigation_target = Some(url);
                 }
                 _ => return Err(Failure::new("PAGE_UNSUPPORTED", "WOS 返回未知结果状态。")),
             }
@@ -520,6 +627,8 @@ impl Browser {
         task: &library_core::Task,
         payload: Value,
     ) -> Result<()> {
+        let started = Instant::now();
+        wos_progress(app, &payload, "preparing_export", started);
         let prepared = self
             .execute(app, "wos", "wos_prepare_export", payload.clone(), 35)
             .await?;
@@ -553,7 +662,10 @@ impl Browser {
                 sender: tx,
             });
         }
-        if let Err(e) = self.execute(app, "wos", "wos_download", payload, 35).await {
+        if let Err(e) = self
+            .execute(app, "wos", "wos_download", payload.clone(), 35)
+            .await
+        {
             if let Some(c) = self.capture.lock().unwrap().take() {
                 store.abandon_unrequested_download(&c.receipt.id)?;
             }
@@ -562,7 +674,19 @@ impl Browser {
             }
             return Err(e);
         }
-        let result = tokio::time::timeout(Duration::from_secs(40), rx).await;
+        wos_progress(app, &payload, "waiting_download", started);
+        tokio::pin!(rx);
+        // A requested download keeps its receipt even if the user pauses; no
+        // repeated export or early success is inferred from the progress events.
+        let result = tokio::time::timeout(Duration::from_secs(40), async {
+            loop {
+                match tokio::time::timeout(Duration::from_secs(2), &mut rx).await {
+                    Ok(result) => break result,
+                    Err(_) => wos_progress(app, &payload, "waiting_download", started),
+                }
+            }
+        })
+        .await;
         if let Some(c) = self.capture.lock().unwrap().take() {
             store.abandon_unrequested_download(&c.receipt.id)?;
         }
@@ -591,6 +715,28 @@ impl Browser {
         store.recover_native_download(&task.id)?;
         Ok(())
     }
+}
+fn check_wos_pause(pause: &AtomicBool) -> Result<()> {
+    if pause.load(Ordering::SeqCst) {
+        return Err(Failure::new(
+            "PAUSED",
+            "WOS 检索已暂停，原任务保留待继续，没有重新提交检索或导出。",
+        ));
+    }
+    Ok(())
+}
+fn same_wos_record(a: &Url, b: &Url) -> bool {
+    let path = |u: &Url| {
+        u.path()
+            .replace("%3A", ":")
+            .replace("%3a", ":")
+            .trim_end_matches('/')
+            .to_owned()
+    };
+    core_record(a) && core_record(b) && a.origin() == b.origin() && path(a) == path(b)
+}
+fn wos_progress(app: &AppHandle, payload: &Value, phase: &str, started: Instant) {
+    let _ = app.emit_to("main", "wos-progress", json!({"task_id":payload["sa_id"],"phase":phase,"elapsed_seconds":started.elapsed().as_secs()}));
 }
 fn page_error(message: &str) -> Failure {
     let code = if message.contains("未找到记录") {

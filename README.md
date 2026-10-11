@@ -4,7 +4,7 @@
 
 **GitHub 在线编译 EXE：** 打开 [Windows EXE](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml)，点击 **Run workflow**，保留默认源码分支，编译成功后在 **Artifacts** 下载安装包。完整步骤见 [GitHub 编译说明](docs/GITHUB_ACTIONS_BUILD.md)。
 
-当前新版为 **0.1.4，Rust + TypeScript + Tauri 2**，位于主分支 `desktop`。新增 CNKI Excel 应用内另存并保留原件和回执，使用步骤见 [0.1.4 自测说明](docs/TAURI_TESTING_0_1_4.md)。Python 是保留的旧版，新桌面 EXE 不依赖它；当前业务仍待自测。
+当前新版为 **0.1.5，Rust + TypeScript + Tauri 2**，位于主分支 `desktop`。修复 WOS 等待期间的界面阻塞、重复状态读取和旧页面过渡误判，使用步骤见 [0.1.5 自测说明](docs/TAURI_TESTING_0_1_5.md)。保留 CNKI Excel 应用内另存及原件回执。Python 是保留的旧版，新桌面 EXE 不依赖它；当前业务仍待自测。
 
 **0.1.4 主分支云端安装包已生成：** [本次 Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38064502881) 全部步骤成功，在 **Artifacts** 下载 `Windows-EXE-0.1.4-f19a13cf` 后解压并安装。源码为主分支合并提交 `f19a13c`，包内包含源码提交和 SHA256，实际安装包哈希已核对；本轮只编译打包，业务流程仍由用户自测。
 

@@ -7,6 +7,12 @@ use std::path::{Path, PathBuf};
 pub struct Store {
     pub root: PathBuf,
 }
+pub struct TaskView {
+    pub task: Task,
+    pub searches: Vec<Value>,
+    pub attempts: Vec<Value>,
+    pub pending_input: Option<crate::versions::Proposal>,
+}
 fn validate_roster_records(records: &[Record]) -> Result<()> {
     let mut ids = std::collections::BTreeMap::new();
     for record in records {
@@ -57,6 +63,63 @@ impl Store {
         let mut q = db.prepare("SELECT data FROM tasks ORDER BY rowid")?;
         let rows = q.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
+    }
+    /// Read complete task diagnostics in one snapshot and four queries, rather
+    /// than opening three more database connections for every roster entry.
+    pub fn task_views(&self) -> Result<Vec<TaskView>> {
+        use std::collections::HashMap;
+        let mut db = self.connect()?;
+        let tx = db.transaction()?;
+        let tasks: Vec<Task> = {
+            let mut q = tx.prepare("SELECT data FROM tasks ORDER BY rowid")?;
+            let rows = q.query_map([], |r| r.get::<_, String>(0))?;
+            rows.map(|r| Ok(serde_json::from_str(&r?)?))
+                .collect::<Result<_>>()?
+        };
+        let mut searches: HashMap<String, Vec<Value>> = HashMap::new();
+        {
+            let mut q = tx.prepare("SELECT e.task_id,e.seq,e.data FROM events e JOIN tasks t ON t.id=e.task_id WHERE e.kind='wos_search_trace' ORDER BY e.seq")?;
+            for row in q.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })? {
+                let (id, seq, raw) = row?;
+                let mut value: Value = serde_json::from_str(&raw)?;
+                value["event_id"] = json!(seq);
+                searches.entry(id).or_default().push(value);
+            }
+        }
+        let mut attempts: HashMap<String, Vec<Value>> = HashMap::new();
+        {
+            let mut q = tx.prepare("SELECT a.task_id,a.id,a.action,a.data FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.state IN ('intent','unknown') ORDER BY a.rowid")?;
+            for row in q.query_map([], |r| Ok((r.get::<_, String>(0)?, json!({"id":r.get::<_,String>(1)?,"action":r.get::<_,String>(2)?,"data":r.get::<_,String>(3)?}))))? {
+                let (id, value) = row?;
+                attempts.entry(id).or_default().push(value);
+            }
+        }
+        let mut inputs: HashMap<String, crate::versions::Proposal> = HashMap::new();
+        {
+            let mut q = tx.prepare(
+                "SELECT p.task_id,p.data FROM pending_inputs p JOIN tasks t ON t.id=p.task_id",
+            )?;
+            for row in q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+                let (id, raw) = row?;
+                inputs.insert(id, serde_json::from_str(&raw)?);
+            }
+        }
+        tx.commit()?;
+        Ok(tasks
+            .into_iter()
+            .map(|task| TaskView {
+                searches: searches.remove(&task.id).unwrap_or_default(),
+                attempts: attempts.remove(&task.id).unwrap_or_default(),
+                pending_input: inputs.remove(&task.id),
+                task,
+            })
+            .collect())
     }
     pub fn task(&self, id: &str) -> Result<Task> {
         let db = self.connect()?;

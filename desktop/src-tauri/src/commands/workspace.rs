@@ -2,16 +2,15 @@ use super::local;
 use crate::engine::Engine;
 use library_core::{files, *};
 use serde_json::{json, Value};
-use tauri::{AppHandle, State, WebviewWindow};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 #[tauri::command]
-pub(crate) fn workspace(
-    window: WebviewWindow,
-    app: AppHandle,
-    state: State<Engine>,
-) -> Result<Value> {
+pub(crate) async fn workspace(window: WebviewWindow, app: AppHandle) -> Result<Value> {
     local(&window)?;
-    state.snapshot(&app)
+    // A full roster/history snapshot must never occupy the native UI thread.
+    tauri::async_runtime::spawn_blocking(move || app.state::<Engine>().snapshot(&app))
+        .await
+        .map_err(Failure::storage)?
 }
 #[tauri::command]
 pub(crate) async fn import_roster(

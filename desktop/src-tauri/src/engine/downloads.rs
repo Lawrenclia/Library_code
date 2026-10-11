@@ -137,8 +137,25 @@ impl Engine {
         self.changed(app);
         let payload = json!({"sa_id":t.id,"title":t.record.title,"doi":normalized_doi(&t.record.doi),"wos":normalized_wos(&t.record.wos)});
         let journal = library_core::wos_search::begin(&self.store, &t)?;
-        let searched = self.browser.search(app, payload.clone(), &journal).await;
+        let searched = self
+            .browser
+            .search(app, payload.clone(), &journal, &self.pause)
+            .await;
         journal.finish(&searched)?;
+        if searched.is_err() && self.pause.load(Ordering::SeqCst) {
+            t.running = false;
+            t.stage = Stage::Pending;
+            // Preserve an actual preparation/page error without consuming this
+            // queued target when pause was requested while that call was pending.
+            t.last_error = searched
+                .as_ref()
+                .err()
+                .filter(|e| e.code != "PAUSED")
+                .cloned();
+            self.store.save(&mut t, "paused")?;
+            self.changed(app);
+            return Ok(());
+        }
         let record = searched?;
         if self.pause.load(Ordering::SeqCst) {
             t.running = false;

@@ -96,28 +96,27 @@ impl Engine {
         let queue_paused = download_queue
             .as_ref()
             .is_some_and(|q| q.status.unfinished() && q.status != queue::QueueStatus::Running);
-        let stored_tasks = self.store.tasks()?;
-        let mut tasks = serde_json::to_value(&stored_tasks)?;
-        for (task, stored) in tasks.as_array_mut().unwrap().iter_mut().zip(&stored_tasks) {
+        let views = self.store.task_views()?;
+        let mut tasks = json!([]);
+        for view in views {
+            let stored = &view.task;
+            let mut task = serde_json::to_value(stored)?;
             task["sa_note"] = sa::note_status(stored).unwrap_or(Value::Null);
-            task["wos_searches"] = serde_json::to_value(
-                self.store
-                    .wos_search_traces(task["id"].as_str().unwrap_or(""))?,
-            )?;
-            let attempts = self.store.unresolved(task["id"].as_str().unwrap_or(""))?;
+            task["wos_searches"] = serde_json::to_value(view.searches)?;
+            let attempts = view.attempts;
             task["pending_action"] = if attempts.len() == 1 {
                 attempts[0]["action"].clone()
             } else {
                 Value::Null
             };
-            task["pending_input"] =
-                serde_json::to_value(self.store.pending_input(task["id"].as_str().unwrap())?)?;
+            task["pending_input"] = serde_json::to_value(view.pending_input)?;
             task["legacy_claim_recovery"] = (attempts.len() == 1
                 && ["legacy_claim", "legacy_sa"]
                     .contains(&attempts[0]["action"].as_str().unwrap_or(""))
                 && serde_json::from_str::<Value>(attempts[0]["data"].as_str().unwrap_or("{}"))
                     .is_ok_and(|p| legacy::is_claim_checkpoint(&p["payload"])))
             .into();
+            tasks.as_array_mut().unwrap().push(task);
         }
         Ok(
             json!({"tasks":tasks,"root":self.store.root.to_string_lossy(),"running":self.active.load(Ordering::SeqCst),"running_service":running_service,"paused":self.pause.load(Ordering::SeqCst)||queue_paused||material_batch.as_ref().is_some_and(|q|q.status.unfinished()&&q.status!=queue::QueueStatus::Running)||ai_queue.as_ref().is_some_and(|q|q.status.unfinished()&&q.status!=queue::QueueStatus::Running),"download_queue":download_queue,"ai_queue":ai_queue,"material_batch":material_batch,"browsers":self.browser.states(app),"policy":PUSH_POLICY,"framework":framework::manifest(),"legacy_materials":library_core::legacy_materials::summary(&self.store.legacy_snapshots()?)}),

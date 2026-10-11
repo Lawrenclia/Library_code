@@ -614,8 +614,33 @@ export function useWorkbench() {
       }
     },
   );
-  async function refresh() {
-    workspace.value = await callDesktop<Workspace>("workspace");
+  let refreshInFlight: Promise<void> | null = null;
+  let refreshAgain = false;
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let disposed = false;
+  function refresh(): Promise<void> {
+    if (disposed) return Promise.resolve();
+    // Only one IPC snapshot can run at a time. Events received while it runs
+    // request a follow-up snapshot instead of racing older responses into Vue.
+    refreshAgain = true;
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = (async () => {
+      do {
+        refreshAgain = false;
+        const snapshot = await callDesktop<Workspace>("workspace");
+        if (!disposed) workspace.value = snapshot;
+      } while (refreshAgain && !disposed);
+    })().finally(() => {
+      refreshInFlight = null;
+    });
+    return refreshInFlight;
+  }
+  function scheduleRefresh() {
+    if (disposed || refreshTimer !== null) return;
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      void refresh().catch(() => {});
+    }, 180);
   }
   function describe(e: unknown) {
     if (e && typeof e === "object" && "message" in e)
@@ -1038,8 +1063,25 @@ export function useWorkbench() {
       await refresh();
       Object.assign(api, await callDesktop("ai_settings"));
       schemas.value = await callDesktop("templates");
+      unlisteners.push(await listen("workspace-changed", scheduleRefresh));
       unlisteners.push(
-        await listen("workspace-changed", () => refresh().catch(() => {})),
+        await listen<{
+          task_id: string;
+          phase: string;
+          elapsed_seconds: number;
+        }>("wos-progress", (e) => {
+          if (!pending.value || workspace.value.paused || error.value) return;
+          const phases: Record<string, string> = {
+            preparing: "正在准备 WOS 检索页",
+            waiting_results: "等待 WOS 返回本次检索结果",
+            opening_record: "正在打开并核对目标文献",
+            preparing_export: "正在选择完整记录导出",
+            waiting_download: "等待 WOS 文件下载完成",
+          };
+          const phase = phases[e.payload.phase];
+          if (phase)
+            message.value = `${e.payload.task_id} · ${phase}（${e.payload.elapsed_seconds} 秒）`;
+        }),
       );
       unlisteners.push(
         await listen<{ success: boolean }>("download-event", (e) => {
@@ -1053,7 +1095,7 @@ export function useWorkbench() {
           error.value = false;
           message.value =
             "正在下载原始来源。下载结束并保存回执后，才能开始其他操作；关闭下载窗口会保留为未确认。";
-          refresh().catch(() => {});
+          scheduleRefresh();
         }),
       );
       unlisteners.push(
@@ -1065,7 +1107,7 @@ export function useWorkbench() {
               ? "来源文件已保存。请刷新原始下载记录，选择论文并确认绑定。"
               : e.payload.error?.message ||
                 "原始来源下载未确认完成，请查看下载记录。";
-            refresh().catch(() => {});
+            scheduleRefresh();
           },
         ),
       );
@@ -1074,7 +1116,11 @@ export function useWorkbench() {
       message.value = describe(e);
     }
   });
-  onUnmounted(() => unlisteners.forEach((fn) => fn()));
+  onUnmounted(() => {
+    disposed = true;
+    if (refreshTimer !== null) clearTimeout(refreshTimer);
+    unlisteners.forEach((fn) => fn());
+  });
 
   const confirmation = ref<{
     description: string;

@@ -1,5 +1,7 @@
 # 机构知识库工作台
 
+**0.1.5 修复 WOS 等待与界面卡顿。** 完整任务快照改为后台批量读取，密集刷新合并；WOS 使用新文档就绪探针、减少重复扫描并显示等待阶段，保留目标核验和原队列暂停位置。供用户自测的步骤及边界见 [0.1.5 说明](../docs/TAURI_TESTING_0_1_5.md)。业务测试和真实网站操作仍暂缓。
+
 **在线编译：** [GitHub Actions → Windows EXE](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml) → **Run workflow** → **Artifacts** 下载 EXE 安装包。无需本地构建环境，步骤见 [GitHub 编译说明](../docs/GITHUB_ACTIONS_BUILD.md)。
 
 Tauri 2 + Rust + SQLite 桌面工作台。界面使用 shadcn-vue 官方开源组件，来源、MIT 许可和组件下载记录见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。业务规则依据原始 PPT 和 [重构目标](../docs/TAURI_REBUILD_GOAL.md)。

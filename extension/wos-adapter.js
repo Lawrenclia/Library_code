@@ -26,9 +26,11 @@ async function runWOSCommand(command) {
     if(!["https://www.webofscience.com","https://webofscience.clarivate.cn"].includes(location.origin) || new URL(location.href).username || new URL(location.href).password)
       fail("WOS 网址不受支持，请在 www.webofscience.com 或 webofscience.clarivate.cn 的 HTTPS 文献检索页操作");
     if(!Number.isFinite(command.expires) || Date.now()>=command.expires-resultMargin)fail("WOS 操作超时，请人工查看网页");
-    if(/Oops,?\s*something went wrong!?/i.test(document.body?.innerText||""))
+    // Reading innerText here forces layout on every wait tick. Site-error text
+    // needs no rendered geometry; controls still use their visibility guards.
+    if(/Oops,?\s*something went wrong!?/i.test(document.body?.textContent||""))
       fail("WOS 网站自身报错：Oops, something went wrong! 这不是导入管理页的问题。请先点击 WOS 网页顶部 Search 或导航菜单重新进入检索；若仍报错，请人工检查登录、校园网/机构访问。网页恢复前不继续检索或导入");
-    if(!location.pathname.startsWith("/wos/woscc/") && !(["wos_search","wos_start_search"].includes(command.action) && /^\/wos\/?$/.test(location.pathname)))fail("请在 WOS 核心合集的文献检索页登录，不能使用作者检索");
+    if(!location.pathname.startsWith("/wos/woscc/") && !(["wos_search","wos_start_search","wos_read_search_page"].includes(command.action) && /^\/wos\/?$/.test(location.pathname)))fail("请在 WOS 核心合集的文献检索页登录，不能使用作者检索");
     if(all('iframe[src*="captcha"],input[type="password"],#challenge-form').length)fail("登录或验证码需要人工处理");
   };
   const wait=async(fn,label,ms=30000)=>{
@@ -226,23 +228,32 @@ async function runWOSCommand(command) {
     return location.origin+recordPath();
   };
   const resultState = () => {
-    const urls=recordLinks();
     const summary=/^\/wos\/woscc\/summary\//.test(location.pathname);
-    const total=summary?resultTotal():{value:null,conflict:false,values:[]};
     const busy=all('[aria-busy="true"],[role="progressbar"],mat-spinner,mat-progress-bar,.mat-mdc-progress-spinner')
       .some(el=>!el.closest('[hidden],[inert],[aria-hidden="true"]'));
-    const diagnostic={summary_route:summary,record_route:fullRecord(),busy,result_total:total.value,result_total_conflict:total.conflict,
-      canonical_record_link_count:urls.size};
+    const diagnostic={summary_route:summary,record_route:fullRecord(),busy,result_total:null,result_total_conflict:false,
+      canonical_record_link_count:0};
+    // Loading pages and full records do not need a scan of every result link,
+    // heading and text node (a full record can contain hundreds of references).
     if(fullRecord()){
       // A new URL alone does not prove the record's DOM has mounted. Avoid
       // reporting success while the old results/search panel is still rendered.
       const exports=all('button,[role="button"],a').filter(el=>["Export","导出"].includes(actionLabel(el)));
       diagnostic.export_action_count=exports.length;
-      if(busy||exports.length!==1)return {state:"loading",diagnostic};
+      const titleReady=all('h1,h2,[role="heading"]').some(el=>titleKey(caption(el))===titleKey(command.title));
+      diagnostic.target_title_ready=titleReady;
+      // A citation/sidebar spinner can outlive the record itself. Only the
+      // exact target title plus unique Export may bypass that global busy flag.
+      if((busy&&!titleReady)||exports.length!==1)return {state:"loading",diagnostic};
       return {state:"record",record_url:fingerprint(),diagnostic};
     }
+    if(busy)return {state:"loading",diagnostic};
+    if(!summary)return {state:noResults()?"zero":"loading",diagnostic};
+    const urls=recordLinks();
+    const total=resultTotal();
+    Object.assign(diagnostic,{result_total:total.value,result_total_conflict:total.conflict,
+      canonical_record_link_count:urls.size});
     if(noResults())return {state:"zero",diagnostic};
-    if(!summary||busy)return {state:"loading",diagnostic};
     if(total.values.some(count=>count>1)||urls.size>1)return {state:"multiple",diagnostic};
     if(!total.conflict&&total.value===0&&urls.size===0)return {state:"zero",diagnostic};
     if(!total.conflict&&total.value===1&&urls.size===1){
@@ -252,8 +263,20 @@ async function runWOSCommand(command) {
   };
   try {
     check();
-    if(!["wos_search","wos_start_search","wos_submit_search","wos_read_results","wos_verify_record","wos_prepare_export","wos_download"].includes(command.action))fail("未知 WOS 命令");
+    if(!["wos_search","wos_start_search","wos_submit_search","wos_read_search_page","wos_read_results","wos_verify_record","wos_prepare_export","wos_download"].includes(command.action))fail("未知 WOS 命令");
     if(typeof command.title!=="string" || !command.title.trim() || command.title.length>1500)fail("题名缺失或过长");
+    if(command.action==="wos_read_search_page"){
+      // A URL update alone is not a committed new document. This token is
+      // document-local and is never persisted as business or identity evidence.
+      window.__libraryWosDocumentToken ||= crypto.randomUUID();
+      const controls=fields();
+      const scope=controls.length===1?(controls[0].closest("form")||document):document;
+      const inputs=controls.length===1?all('input:not([type]),input[type="text"],input[type="search"],textarea',scope).filter(e=>!e.readOnly&&!e.disabled):[];
+      const ready=/^\/wos\/woscc\/(?:basic-search|advanced-search|fielded-search)\/?$/.test(location.pathname)
+        && document.readyState!=="loading" && controls.length===1 && inputs.length===1
+        && all('[role="dialog"],mat-dialog-container').length===0;
+      return {ok:true,data:{document_token:window.__libraryWosDocumentToken,ready}};
+    }
     if(command.action==="wos_submit_search"){
       const pending=window.__wosNativeSearch;
       if(!pending || pending.id!==command.id || !pending.button.isConnected)fail("内置浏览器检索预览失效");
