@@ -4,6 +4,8 @@
 
 本轮先补代码和界面，再统一提交编译；README 已按现有 Rust + TypeScript 桌面应用重写。用户要求“写完再测试”，本轮不执行测试、不启动应用、不访问真实网站。编译结果单独记在 [交付记录](TAURI_ACCEPTANCE_STATUS.md)，不沿用旧包的运行证据。
 
+最终业务源码 `33c974477eb10c05191894d28c3a46cf70ef1b34` 已推送主分支。本地生产构建和 [GitHub Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38134762488) 均成功，实际云端安装包已与版本、源码、大小及 SHA256 清单核对一致。后续交付文档提交不改变安装包中的业务代码。
+
 ## 已接入的底层链路
 
 | 要求                      | 当前代码位置与行为                                                                                                                                              |

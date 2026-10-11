@@ -6,7 +6,9 @@
 
 ## 下载 Windows 安装包
 
-打开 [Windows EXE 工作流](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml)，选择成功运行，在 **Artifacts** 下载 `Windows-EXE-版本-提交` 压缩包，解压后使用其中的 `机构知识库工作台_版本_x64-setup.exe`。
+**0.2.0 已编译完成：** [本次 GitHub Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38134762488)，源码 `33c974477eb10c05191894d28c3a46cf70ef1b34`，产物 `Windows-EXE-0.2.0-33c97447`。实际 EXE 的版本、文件大小和 SHA256 已与包内清单核对一致；本地与云端包分别记录在 [交付状态](docs/TAURI_ACCEPTANCE_STATUS.md)。
+
+打开上面的本次运行，或 [Windows EXE 工作流](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml) 中的成功运行，在 **Artifacts** 下载 `Windows-EXE-版本-提交` 压缩包，解压后使用其中的 `机构知识库工作台_版本_x64-setup.exe`。
 
 也可以点击 **Run workflow**，保持工作流分支和 `source_ref` 为 `main`，在 GitHub 编译当前源码，无需本机安装 Rust 或 Node.js。产物同时包含 `build-info.json` 和 `SHA256SUMS.txt`，用于核对版本、源码、实际大小和哈希；默认保留 30 天。详细步骤见 [GitHub 编译说明](docs/GITHUB_ACTIONS_BUILD.md)。
 
