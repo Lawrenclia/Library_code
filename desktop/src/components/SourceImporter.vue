@@ -17,7 +17,12 @@ import DoiSourcePanel from "@/components/DoiSourcePanel.vue";
 const props = defineProps<{
   task: Task;
   locked: boolean;
-  channels: { id: string; label: string; formats: string[] }[];
+  channels: {
+    id: string;
+    label: string;
+    formats: string[];
+    source_formats?: string[];
+  }[];
   run: <T>(
     command: DesktopCommand,
     args?: Record<string, unknown>,
@@ -28,6 +33,12 @@ const channel = ref("cnki"),
   encoding = ref("utf-8"),
   delimiter = ref("comma"),
   textTable = ref(false);
+const sourceFormats = computed(() => {
+  const selected = props.channels.find((c) => c.id === channel.value);
+  return (selected?.source_formats ?? selected?.formats ?? [])
+    .map((format) => format.toUpperCase())
+    .join(" / ");
+});
 const data = ref<SourcePage | null>(null),
   sheet = ref(""),
   header = ref(1),
@@ -151,13 +162,36 @@ function accept(value: SourcePage | undefined, id: string, revision: number) {
   data.value = value;
   sheet.value = value.sheet;
   header.value = value.header_row;
-  if (fresh && value.draft.channel === "cnki" && value.sheet === "CNKI 题录") {
+  if (fresh && value.layout === "table") {
     const column = (names: string[]) => {
       const found = value.columns.filter((c) => names.includes(c.name));
       return found.length === 1 ? String(found[0]!.column) : "";
     };
-    titleColumn.value = column(["%T", "T1"]);
-    doiColumn.value = column(["%R", "DO", "DI"]);
+    if (value.draft.options.tagged_format === "ris") {
+      titleColumn.value = column(["题名（RIS）"]);
+      doiColumn.value = column(["DOI（RIS）"]);
+    } else if (value.draft.options.tagged_format === "cnki") {
+      titleColumn.value = column(["%T", "T1"]);
+      doiColumn.value = column(["%R", "DO", "DI"]);
+    } else {
+      const named = (names: string[]) => {
+        const found = value.columns.filter((c) =>
+          names.includes(c.name.trim().toLowerCase()),
+        );
+        return found.length === 1 ? String(found[0]!.column) : "";
+      };
+      titleColumn.value = named([
+        "title",
+        "document title",
+        "article title",
+        "题名",
+        "标题",
+        "论文题名",
+        "文献题名",
+      ]);
+      doiColumn.value = named(["doi", "digital object identifier"]);
+      wosColumn.value = named(["ut", "wos id", "wos_id", "wos编号", "入藏号"]);
+    }
   }
   if (value.draft.origin) {
     const original = value.draft.origin;
@@ -354,8 +388,8 @@ const conflictNames: Record<string, string> = {
   <div class="space-y-3 rounded-xl border p-4" data-testid="source-importer">
     <h3 class="text-xs font-medium">读取其他渠道的原始来源</h3>
     <p class="text-[11px] leading-6 text-muted-foreground">
-      先取得数据库原始 Excel / CSV /
-      TXT。选择准确记录后保存全部字段；本地来源读取不表示数据库自动导出或平台导入已完成。
+      先取得数据库原始 Excel / CSV / TXT / RIS。选择准确记录后保存全部字段；RIS
+      用于来源整理和 AI 填表，机构库上传格式仍按实际渠道要求。
     </p>
     <DoiSourcePanel :task="task" :locked="locked" :run="run" />
     <label class="field"
@@ -371,6 +405,7 @@ const conflictNames: Record<string, string> = {
       </select></label
     >
     <p class="text-[10px] text-muted-foreground">
+      可读取来源：{{ sourceFormats }}。
       渠道、编码和分隔符用于选择新文件；已保存的预览保留原读取设置。
     </p>
     <div class="grid grid-cols-2 gap-2">
@@ -410,7 +445,8 @@ const conflictNames: Record<string, string> = {
       TXT 按分隔表格读取（适用于带表头的制表符、逗号或分号文件）
     </label>
     <p class="text-[10px] text-muted-foreground">
-      普通文本保持按行读取；勾选后按上方分隔符读取全部列，仍需选择实际记录和身份列。
+      RIS
+      自动按完整题录读取；其他普通文本按行读取。勾选后按上方分隔符读取全部列，仍需选择实际记录和身份列。
     </p>
     <SourceBrowserPanel
       :task="task"
@@ -594,13 +630,15 @@ const conflictNames: Record<string, string> = {
         条。请明确选择本篇，程序不会默认第一条。
       </p>
       <p
-        v-if="data.draft.format === 'txt' && !textMode"
+        v-if="['txt', 'ris'].includes(data.draft.format) && !textMode"
         class="text-[11px] text-muted-foreground"
       >
         {{
-          data.draft.options?.tagged_format === "cnki"
-            ? "CNKI 标记题录按论文分行；保留全部标签、重复作者和多行内容，以及原始完整记录。"
-            : "本预览按分隔表格读取。记录号对应表格行；引号内换行保留在同一字段，不按物理文本行拆分。"
+          data.draft.options?.tagged_format === "ris"
+            ? "RIS 完整题录按论文分行；保留重复字段、多行内容和原始完整记录。用于核对来源及填表，上传格式按机构库实际渠道要求。"
+            : data.draft.options?.tagged_format === "cnki"
+              ? "CNKI 标记题录按论文分行；保留全部标签、重复作者和多行内容，以及原始完整记录。"
+              : "本预览按分隔表格读取。记录号对应表格行；引号内换行保留在同一字段，不按物理文本行拆分。"
         }}
       </p>
       <div class="max-h-56 space-y-1 overflow-auto rounded border p-2">

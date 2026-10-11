@@ -20,6 +20,7 @@ pub mod metadata;
 pub mod metadata_order;
 pub mod model;
 pub mod queue;
+pub mod ris;
 pub mod sa;
 pub mod search_scopes;
 pub mod source_downloads;

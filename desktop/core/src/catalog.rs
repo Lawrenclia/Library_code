@@ -22,6 +22,10 @@ pub fn channels() -> Value {
         let native = channel["id"] == "wos_txt";
         let cnki = channel["id"] == "cnki";
         let template = channel["id"] == "general" || channel["id"] == "other";
+        // Source containers and platform upload formats are separate contracts.
+        let mut source_formats = channel["formats"].as_array().unwrap().clone();
+        source_formats.push(json!("ris"));
+        channel["source_formats"] = json!(source_formats);
         channel["capabilities"] = json!({
             "search":if native {"implemented"} else if cnki {"title_query_manual_selection"} else {"unimplemented"},
             "local_source":"implemented",
@@ -31,6 +35,7 @@ pub fn channels() -> Value {
             "excel_resave":if cnki {"implemented"} else {"unimplemented"},
             "export":if native {"implemented"} else {"unimplemented"},
             "parse":if native {"implemented"} else if cnki {"endnote_refworks_excel"} else {"unimplemented"},
+            "source_ris":"implemented",
             "submit":if native {"implemented"} else {"unimplemented"},
             "template":if template {"implemented"} else {"registered_only"}
         });

@@ -312,6 +312,7 @@ export interface FrameworkManifest {
     id: string;
     label: string;
     formats: string[];
+    source_formats?: string[];
     automated: boolean;
     live_verified: boolean;
     capabilities: Record<
@@ -432,7 +433,7 @@ export interface SourceDraft {
     encoding: string;
     delimiter: string;
     text_table?: boolean;
-    tagged_format?: "cnki";
+    tagged_format?: "cnki" | "ris";
     export_response?: boolean;
   };
   id: string;

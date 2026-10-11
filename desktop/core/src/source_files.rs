@@ -127,7 +127,11 @@ pub fn channel_formats(id: &str) -> Result<Vec<String>> {
         .unwrap()
         .iter()
         .find(|c| c["id"] == id)
-        .and_then(|c| c["formats"].as_array())
+        .and_then(|c| {
+            c["source_formats"]
+                .as_array()
+                .or_else(|| c["formats"].as_array())
+        })
         .map(|a| {
             a.iter()
                 .filter_map(|v| v.as_str().map(str::to_string))
@@ -174,6 +178,16 @@ fn column(mut col: u32) -> String {
     out
 }
 pub fn read(path: &Path, format: &str, options: &ReadOptions) -> Result<Document> {
+    if options
+        .tagged_format
+        .as_deref()
+        .is_some_and(|s| !matches!(s, "cnki" | "ris"))
+        || (options.tagged_format.is_some()
+            && (!matches!(format, "txt" | "ris") || options.text_table))
+        || (format == "ris" && options.tagged_format.as_deref() != Some("ris"))
+    {
+        return Err(fail("来源题录格式与文件或读取设置不一致。"));
+    }
     let raw = bytes(path)?;
     let mut cells = 0;
     let mut tables = vec![];
@@ -229,6 +243,22 @@ pub fn read(path: &Path, format: &str, options: &ReadOptions) -> Result<Document
                 });
             }
             encoding = format.to_uppercase();
+        }
+        "ris" | "txt" if format == "ris" || options.tagged_format.as_deref() == Some("ris") => {
+            if options.text_table || options.tagged_format.as_deref() != Some("ris") {
+                return Err(fail(
+                    "RIS 须按完整标记题录读取，不能作为分隔表格或普通文本。",
+                ));
+            }
+            let (text, actual) = decode(&raw, &options.encoding)?;
+            encoding = actual;
+            tables.push(Table {
+                name: "RIS 题录".into(),
+                start_row: 0,
+                start_col: 0,
+                rows: crate::ris::rows(&text)?,
+                formulas: BTreeMap::new(),
+            });
         }
         "txt" if options.tagged_format.as_deref() == Some("cnki") => {
             if options.text_table {
@@ -298,7 +328,7 @@ pub fn read(path: &Path, format: &str, options: &ReadOptions) -> Result<Document
                 formulas: BTreeMap::new(),
             });
         }
-        _ => return Err(fail("仅支持登记的原始 Excel、CSV 或 TXT。")),
+        _ => return Err(fail("仅支持登记的原始 Excel、CSV、TXT 或 RIS。")),
     }
     if tables.iter().all(|t| t.rows.is_empty()) {
         return Err(fail("文件没有可读取的记录。"));
@@ -322,16 +352,30 @@ pub fn prepare(
         .unwrap_or("")
         .to_ascii_lowercase();
     if !channel_formats(channel)?.contains(&format) {
-        return Err(fail("该文件后缀不属于所选渠道的登记格式。"));
+        return Err(fail("该文件后缀不属于所选渠道的来源读取格式。"));
     }
     let raw = bytes(path)?;
     if options
         .tagged_format
         .as_deref()
-        .is_some_and(|s| s != "cnki")
-        || (options.tagged_format.is_some() && (format != "txt" || channel != "cnki"))
+        .is_some_and(|s| s != "cnki" && s != "ris")
+        || (options.tagged_format.as_deref() == Some("cnki")
+            && (format != "txt" || channel != "cnki"))
+        || (options.tagged_format.as_deref() == Some("ris")
+            && !matches!(format.as_str(), "txt" | "ris"))
     {
-        return Err(fail("标记题录仅支持 CNKI TXT。"));
+        return Err(fail("标记题录须为 CNKI TXT 或 RIS/TXT。"));
+    }
+    if format == "ris" {
+        if options.text_table || options.tagged_format.as_deref().is_some_and(|s| s != "ris") {
+            return Err(fail("RIS 文件须按完整标记题录读取。"));
+        }
+        options.tagged_format = Some("ris".into());
+    } else if format == "txt" && !options.text_table && options.tagged_format.is_none() {
+        let (text, _) = decode(&raw, &options.encoding)?;
+        if crate::ris::recognizes(&text) {
+            options.tagged_format = Some("ris".into());
+        }
     }
     if channel == "cnki"
         && format == "txt"
@@ -408,7 +452,7 @@ pub fn prepare(
 fn owned(root: &Path, path: &str, sha: &str, format: &str) -> Result<PathBuf> {
     if sha.len() != 64
         || !sha.bytes().all(|b| b.is_ascii_hexdigit())
-        || !["xlsx", "xls", "csv", "txt"].contains(&format)
+        || !["xlsx", "xls", "csv", "txt", "ris"].contains(&format)
     {
         return Err(fail("来源归档身份无效。"));
     }
@@ -905,6 +949,9 @@ pub fn original_exports(root: &Path, task: &Task) -> Result<Vec<OriginalExport>>
         // General/other are template or unclassified source containers.
         if matches!(receipt.channel.as_str(), "general" | "other")
             || receipt.options.export_response
+            // RIS is factual evidence for AI/template preparation, not a confirmed
+            // institutional import format. Keep it out of original-upload recipes.
+            || receipt.options.tagged_format.as_deref() == Some("ris")
         {
             continue;
         }
@@ -966,6 +1013,87 @@ pub fn verified_evidence(root: &Path, task: &Task) -> Result<Vec<Evidence>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ris_binding_is_lossless_ai_evidence_and_never_an_original_upload_recipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = task();
+        let path = dir.path().join("scopus.ris");
+        let text = "TY  - JOUR\nTI  - Paper\nDO  - 10.1234/test\nAU  - 张三\nAU  - 李四\nAB  - Full abstract\ncontinued\nZZ  - Extra information\nER  -\n\nTY  - JOUR\nTI  - Other\nER  -\n";
+        std::fs::write(&path, text).unwrap();
+        let draft = prepare(dir.path(), &t, "scopus", &path, ReadOptions::default()).unwrap();
+        assert_eq!(draft.options.tagged_format.as_deref(), Some("ris"));
+        assert_eq!(std::fs::read(&draft.path).unwrap(), text.as_bytes());
+        let document = check_draft(dir.path(), &t, &draft).unwrap();
+        let mut selection = csv_selection();
+        selection.sheet = "RIS 题录".into();
+        selection.wos_column = None;
+        let candidates = document.locate(&t, &draft, &selection).unwrap();
+        assert_eq!(candidates["examined"], 2);
+        assert_eq!(candidates["candidates"].as_array().unwrap().len(), 1);
+        t.evidence
+            .push(evidence(dir.path(), &t, &draft, selection).unwrap());
+        let factual = verified_evidence(dir.path(), &t).unwrap();
+        assert_eq!(factual.len(), 1);
+        let receipt: Receipt = serde_json::from_str(&factual[0].text).unwrap();
+        assert_eq!(
+            receipt
+                .fields
+                .iter()
+                .find(|f| f.label == "AU")
+                .unwrap()
+                .value,
+            "张三\n李四"
+        );
+        assert_eq!(
+            receipt
+                .fields
+                .iter()
+                .find(|f| f.label == "AB")
+                .unwrap()
+                .value,
+            "Full abstract\ncontinued"
+        );
+        assert!(!receipt.institution_verified);
+        assert!(original_exports(dir.path(), &t).unwrap().is_empty());
+        let mut forged = t.clone();
+        let mut changed = receipt;
+        changed.fields[0].value = "Different title".into();
+        forged.evidence[0].text = serde_json::to_string(&changed).unwrap();
+        assert!(verified_evidence(dir.path(), &forged).is_err());
+        std::fs::write(&draft.path, text.replace("Full abstract", "changed")).unwrap();
+        assert!(verified_evidence(dir.path(), &t).is_err());
+    }
+    #[test]
+    fn ris_source_formats_do_not_expand_platform_formats_and_bad_ris_cannot_fall_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = task();
+        let path = dir.path().join("partial.ris");
+        std::fs::write(&path, "TY  - JOUR\nTI  - Paper\n").unwrap();
+        assert!(prepare(dir.path(), &t, "scopus", &path, ReadOptions::default()).is_err());
+        let txt = dir.path().join("partial.txt");
+        std::fs::write(&txt, "TY  - JOUR\nTI  - Paper\n").unwrap();
+        assert!(prepare(dir.path(), &t, "wanfang", &txt, ReadOptions::default()).is_err());
+        let mut options = ReadOptions::default();
+        options.text_table = true;
+        assert!(prepare(dir.path(), &t, "scopus", &path, options).is_err());
+        let channels = crate::catalog::channels();
+        let scopus = channels
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "scopus")
+            .unwrap();
+        assert!(!scopus["formats"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("ris")));
+        assert!(scopus["source_formats"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("ris")));
+        assert_eq!(scopus["automated"], false);
+        assert_eq!(scopus["capabilities"]["submit"], "unimplemented");
+    }
     fn task() -> Task {
         Task::new(
             Record {
