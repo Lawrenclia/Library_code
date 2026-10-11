@@ -57,7 +57,7 @@ GitHub Windows EXE 首轮构建已成功结束：[Actions #1](https://github.com
 | 3. 单匹配按全部原因核对 | `core/src/issues.rs`、`metadata.rs`、`sa.rs` | 多原因任务逐项证据、角色和顺序核对、标识符对应同篇的原始来源 |
 | 4. 重复合并及 A 列空白输入范围分离 | `core/src/files.rs`、`store.rs`、`merge.rs`、`src-tauri/src/engine/duplicate_service.rs` | 实际主条目、合并前后完整字段、被合并项、SA 新匹配数；A 列任意非空行不加入范围，旧任务及旧队列不得绕过新范围 |
 | 5. 真实 WOS 完整记录 TXT 下载 | `extension/wos-adapter.js`、`core/src/download.rs`、`src-tauri/src/engine/downloads.rs` | 用户机构登录、核心合集、目标记录、原生完成事件、实际 TXT 字节与身份解析；截图或模拟不能代替 |
-| 6. 原始导出优先、模板约束、AI 引用 | `core/src/catalog.rs`、`source_files.rs`、`cnki.rs`、`cnki_excel.rs`、`materials.rs`、`templates.rs`、`src-tauri/src/ai.rs` | 实际导出和实际模板、完整必填及引用、缺项拒绝。CNKI 已有导出响应、专用文本解析及 Excel 另存源码，尚未现场验收；其他数据库自动检索/导出/专用解析仍未实现 |
+| 6. 原始导出优先、模板约束、AI 引用 | `core/src/catalog.rs`、`source_files.rs`、`ris.rs`、`cnki.rs`、`cnki_excel.rs`、`materials.rs`、`templates.rs`、`src-tauri/src/ai.rs` | 实际导出和实际模板、完整必填及引用、缺项拒绝。CNKI 已有导出响应、专用文本解析及 Excel 另存源码；0.1.8 已有通用 RIS 读取，供来源核对及模板准备。这些均未现场验收；其他数据库自动检索/导出/专用解析仍未实现 |
 | 7. SA 说明、上传后导入、导入后五项推送 | `extension/import-adapter.js`、`core/src/model.rs`、`src-tauri/src/engine/writes.rs` | 真实文件、机构、批次、说明、计数、五项设置及各阶段回执。目前自动提交仅 WOS TXT |
 | 8. 推送后查条目与 SA 核对/认领，未查询到保持未处理 | `core/src/sa.rs`、`claim.rs`、`alias.rs`、`src-tauri/src/engine/sa_service.rs` | 实际平台唯一号、工号/作者关系、必要别名、完整 SA 回读；下载/推送本身不能完成 SA |
 | 9. 暂停/重启恢复、三次普通失败后继续、通道故障保留剩余 | `core/src/queue.rs`、`source_downloads.rs`、`ai_queue.rs`、`store.rs`、`src-tauri/src/browser.rs` | 当前源码的暂停和崩溃恢复结果、完整原队列、第四篇实际执行及 524/最终超时后的当前目标与未执行范围；现有回归用例未运行 |
@@ -69,4 +69,4 @@ GitHub Windows EXE 首轮构建已成功结束：[Actions #1](https://github.com
 
 ## 后续验证与交付
 
-用户当前要求“先不验证”仍有效；最近交付按授权编译打包 0.1.7，未运行测试或真实页面操作。编译成功只能证明能生成程序，不能把上表业务验收改为通过。真实平台验收须在用户完成登录并授权相应操作后进行，不使用虚构记录或自动重发未知写入绕过。
+用户当前要求“先不验证”仍有效；最近交付按授权编译打包 0.1.8，本地与 GitHub 安装包均已核对，未运行测试或真实页面操作。编译成功只能证明能生成程序，不能把上表业务验收改为通过。非 WOS 渠道的实际导入窗口、回执和记录标识，以及独立备注保存入口，仍缺页面合同依据；原 PPT 与现有模拟夹具只有 WOS TXT 提交流程，不能证明其他渠道共用其组件和字段。补齐这些驱动需要实际页面资料；完整验收还需要当前源码测试及已登录平台的真实运行证据。真实平台验收须在用户完成登录并授权相应操作后进行，不使用虚构记录或自动重发未知写入绕过。
