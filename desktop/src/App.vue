@@ -1911,6 +1911,11 @@ function frameworkBrowser(role: string, entry?: string) {
                       current.batch_recheck.original_stage
                     }}）。请先回读上传 / 导入 /
                     推送结果；未采用旧版本的成功阶段，也不会重新上传。
+                    <span v-if="current.batch_recheck.submission_origin" class="block">
+                      原材料：{{ current.batch_recheck.submission_origin.payload.submission_packet?.channel_label || current.batch_recheck.submission_origin.payload.channel }}
+                      · {{ current.batch_recheck.submission_origin.payload.filename }}。
+                      回读后重新核验新名单的身份、交大署名与本库情况，再继续。
+                    </span>
                   </p>
                   <details>
                     <summary>查看 PPT 推送规则</summary>

@@ -198,7 +198,7 @@ impl Engine {
                 ("import", p, Stage::Uploaded)
             }
             "import_submit" => {
-                library_core::submission::check_upload(&self.store, &t)?;
+                library_core::submission::check_followup(&self.store, &t, &common)?;
                 if t.stage != Stage::Uploaded {
                     return Err(Failure::new("INVALID_TRANSITION", "先等待上传成功。"));
                 }
@@ -212,7 +212,7 @@ impl Engine {
                 ("import", p, Stage::Unknown)
             }
             "import_push" => {
-                library_core::submission::check_upload(&self.store, &t)?;
+                library_core::submission::check_followup(&self.store, &t, &common)?;
                 if t.stage != Stage::Imported {
                     return Err(Failure::new("INVALID_TRANSITION", "先回读导入成功的批次。"));
                 }

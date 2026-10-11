@@ -52,6 +52,13 @@ export interface Task {
     id: string;
     original_input_hash: string;
     original_stage: string;
+    submission_origin?: {
+      payload: {
+        channel?: string;
+        filename?: string;
+        submission_packet?: { channel_label?: string };
+      };
+    } | null;
     created: number;
   } | null;
   last_error: Failure | null;

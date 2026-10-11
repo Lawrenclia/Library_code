@@ -31,7 +31,9 @@ impl Engine {
             if matches!(
                 t.stage,
                 Stage::Uploaded | Stage::Imported | Stage::Pushed | Stage::Claimed
-            ) {
+            ) || t.batch.is_some()
+                || t.batch_recheck.is_some()
+            {
                 return Err(Failure::new(
                     "INVALID_TRANSITION",
                     "已有上传、导入、推送或认领记录，须先核对原操作，不能改为未查询到。",

@@ -254,7 +254,9 @@ impl Store {
                 if old.record.fingerprint() != record.fingerprint()
                     || old.record.mark != record.mark
                     || old.record.done != record.done
-                    || (old.batch_recheck.is_some()
+                    || ((old.batch_recheck.is_some()
+                        || old.batch.is_some()
+                        || old.evidence.iter().any(|e| e.kind == "submission_packet"))
                         && (old.input_hash != hash || json!(old.record) != json!(record)))
                     || pending > 0
                 {
@@ -381,6 +383,7 @@ impl Store {
             ));
         }
         let mut next = crate::versions::build_next(task, &current, snapshot, source, proof)?;
+        crate::versions::preserve_submission_batch(self, task, &current, &mut next)?;
         if let Some(id) = &current.previous_version_id {
             let raw: String = tx.query_row(
                 "SELECT data FROM task_versions WHERE id=? AND task_id=?",

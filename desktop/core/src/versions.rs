@@ -28,7 +28,15 @@ pub struct BatchRecheck {
     pub original_stage: Stage,
     pub candidate: Candidate,
     pub checkpoint: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission_origin: Option<SubmissionOrigin>,
     pub created: u64,
+}
+/// Frozen source scope of an existing upload; never a new editable material.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubmissionOrigin {
+    pub task: Value,
+    pub payload: Value,
 }
 impl BatchRecheck {
     pub fn expects_upload(&self) -> bool {
@@ -40,6 +48,171 @@ impl BatchRecheck {
             Stage::Pushed | Stage::Claimed | Stage::Completed
         )
     }
+}
+fn submission_checkpoint(task: &Task) -> Result<Option<BatchRecheck>> {
+    if let Some(saved) = &task.batch_recheck {
+        return Ok(Some(saved.clone()));
+    }
+    let Some(e) = task
+        .evidence
+        .iter()
+        .rev()
+        .find(|e| e.kind == "input_version_batch_rechecked")
+    else {
+        return Ok(None);
+    };
+    let saved: Value = serde_json::from_str(&e.text)?;
+    if saved["schema"] != "input_version_batch_rechecked_v1" {
+        return Err(Failure::new(
+            "INPUT_CHANGED",
+            "旧批次版本核验记录格式不支持。",
+        ));
+    }
+    Ok(Some(serde_json::from_value(saved["checkpoint"].clone())?))
+}
+fn validate_submission_scope(task: &Task, saved: &BatchRecheck) -> Result<Task> {
+    let origin = saved
+        .submission_origin
+        .as_ref()
+        .ok_or_else(|| Failure::new("REMOTE_RESULT_UNKNOWN", "缺少原提交来源版本。"))?;
+    let basis: Task = serde_json::from_value(origin.task.clone())?;
+    let c: Candidate = serde_json::from_value(origin.payload["candidate"].clone())?;
+    let historical = task.evidence.iter().any(|e| {
+        e.kind == "input_version_history"
+            && serde_json::from_str::<Value>(&e.text).is_ok_and(|v| v == origin.task)
+    });
+    if saved.sa_id != task.id
+        || saved.input_hash != task.input_hash
+        || json!(saved.record) != json!(task.record)
+        || basis.id != task.id
+        || basis.input_hash != saved.original_input_hash
+        || json!(basis.record) != json!(saved.original_record)
+        || basis.batch_recheck.is_some()
+        || basis.evidence.iter().any(|e| {
+            matches!(
+                e.kind.as_str(),
+                "input_version_history" | "input_version_batch_rechecked"
+            )
+        })
+        || !historical
+        || json!(c) != json!(saved.candidate)
+        || origin.payload["sa_id"] != task.id
+        || origin.payload["instructions"] != format!("SA补充-{}", task.id)
+        || norm(&c.title) != norm(&task.record.title)
+        || !c.sjtu
+        || (!task.record.doi.is_empty() && normalized_doi(&task.record.doi) != c.doi)
+        || (!task.record.wos.is_empty() && normalized_wos(&task.record.wos) != c.wos)
+    {
+        return Err(Failure::new(
+            "INPUT_CHANGED",
+            "原上传来源、历史版本或新名单的论文身份不一致，未回读或推进。",
+        ));
+    }
+    Ok(basis)
+}
+/// Only an explicitly accepted roster transition can bridge a frozen payload.
+pub fn submission_origin(task: &Task, payload: &Value) -> Result<Option<Task>> {
+    let Some(saved) = submission_checkpoint(task)? else {
+        return Ok(None);
+    };
+    let Some(origin) = &saved.submission_origin else {
+        return Ok(None);
+    };
+    let basis = validate_submission_scope(task, &saved)?;
+    for key in [
+        "sa_id",
+        "instructions",
+        "candidate",
+        "channel",
+        "filename",
+        "submission_packet",
+    ] {
+        if payload[key] != origin.payload[key] {
+            return Err(Failure::new(
+                "INPUT_CHANGED",
+                "回读载荷不是名单版本保留的原提交意图。",
+            ));
+        }
+    }
+    Ok(Some(basis))
+}
+/// Retain non-WOS and template checkpoints without manufacturing a WOS artifact.
+pub fn preserve_submission_batch(
+    store: &Store,
+    old: &Task,
+    proposal: &Proposal,
+    next: &mut Task,
+) -> Result<()> {
+    if old.batch.is_none() {
+        return Ok(());
+    }
+    if next.record.done {
+        next.batch = old.batch.clone();
+        return Ok(());
+    }
+    let payload = submission::recovery_payload(store, old)?;
+    if payload.get("submission_packet").is_none_or(Value::is_null) {
+        if next.batch.is_none() {
+            return Err(Failure::new(
+                "INPUT_CHANGED",
+                "原批次没有可核验的旧归档，不能丢弃后建立新提交。",
+            ));
+        }
+        return Ok(());
+    }
+    submission::read_archive(store, old, &payload)?;
+    let prior = submission_checkpoint(old)?;
+    let origin = match prior.as_ref().and_then(|p| p.submission_origin.clone()) {
+        Some(origin) => origin,
+        None => {
+            let mut basis = old.clone();
+            basis.evidence.retain(|e| e.kind != "input_version_history");
+            SubmissionOrigin {
+                task: json!(basis),
+                payload: payload.clone(),
+            }
+        }
+    };
+    let basis: Task = serde_json::from_value(origin.task.clone())?;
+    let original_stage = old
+        .batch_recheck
+        .as_ref()
+        .map(|r| r.original_stage.clone())
+        .or_else(|| proposal.previous_stage.clone())
+        .unwrap_or_else(|| old.stage.clone());
+    if !matches!(
+        original_stage,
+        Stage::Uploaded | Stage::Imported | Stage::Pushed | Stage::Claimed | Stage::Completed
+    ) {
+        return Err(Failure::new(
+            "REMOTE_RESULT_UNKNOWN",
+            "原批次的上传、导入或推送阶段未确认，先回读旧版本。",
+        ));
+    }
+    let saved = BatchRecheck {
+        id: uuid::Uuid::new_v4().to_string(),
+        sa_id: next.id.clone(),
+        input_hash: next.input_hash.clone(),
+        record: next.record.clone(),
+        original_input_hash: basis.input_hash.clone(),
+        original_record: basis.record.clone(),
+        original_revision: basis.revision,
+        original_stage,
+        candidate: serde_json::from_value(origin.payload["candidate"].clone())?,
+        checkpoint: old.batch.clone().unwrap(),
+        submission_origin: Some(origin),
+        created: now(),
+    };
+    validate_submission_scope(next, &saved)?;
+    next.batch = old.batch.clone();
+    next.batch_recheck = Some(saved.clone());
+    next.stage = Stage::AwaitingReview;
+    next.evidence
+        .retain(|e| e.kind != "input_version_batch_pending");
+    next.evidence.push(Evidence { id: saved.id.clone(), kind: "input_version_batch_pending".into(),
+        source: "原提交文件与旧批次，待新名单版本的只读核验".into(),
+        text: json!({"schema":"input_version_batch_pending_v1","checkpoint":saved,"platform_verified":false,"write_sent":false}).to_string(), created: now() });
+    Ok(())
 }
 pub fn validate_batch_recheck(task: &Task) -> Result<BatchRecheck> {
     let saved = task
@@ -54,17 +227,22 @@ pub fn validate_batch_recheck(task: &Task) -> Result<BatchRecheck> {
         || saved.input_hash != task.input_hash
         || json!(saved.record) != json!(task.record)
         || task.batch.as_ref() != Some(&saved.checkpoint)
-        || task
-            .artifact
-            .as_ref()
-            .is_none_or(|a| json!(a.candidate) != json!(saved.candidate))
+        || (saved.submission_origin.is_none()
+            && task
+                .artifact
+                .as_ref()
+                .is_none_or(|a| json!(a.candidate) != json!(saved.candidate)))
     {
         return Err(Failure::new(
             "INPUT_CHANGED",
             "旧批次检查点与当前名单、文件或任务阶段变化，未回读或推进。",
         ));
     }
-    files::read_metadata_candidate(task)?;
+    if saved.submission_origin.is_some() {
+        validate_submission_scope(task, saved)?;
+    } else {
+        files::read_metadata_candidate(task)?;
+    }
     Ok(saved.clone())
 }
 /// A fresh full readback clears the marker; old stage/JSON alone never clears it.
@@ -74,6 +252,26 @@ pub fn adopt_batch_recheck(
     result: &Value,
     payload: &Value,
 ) -> Result<()> {
+    let raw = files::read_import_archive(task, payload)?;
+    adopt_batch_result(task, expected, result, payload, raw.len())
+}
+pub fn adopt_batch_recheck_with_store(
+    store: &Store,
+    task: &mut Task,
+    expected: &BatchRecheck,
+    result: &Value,
+    payload: &Value,
+) -> Result<()> {
+    let raw = submission::read_archive(store, task, payload)?;
+    adopt_batch_result(task, expected, result, payload, raw.len())
+}
+fn adopt_batch_result(
+    task: &mut Task,
+    expected: &BatchRecheck,
+    result: &Value,
+    payload: &Value,
+    raw_size: usize,
+) -> Result<()> {
     let current = validate_batch_recheck(task)?;
     if json!(current) != json!(expected) {
         return Err(Failure::new(
@@ -81,7 +279,6 @@ pub fn adopt_batch_recheck(
             "回读期间旧批次检查点变化，未采用结果。",
         ));
     }
-    let raw = files::read_import_archive(task, payload)?;
     let stage = if result["uploaded"] == true {
         if !current.expects_upload() {
             return Err(Failure::new(
@@ -89,7 +286,7 @@ pub fn adopt_batch_recheck(
                 "原检查点要求回读导入或推送，不能以临时上传回执代替。",
             ));
         }
-        validate_upload_readback(result, payload, raw.len())?;
+        validate_upload_readback(result, payload, raw_size)?;
         if [
             "sa_id",
             "instructions",
@@ -313,6 +510,7 @@ pub fn build_next(
                     original_stage,
                     candidate: next.artifact.as_ref().unwrap().candidate.clone(),
                     checkpoint: old.batch.clone().unwrap(),
+                    submission_origin: None,
                     created: now(),
                 };
                 next.evidence.push(Evidence { id:recheck.id.clone(), kind:"input_version_batch_pending".into(), source:"旧名单版本的原批次检查点，待独立平台回读".into(),

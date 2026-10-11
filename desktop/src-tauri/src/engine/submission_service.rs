@@ -103,7 +103,13 @@ impl Engine {
                 .await?;
             library_core::submission::read_archive(&self.store, &t, original)?;
             if let Some(saved) = &batch_recheck {
-                library_core::versions::adopt_batch_recheck(&mut t, saved, &result, &cmd)?;
+                library_core::versions::adopt_batch_recheck_with_store(
+                    &self.store,
+                    &mut t,
+                    saved,
+                    &result,
+                    &cmd,
+                )?;
             } else if result["uploaded"] == true {
                 validate_upload_readback(&result, &cmd, raw.len())?;
                 if checkpoint.as_ref().is_some_and(|previous| {
@@ -178,7 +184,13 @@ impl Engine {
         }
         library_core::submission::read_archive(&self.store, &t, original)?;
         if let Some(saved) = &batch_recheck {
-            library_core::versions::adopt_batch_recheck(&mut t, saved, &d, &cmd)?;
+            library_core::versions::adopt_batch_recheck_with_store(
+                &self.store,
+                &mut t,
+                saved,
+                &d,
+                &cmd,
+            )?;
         } else {
             t.stage = validate_import_readback(&d, &cmd, require_push)?;
             t.batch = Some(d["batch"].clone());

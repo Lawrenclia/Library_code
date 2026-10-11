@@ -457,6 +457,29 @@ pub fn check_upload(store: &Store, task: &Task) -> Result<()> {
         task.import_ready()
     }
 }
+/// Follow-up writes keep the original material and require a current review.
+pub fn check_followup(store: &Store, task: &Task, payload: &Value) -> Result<()> {
+    if versions::submission_origin(task, payload)?.is_none() {
+        return check_upload(store, task);
+    }
+    eligible(store, task)?;
+    if task.batch_recheck.is_some()
+        || task.batch.is_none()
+        || task.route != Route::Missing
+        || !task
+            .review
+            .as_ref()
+            .is_some_and(|r| r.library_checked && r.identity_confirmed && r.affiliation_confirmed)
+    {
+        return Err(Failure::new(
+            "REVIEW_REQUIRED",
+            "先回读原批次，并重新核验新名单的身份、交大署名及本库缺失。",
+        ));
+    }
+    library::assert_absent(task)?;
+    read_archive(store, task, payload)?;
+    Ok(())
+}
 /// Frozen write payload, shared by upload, import, push and their recovery.
 pub fn payload(store: &Store, task: &Task) -> Result<Value> {
     if let Some(packet) = current(store, &task.id)? {
@@ -572,6 +595,10 @@ pub fn recovery_payload(store: &Store, task: &Task) -> Result<Value> {
 }
 /// Recovery verifies the exact saved bytes without requiring an editable stage.
 pub fn read_archive(store: &Store, task: &Task, payload: &Value) -> Result<Vec<u8>> {
+    let origin = versions::submission_origin(task, payload)?;
+    read_archive_in_scope(store, origin.as_ref().unwrap_or(task), payload)
+}
+fn read_archive_in_scope(store: &Store, task: &Task, payload: &Value) -> Result<Vec<u8>> {
     let Some(value) = payload.get("submission_packet").filter(|v| !v.is_null()) else {
         return files::read_import_archive(task, payload);
     };
@@ -832,5 +859,159 @@ mod recovery_tests {
             recovery_payload(&store, &task).unwrap_err().code,
             "INPUT_CHANGED"
         );
+    }
+    fn uploaded_non_wos(store: &Store, mut task: Task) -> (Task, Value) {
+        let bytes = b"single original record";
+        let recipe = hash(b"non-wos version fixture");
+        let folder = store.root.join("materials/products").join(&recipe);
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("original.txt");
+        std::fs::write(&path, bytes).unwrap();
+        let packet = Packet {
+            id: "non-wos-packet".into(),
+            sa_id: task.id.clone(),
+            input_hash: task.input_hash.clone(),
+            record: task.record.clone(),
+            facts: materials::facts(&store.root, &task).unwrap(),
+            material: Product {
+                sa_id: task.id.clone(),
+                recipe,
+                kind: "original_pending".into(),
+                path: path.to_string_lossy().into(),
+                sha256: hash(bytes),
+                audit: "unused".into(),
+                validation: json!({"ready":false}),
+                reused: false,
+            },
+            channel: "cnki".into(),
+            channel_label: "CNKI 数据导入 (Excel/Txt)".into(),
+            work_type: None,
+            organisation: "上海交通大学".into(),
+            instructions: format!("SA补充-{}", task.id),
+            created: now(),
+        };
+        task.evidence.push(Evidence {
+            id: "packet-evidence".into(),
+            kind: "submission_packet".into(),
+            source: "local".into(),
+            text: json!({"schema":"submission_packet_v1","packet":packet}).to_string(),
+            created: now(),
+        });
+        let c = Candidate {
+            title: task.record.title.clone(),
+            doi: "".into(),
+            wos: "".into(),
+            authors: "Author".into(),
+            year: "2026".into(),
+            journal: "Journal".into(),
+            affiliation: "上海交通大学".into(),
+            sjtu: true,
+            sha256: hash(bytes),
+            fields: Default::default(),
+        };
+        let payload = json!({"sa_id":task.id,"instructions":packet.instructions,"candidate":c,"channel":"cnki",
+            "filename":format!("SA-cnki-{}.txt",task.id),"contentSha":c.sha256,"submission_packet":packet});
+        let attempt = store
+            .begin_attempt_with_payload(&mut task, "import_upload", payload.clone())
+            .unwrap();
+        task.stage = Stage::Uploaded;
+        task.running = false;
+        task.batch = Some(
+            json!({"verified":true,"uploaded":true,"sa_id":task.id,"instructions":payload["instructions"],
+            "sha256":c.sha256,"channel":"cnki","filename":payload["filename"],"size":bytes.len(),
+            "dataset_id":"sjtu","dataset_label":"上海交通大学","server_name":"original-object",
+            "response":{"success":true,"data":{"name":"original-object"}}}),
+        );
+        let receipt = task.batch.clone().unwrap();
+        store
+            .finish_attempt(&mut task, &attempt, "verified", receipt, "uploaded")
+            .unwrap();
+        (task, payload)
+    }
+    fn accept_new_roster(store: &Store, task: &Task, row: u32, input: &str) -> Task {
+        let mut r = task.record.clone();
+        r.row = row;
+        r.owner = format!("负责人-{row}");
+        store.import(vec![r.clone()], input.into()).unwrap();
+        let pending = store.pending_input(&task.id).unwrap().unwrap();
+        let old = store.task(&task.id).unwrap();
+        let snapshot = json!({"row":{"saLzkId":r.sa_id,"titleValue":r.title,"gh":r.staff_id,"doiValue":r.doi,
+            "wosValue":r.wos,"matchCount":r.matches,"itemId":r.item_ids,"markStatus":r.mark,"reason":r.reason},"comparison":[]});
+        store
+            .accept_input(
+                &old,
+                &pending,
+                &snapshot,
+                "new roster",
+                "same paper, new responsibility",
+            )
+            .unwrap()
+    }
+    #[test]
+    fn non_wos_batch_survives_roster_switch_readback_restart_and_second_switch() {
+        let (dir, store, task) = setup();
+        let (old, payload) = uploaded_non_wos(&store, task);
+        let mut next = accept_new_roster(&store, &old, 4, "new-input");
+        assert!(next.artifact.is_none());
+        assert!(next.review.is_none());
+        assert_eq!(next.batch, old.batch);
+        assert!(check_followup(&store, &next, &payload).is_err());
+        let saved = versions::validate_batch_recheck(&next).unwrap();
+        versions::adopt_batch_recheck_with_store(
+            &store,
+            &mut next,
+            &saved,
+            old.batch.as_ref().unwrap(),
+            &payload,
+        )
+        .unwrap();
+        store.save(&mut next, "readback").unwrap();
+        drop(store);
+        let store = Store::new(dir.path()).unwrap();
+        let next = store.task(&old.id).unwrap();
+        assert_eq!(next.stage, Stage::Uploaded);
+        assert_eq!(
+            read_archive(&store, &next, &payload).unwrap(),
+            b"single original record"
+        );
+        let third = accept_new_roster(&store, &next, 6, "third-input");
+        assert_eq!(third.batch, old.batch);
+        let saved = versions::validate_batch_recheck(&third).unwrap();
+        assert_eq!(saved.original_input_hash, "input");
+        assert_eq!(
+            read_archive(&store, &third, &payload).unwrap(),
+            b"single original record"
+        );
+        let mut wrong = payload.clone();
+        wrong["channel"] = json!("general");
+        assert!(read_archive(&store, &third, &wrong).is_err());
+        let mut lost = third.clone();
+        lost.evidence.retain(|e| e.kind != "input_version_history");
+        assert!(read_archive(&store, &lost, &payload).is_err());
+        std::fs::write(
+            payload["submission_packet"]["material"]["path"]
+                .as_str()
+                .unwrap(),
+            b"changed",
+        )
+        .unwrap();
+        assert!(read_archive(&store, &third, &payload).is_err());
+    }
+    #[test]
+    fn non_wos_identity_conflict_keeps_pending_roster_and_original_batch() {
+        let (_dir, store, task) = setup();
+        let (old, _payload) = uploaded_non_wos(&store, task);
+        let mut r = old.record.clone();
+        r.title = "Different paper".into();
+        store.import(vec![r.clone()], "new-input".into()).unwrap();
+        let pending = store.pending_input(&old.id).unwrap().unwrap();
+        let current = store.task(&old.id).unwrap();
+        let live = json!({"row":{"saLzkId":r.sa_id,"titleValue":r.title,"gh":r.staff_id,"doiValue":r.doi,
+            "wosValue":r.wos,"matchCount":r.matches,"itemId":r.item_ids,"markStatus":r.mark,"reason":r.reason},"comparison":[]});
+        assert!(store
+            .accept_input(&current, &pending, &live, "source", "proof")
+            .is_err());
+        assert_eq!(store.task(&old.id).unwrap().batch, old.batch);
+        assert!(store.pending_input(&old.id).unwrap().is_some());
     }
 }
