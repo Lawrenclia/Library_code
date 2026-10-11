@@ -6,7 +6,7 @@
 
 当前新版为 **0.1.13，Rust + TypeScript + Tauri 2**，位于主分支 `desktop`。修复上传后补充核验说明或新 AI 建议造成的原提交恢复阻塞，回读原材料来源并继续核验当前任务，见 [0.1.13 使用说明](docs/TAURI_TESTING_0_1_13.md)。CNKI 自动获取沿用 [0.1.12](docs/TAURI_TESTING_0_1_12.md)，跨名单原批次恢复和按渠道上传继续保留。WOS 的 524 暂停、普通失败继续和物理 A 列空白规则保留。仅编译打包，网站兼容性由用户自测。Python 是保留的旧版，新桌面 EXE 不依赖它。
 
-**0.1.12 安装包已生成：** 对应业务源码 `6f796acd`，本地生产编译及 NSIS 打包成功；[GitHub Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38117236215) 也已全部成功，下载 Artifact `Windows-EXE-0.1.12-6f796acd`。云端实际 EXE 的版本、源码和哈希均已核对，详见 [交付状态](docs/TAURI_ACCEPTANCE_STATUS.md)。仅编译打包，未运行测试或真实网站。安装新版后重新导入名单，使 A 列空白筛选对已有工作目录生效。
+**0.1.13 安装包已生成：** 对应业务源码 `7797ef94`，本地安装包已归档；[GitHub Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38121534879) 已全部成功，下载 Artifact `Windows-EXE-0.1.13-7797ef94`。版本和产物记录见 [交付状态](docs/TAURI_ACCEPTANCE_STATUS.md)。仅编译打包，未运行测试或真实网站。安装新版后重新导入名单，使 A 列空白筛选对已有工作目录生效。
 
 新增“流程与连接”总览，后端已拆分服务并统一操作、浏览器和渠道注册。结构与扩展规则见 [完整框架说明](docs/FRAMEWORK.md)。已登记渠道与实际自动能力分开显示，真实 WOS/机构后台仍待现场验收。
 
