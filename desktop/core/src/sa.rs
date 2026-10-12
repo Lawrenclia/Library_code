@@ -129,15 +129,32 @@ pub fn latest_note_plan(task: &Task) -> Result<(String, Value)> {
 
 /// Only remark and server audit fields may change. Status must remain pending.
 pub fn verify_not_found_note(task: &Task, payload: &Value, snapshot: &Value) -> Result<()> {
-    let mut frozen_task = task.clone();
-    frozen_task.stage = serde_json::from_value(payload["previous_stage"].clone())?;
-    frozen_task.running = false;
     let mut original = payload.clone();
     if let Some(v) = original.as_object_mut() {
         v.remove("plan_id");
         v.remove("expected");
         v.remove("reviewed");
     }
+    let previous: Stage = serde_json::from_value(payload["previous_stage"].clone())?;
+    let frozen_recovery = task.stage == Stage::Unknown
+        && payload["reviewed"] == true
+        && payload["expected"] == payload["original_sa"]["row"]
+        && payload["plan_id"].as_str().is_some_and(|id| {
+            task.evidence.iter().any(|e| {
+                e.id == id
+                    && e.kind == "sa_note_handoff"
+                    && serde_json::from_str::<Value>(&e.text).is_ok_and(|v| v == original)
+            })
+        });
+    if task.stage != previous && !frozen_recovery {
+        return Err(Failure::new(
+            "INPUT_CHANGED",
+            "备注核验阶段已变化，缺少对应原保存意图，未采用回读。",
+        ));
+    }
+    let mut frozen_task = task.clone();
+    frozen_task.stage = previous;
+    frozen_task.running = false;
     if payload["schema"] != "sa_not_found_note_v1"
         || not_found_note_payload(&frozen_task, &payload["original_sa"])? != original
     {

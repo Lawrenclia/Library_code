@@ -746,14 +746,14 @@ mod tests {
         let db = Connection::open(folder.join("imports.sqlite3")).unwrap();
         db.execute_batch("CREATE TABLE imports(sa_id TEXT PRIMARY KEY,record_key TEXT,data TEXT);")
             .unwrap();
-        let state = json!({"phase":phase,"candidate":candidate,"identity_confirmed":true,"instructions":"SA补充-0001","batch":if phase=="exported"{Value::Null}else{json!({"id":"batch-1","status":2})}});
+        let import_sa = if orphan { "old-orphan" } else { "0001" };
+        let mut import_record = r.clone();
+        import_record.sa_id = import_sa.into();
+        let import_key = record_key(&import_record, "2");
+        let state = json!({"phase":phase,"candidate":candidate,"identity_confirmed":true,"instructions":format!("SA补充-{import_sa}"),"batch":if phase=="exported"{Value::Null}else{json!({"id":"batch-1","status":2})}});
         db.execute(
             "INSERT INTO imports VALUES(?,?,?)",
-            params![
-                if orphan { "old-orphan" } else { "0001" },
-                key,
-                state.to_string()
-            ],
+            params![import_sa, import_key, state.to_string()],
         )
         .unwrap();
         dir

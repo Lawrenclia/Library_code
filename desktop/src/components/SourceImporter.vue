@@ -157,12 +157,26 @@ function accept(value: SourcePage | undefined, id: string, revision: number) {
     props.task.revision !== revision
   )
     return;
-  const fresh = data.value?.draft.id !== value.draft.id;
+  const previous = data.value;
+  const fresh = previous?.draft.id !== value.draft.id;
+  const schemaChanged =
+    previous?.sheet !== value.sheet ||
+    previous?.header_row !== value.header_row ||
+    previous?.layout !== value.layout;
   if (fresh) reset();
+  else if (!value.draft.origin) {
+    selectedRow.value = null;
+    matches.value = null;
+    if (schemaChanged) {
+      titleColumn.value = "";
+      doiColumn.value = "";
+      wosColumn.value = "";
+    }
+  }
   data.value = value;
   sheet.value = value.sheet;
   header.value = value.header_row;
-  if (fresh && value.layout === "table") {
+  if ((fresh || schemaChanged) && value.layout === "table") {
     const column = (names: string[]) => {
       const found = value.columns.filter((c) => names.includes(c.name));
       return found.length === 1 ? String(found[0]!.column) : "";

@@ -2071,7 +2071,19 @@ mod tests {
         let path = dir.path().join("report.xlsx");
         export_report(&[t], &path).unwrap();
         let mut book = open_workbook_auto(path).unwrap();
-        assert_eq!(book.sheet_names().len(), 4);
+        for name in [
+            "任务与来源",
+            "原始来源依据",
+            "AI 字段来源",
+            "下载队列结果",
+            "来源下载记录",
+            "提交材料记录",
+        ] {
+            assert!(
+                book.sheet_names().iter().any(|sheet| sheet == name),
+                "缺少 {name}"
+            );
+        }
         assert!(book.sheet_names().iter().any(|name| name == "下载队列结果"));
         let sources = book.worksheet_range("原始来源依据").unwrap();
         assert_eq!(sources.get_value((1, 2)).unwrap().to_string(), "proof");

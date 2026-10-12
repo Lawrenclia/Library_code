@@ -65,8 +65,10 @@ const assert = require('node:assert/strict');
     assert.equal(await page.getByRole('button', { name: '打开 WOS 工作页', exact: true }).count(), 1);
     assert.equal(await page.getByRole('button', { name: '管理实际模板', exact: true }).count(), 2);
     const cnki = page.locator('[data-slot="card"]').filter({ has: page.getByRole('heading', { name: 'CNKI 数据导入 (Excel/Txt)', exact: true }) });
-    assert.match(await cnki.innerText(), /渠道已登记/);
-    assert.equal(await cnki.getByRole('button').count(), 0, 'An unimplemented source has no automatic execution button.');
+    assert.match(await cnki.innerText(), /待现场验收/);
+    assert.match(await cnki.innerText(), /详情来源/);
+    assert.match(await cnki.innerText(), /批量获取/);
+    assert.equal(manifest.channels.find(c => c.id === 'cnki').capabilities.search, 'runtime_contract_guarded');
     await page.getByRole('tab', { name: '功能模块', exact: true }).click();
     for (const service of manifest.services) await page.getByRole('heading', { name: service.label, exact: true }).waitFor();
 

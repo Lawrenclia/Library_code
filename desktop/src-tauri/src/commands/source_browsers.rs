@@ -52,6 +52,12 @@ async fn cnki_navigation(
             .get_webview_window(label)
             .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "CNKI 来源窗口已关闭。"))?;
         let actual = window.url().map_err(Failure::storage)?;
+        if cnki::is_site(&actual) && actual.path().starts_with("/verify/") {
+            return Err(Failure::new(
+                "AUTH_REQUIRED",
+                "CNKI 已转入安全验证页，请在内置窗口完成验证码后继续；没有重新提交检索。",
+            ));
+        }
         if actual.origin() == target.origin()
             && actual.path() == target.path()
             && state

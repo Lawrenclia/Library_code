@@ -110,7 +110,7 @@ const path=require('node:path');
   await page.getByLabel('核验分支').selectOption('not_found');
   await page.getByLabel('来源网址或材料名称').fill('测试网页');
   await page.getByLabel('具体核验依据').fill('当前检索没有结果');
-  await page.getByLabel('核验结论 / 平台备注').fill('未查询到该文献');
+  await page.getByLabel('本地结论（须含“未查询到该文献”）').fill('未查询到该文献');
   await page.getByRole('button',{name:'保存核验结论'}).click();
   assert.equal(await page.evaluate(()=>window.testCommands.find(c=>c.command==='review_task').args.review.route),'not_found');
   await page.getByRole('tab',{name:'平台操作',exact:true}).click();

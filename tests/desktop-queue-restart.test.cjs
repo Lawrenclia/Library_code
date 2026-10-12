@@ -52,7 +52,10 @@ function snapshot(folder){
           assert.equal(before.tasks.find(t=>t.id==='queue-4').running,true);
         }else{
           assert.equal(q.status,'paused');assert.equal(q.cursor,0);assert.equal(q.pause_requested,true);
-          assert.equal(before.tasks[0].artifact,null);assert.equal(queries.filter(r=>r.phase===next).length,1);
+          assert.equal(before.tasks[0].artifact,null);
+          // A pause can win before the first HTTP search is sent. Both zero
+          // and one dispatched request are valid; the target stays unconsumed.
+          assert.ok(queries.filter(r=>r.phase===next).length <= 1);
         }
         fs.writeFileSync(path.join(folder,`queue-boundary-${next}.json`),JSON.stringify({process_id:child.pid,local:before,queries},null,2));
         const killer=spawn('taskkill',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'pipe'});
@@ -95,7 +98,8 @@ function snapshot(folder){
     const paused=snapshot(pauseFolder),pq=paused.queues[0];
     assert.equal(pq.id,pauseBoundary.local.queues[0].id);assert.deepEqual(pq.targets,pauseBoundary.local.queues[0].targets);
     assert.equal(pq.status,'completed');assert.equal(pq.cursor,2);assert.equal(pq.outcomes[1].error.code,'NO_RESULT');
-    assert.deepEqual(queries.map(r=>r.query),['10.1234/test','10.1234/test','Missing after pause']);
+    assert.deepEqual(queries.filter(r=>r.phase==='queue-pause'),pauseBoundary.queries);
+    assert.deepEqual(queries.filter(r=>r.phase==='queue-paused-resume').map(r=>r.query),['10.1234/test','Missing after pause']);
     assert.equal(fs.readdirSync(path.join(pauseFolder,'downloads')).length,1);
     assert.equal(paused.attempts.length,0);assert.equal(new Set(runs.map(r=>r.process_id)).size,4);
     const evidence={passed:true,synthetic:true,full_process_and_webview_restart:true,runs,crash_workspace:folder,pause_workspace:pauseFolder,crash_queries:crashQueries,pause_queries:queries};

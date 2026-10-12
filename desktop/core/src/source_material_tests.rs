@@ -152,7 +152,7 @@ fn complete_submission_bundle_preserves_original_file_report_and_does_not_advanc
         if name == "操作说明.txt" {
             let text = String::from_utf8(bytes).unwrap();
             assert!(text.contains("可能包含其他记录"));
-            assert!(text.contains("自动上传驱动尚未接通"));
+            assert!(text.contains("本包不执行平台操作，也不生成成功回执"));
             assert!(
                 !text.contains(PUSH_POLICY),
                 "other channels do not inherit WOS options"

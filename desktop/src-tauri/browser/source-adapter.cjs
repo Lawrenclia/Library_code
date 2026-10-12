@@ -69,9 +69,16 @@ async function runSourceCommand(c) {
           submitted,
         );
       if (
+        (/^\/verify(?:\/|$)/i.test(page.pathname) &&
+          /请完成安全验证|向右滑动完成验证/.test(
+            document.body?.innerText || "",
+          )) ||
         query(
           'input[type="password"],input[id*="captcha" i],input[name*="captcha" i],iframe[src*="captcha" i]',
-        ).length
+        ).length ||
+        query("#tCaptchaDyContent,#tCaptchaDyMainWrap").some(
+          (e) => e.getBoundingClientRect().bottom > 0,
+        )
       )
         stop("AUTH_REQUIRED", "请在来源窗口完成登录或验证后继续。", submitted);
     };

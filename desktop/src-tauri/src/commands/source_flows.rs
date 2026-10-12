@@ -60,6 +60,21 @@ async fn loaded(
             .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "本篇来源窗口关闭。"))?;
         let u = w.url().map_err(Failure::storage)?;
         let in_scope = source_flows::allowed(&session.site, u.as_str()).is_ok();
+        if in_scope && u.path().starts_with("/verify/") {
+            match state
+                .browser
+                .execute(app, label, "source_ping", payload(task, session, flow), 3)
+                .await
+            {
+                Err(e)
+                    if ["AUTH_REQUIRED", "SOURCE_SERVICE_UNAVAILABLE"]
+                        .contains(&e.code.as_str()) =>
+                {
+                    return Err(e)
+                }
+                _ => (),
+            }
+        }
         if in_scope
             && target.is_none_or(|t| {
                 t.origin() == u.origin()

@@ -44,11 +44,18 @@ async function runCNKICommand(command) {
           "CNKI 来源服务器超时，本次没有判定为检索无结果。",
         );
       if (
+        (/^\/verify(?:\/|$)/i.test(page.pathname) &&
+          /请完成安全验证|向右滑动完成验证/.test(heading)) ||
         [
           ...document.querySelectorAll(
             'input[type="password"], input[id*="captcha" i], input[name*="captcha" i], iframe[src*="captcha" i]',
           ),
-        ].some(visible)
+        ].some(visible) ||
+        [
+          ...document.querySelectorAll(
+            "#tCaptchaDyContent,#tCaptchaDyMainWrap",
+          ),
+        ].some((e) => visible(e) && e.getBoundingClientRect().bottom > 0)
       )
         fail(
           "AUTH_REQUIRED",
@@ -56,6 +63,7 @@ async function runCNKICommand(command) {
         );
     };
     const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
+    guard();
     if (command.action === "cnki_results") {
       if (
         !command.title ||

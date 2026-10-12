@@ -2,11 +2,11 @@
 
 基于 **Tauri 2、Rust、TypeScript/Vue 3 和 SQLite** 的 Windows 桌面工具。以 `list.xlsx` 为输入，按机构知识库 SA 匹配结果处理论文，统一管理数据库来源、原始下载、API AI 分类、实际 Excel 模板、导入推送、作者认领及来源报告。
 
-当前源码版本：**0.2.0**。本次按用户要求仅编译打包，不运行测试、不启动应用、不操作真实网站。代码接通与页面实际兼容性分别记录，详情见 [实现核对](docs/TAURI_COMPLETION_AUDIT_0_2_0.md) 和 [交付记录](docs/TAURI_ACCEPTANCE_STATUS.md)。
+当前源码版本：**0.2.1**。已按用户授权运行本地测试、原生进程恢复测试和真实页面只读检查，修复来源选择残留、提交核对权限、原备注恢复约束和 CNKI 验证页识别。结果见 [0.2.1 测试记录](docs/TEST_RESULTS_0_2_1.md)；真实平台上传、导入、推送、合并和认领没有执行。完整功能范围见 [实现核对](docs/TAURI_COMPLETION_AUDIT_0_2_0.md)。
 
 ## 下载 Windows 安装包
 
-**0.2.0 已编译完成：** [本次 GitHub Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38134762488)，源码 `33c974477eb10c05191894d28c3a46cf70ef1b34`，产物 `Windows-EXE-0.2.0-33c97447`。实际 EXE 的版本、文件大小和 SHA256 已与包内清单核对一致；本地与云端包分别记录在 [交付状态](docs/TAURI_ACCEPTANCE_STATUS.md)。
+最新安装包及实际源码、大小和 SHA256 见 [交付状态](docs/TAURI_ACCEPTANCE_STATUS.md)。此前 0.2.0 的 [GitHub Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38134762488) 和产物 `Windows-EXE-0.2.0-33c97447` 保留为历史交付。
 
 打开上面的本次运行，或 [Windows EXE 工作流](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml) 中的成功运行，在 **Artifacts** 下载 `Windows-EXE-版本-提交` 压缩包，解压后使用其中的 `机构知识库工作台_版本_x64-setup.exe`。
 

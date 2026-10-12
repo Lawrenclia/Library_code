@@ -1,4 +1,4 @@
-# Tauri 桌面工作台 · 0.2.0
+# Tauri 桌面工作台 · 0.2.1
 
 当前 Windows 桌面应用使用 Tauri 2、Rust、SQLite、TypeScript 和 Vue 3。完整使用说明见 [主 README](../README.md)，业务规范见 [PPT 整体逻辑](../docs/TAURI_REBUILD_GOAL.md)。
 
@@ -26,7 +26,7 @@ pnpm exec tauri build --bundles nsis -- --locked
 
 ## 开发
 
-`pnpm desktop` 启动开发应用；`pnpm build` 编译前端。是否运行应用、测试或真实网站，应按当前任务的用户授权决定。本次交付仅编译打包，未执行测试或业务操作。
+`pnpm desktop` 启动开发应用；`pnpm build` 编译前端。0.2.1 已按授权执行本地测试及真实页面只读检查，详见 [测试记录](../docs/TEST_RESULTS_0_2_1.md)。原生业务闭环测试使用隔离的本机模拟服务，未对真实平台写入；生产构建仍仅编译打包。
 
 自动获取有两类驱动：WOS/CNKI 专用流程，以及其他渠道共用的、按真实控件和保存配置执行的来源流程。未提供各站的全部现场选择器或导出教程，不能把代码接入标记当作兼容性验收。完整实现范围见 [0.2.0 核对](../docs/TAURI_COMPLETION_AUDIT_0_2_0.md)。
 

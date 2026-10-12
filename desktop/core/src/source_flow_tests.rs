@@ -109,3 +109,117 @@ fn queue_keeps_pause_request_and_scope_on_progress_and_restart() {
     store.source_queue_control("resume").unwrap();
     assert!(store.source_queue_control("resume").is_err());
 }
+
+#[test]
+fn corrected_detail_title_uses_real_doi_and_conflicting_doi_cannot_be_adopted() {
+    let (_dir, store, session, task) = fixture();
+    let mut data = page();
+    data["title"] = json!("Corrected title");
+    let (draft, _) = capture(&store.root, &session.site, &task, &data).unwrap();
+    assert!(std::fs::read_to_string(draft.path)
+        .unwrap()
+        .contains("TI  - Corrected title"));
+    data["fields"]["doi"] = json!(["10.1234/wrong"]);
+    assert_eq!(
+        capture(&store.root, &session.site, &task, &data)
+            .unwrap_err()
+            .code,
+        "SOURCE_IDENTITY_CONFLICT"
+    );
+    data["title"] = json!("Paper");
+    assert_eq!(
+        capture(&store.root, &session.site, &task, &data)
+            .unwrap_err()
+            .code,
+        "SOURCE_IDENTITY_CONFLICT"
+    );
+}
+
+#[test]
+fn report_keeps_all_source_queue_runs_and_reconstructs_full_long_export_checkpoint() {
+    use calamine::{open_workbook_auto, Reader};
+    let (_dir, store, session, task) = fixture();
+    let mut data = page();
+    data["visible_text"] = json!("完整原始依据🧬".repeat(6000));
+    let (draft, info) = capture(&store.root, &session.site, &task, &data).unwrap();
+    store
+        .remember_source_capture(&session, &draft, &info)
+        .unwrap();
+    let flow = store.source_flow(&session.site).unwrap();
+    let op = store.arm_source_export(&session, &flow, &data).unwrap();
+    let saved = store
+        .source_export_update(
+            op["id"].as_str().unwrap(),
+            "failed",
+            None,
+            Some(&Failure::new(
+                "PAGE_UNSUPPORTED",
+                "fixture has no export control",
+            )),
+        )
+        .unwrap();
+    let mut first = store.create_source_queue("one", "ei").unwrap();
+    first["status"] = json!("paused");
+    store.save_source_queue_progress(&mut first).unwrap();
+    store.source_queue_control("cancel").unwrap();
+    let mut second = store.create_source_queue("one", "ei").unwrap();
+    second["status"] = json!("completed");
+    store.save_source_queue_progress(&mut second).unwrap();
+    let path = store.root.join("source-report.xlsx");
+    files::export_report_with_source_runs(&store, &path).unwrap();
+    let mut book = open_workbook_auto(&path).unwrap();
+    let acquisitions = book.worksheet_range("渠道获取记录").unwrap();
+    let matching: Vec<_> = acquisitions
+        .rows()
+        .skip(1)
+        .filter(|r| r[11].to_string() == op["id"].as_str().unwrap())
+        .collect();
+    assert!(matching.len() > 1);
+    let joined: String = matching.iter().map(|r| r[12].to_string()).collect();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&joined).unwrap(),
+        saved
+    );
+    let queues = book.worksheet_range("来源批量队列").unwrap();
+    for original in store.source_queues().unwrap() {
+        let joined: String = queues
+            .rows()
+            .skip(1)
+            .filter(|r| r[0].to_string() == original["id"].as_str().unwrap())
+            .map(|r| r[3].to_string())
+            .collect();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&joined).unwrap(),
+            original
+        );
+    }
+    assert_eq!(store.source_queues().unwrap().len(), 2);
+}
+
+#[test]
+fn shared_excel_resave_preserves_original_bytes_and_source_channel() {
+    let (_dir, store, _session, task) = fixture();
+    let path = store.root.join("source.xls");
+    let raw=b"<table><tr><td>Title</td><td>Author</td></tr><tr><td>Paper</td><td>Alice</td></tr></table>";
+    std::fs::write(&path, raw).unwrap();
+    let draft = cnki_excel::normalize_for_channel(
+        &store.root,
+        &task,
+        "ei",
+        &path,
+        "EI original.xls",
+        "utf-8",
+    )
+    .unwrap();
+    assert_eq!(draft.channel, "ei");
+    assert_eq!(draft.format, "xlsx");
+    assert_eq!(std::fs::read(&path).unwrap(), raw);
+    let receipt = draft.resave.as_ref().unwrap();
+    assert_eq!(receipt.original_sha256, hash(raw));
+    cnki_excel::verify(
+        &store.root,
+        Some(receipt),
+        std::path::Path::new(&draft.path),
+    )
+    .unwrap();
+}

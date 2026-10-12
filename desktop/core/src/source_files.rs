@@ -1453,7 +1453,7 @@ mod tests {
         for c in crate::catalog::channels().as_array().unwrap() {
             assert_eq!(
                 channel_formats(c["id"].as_str().unwrap()).unwrap(),
-                c["formats"]
+                c["source_formats"]
                     .as_array()
                     .unwrap()
                     .iter()

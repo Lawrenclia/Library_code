@@ -53,7 +53,7 @@ const fs = require('node:fs'), path = require('node:path');
     await panel.getByRole('button',{name:'继续原材料范围',exact:true}).click();
     await panel.getByText(/本轮整理结束/).waitFor();
     assert.deepEqual(await page.evaluate(()=>commands.find(c=>c.command==='resume_material_batch').args),{id:'original-material-batch'});
-    assert.match(await panel.innerText(),/原始导出 1 · 字段通过 1 · 待完善草稿 1 · 未生成 1/);
+    assert.match(await panel.innerText(),/原始导出 1 · 原文件待核验 0 · 字段通过 1 · 待完善草稿 1 · 未生成 1/);
     await panel.locator('summary').click();
     assert.match(await panel.innerText(),/必填缺项：作者单位/);
     assert.match(await panel.innerText(),/日期无效/);

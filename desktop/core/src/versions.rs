@@ -853,7 +853,7 @@ mod tests {
         }
     }
     #[test]
-    fn unrelated_new_paper_keeps_old_source_and_batch_in_history_without_adopting_them() {
+    fn unrelated_new_paper_cannot_discard_old_batch_when_original_archive_is_missing() {
         let (dir, store) = setup();
         let mut old = store.task("version-sa").unwrap();
         let artifact = source_artifact(dir.path());
@@ -868,7 +868,8 @@ mod tests {
         let current = store.task(&old.id).unwrap();
         let proposal = store.pending_input(&old.id).unwrap().unwrap();
         std::fs::remove_file(&artifact.path).unwrap();
-        let next = store
+        let before = json!(current);
+        let error = store
             .accept_input(
                 &current,
                 &proposal,
@@ -876,18 +877,13 @@ mod tests {
                 "source",
                 "proof",
             )
-            .unwrap();
-        assert!(next.artifact.is_none());
-        assert!(next.batch.is_none());
-        assert_eq!(next.stage, Stage::AwaitingReview);
-        assert!(next
-            .evidence
-            .iter()
-            .any(|e| e.kind == "input_version_history" && e.text.contains("old-batch")));
-        assert!(!next
-            .evidence
-            .iter()
-            .any(|e| e.kind == "metadata" || e.kind == "artifact_reuse"));
+            .unwrap_err();
+        assert_eq!(error.code, "INPUT_CHANGED");
+        assert_eq!(json!(store.task(&old.id).unwrap()), before);
+        assert_eq!(
+            store.pending_input(&old.id).unwrap().unwrap().id,
+            proposal.id
+        );
     }
     #[test]
     fn valid_reuse_preserves_original_download_and_full_origin_without_claiming_a_new_download() {

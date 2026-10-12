@@ -384,6 +384,34 @@ fn manual_note_history_survives_restart_and_only_exact_fresh_readback_is_project
 }
 
 #[test]
+fn unknown_note_readback_requires_the_exact_frozen_handoff_and_completed_stage_stays_blocked() {
+    let (mut task, before) = note_fixture();
+    let original = sa::not_found_note_payload(&task, &before).unwrap();
+    task.evidence.push(Evidence {
+        id: "frozen-plan".into(),
+        kind: "sa_note_handoff".into(),
+        source: "local fixture".into(),
+        text: original.to_string(),
+        created: 1,
+    });
+    let mut payload = original.clone();
+    payload["plan_id"] = json!("frozen-plan");
+    payload["expected"] = before["row"].clone();
+    payload["reviewed"] = json!(true);
+    let mut after = before;
+    after["row"]["remark"] = payload["note"].clone();
+    task.stage = Stage::Unknown;
+    sa::verify_not_found_note(&task, &payload, &after).unwrap();
+    for field in ["plan_id", "expected", "reviewed"] {
+        let mut altered = payload.clone();
+        altered[field] = Value::Null;
+        assert!(sa::verify_not_found_note(&task, &altered, &after).is_err());
+    }
+    task.stage = Stage::Completed;
+    assert!(sa::verify_not_found_note(&task, &payload, &after).is_err());
+}
+
+#[test]
 fn completion_readback_binds_full_original_row_and_proof_after_restart() {
     let mut t = task();
     let before = complete_snapshot();
