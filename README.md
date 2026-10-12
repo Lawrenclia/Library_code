@@ -6,7 +6,7 @@
 
 ## 下载 Windows 安装包
 
-**0.2.1 已编译完成：** [本次 GitHub Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38199601028)，源码 `c2d69e4d8237350a82779f501e3423a096d4a96e`，产物 `Windows-EXE-0.2.1-c2d69e4d`。安装 EXE 的实际版本、大小和 SHA256 已与包内清单核对一致，详见 [交付状态](docs/TAURI_ACCEPTANCE_STATUS.md)。此前版本保留为历史交付。
+**0.2.2 已编译完成：** [本次 GitHub Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38201092965)，源码 `33c9fcfdc51156c4588e6929d9b836a25d7ce98e`，产物 `Windows-EXE-0.2.2-33c9fcfd`。安装 EXE 的实际版本、大小和 SHA256 已与包内清单核对一致，详见 [交付状态](docs/TAURI_ACCEPTANCE_STATUS.md)。此前版本保留为历史交付。
 
 打开上面的本次运行，或 [Windows EXE 工作流](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml) 中的成功运行，在 **Artifacts** 下载 `Windows-EXE-版本-提交` 压缩包，解压后使用其中的 `机构知识库工作台_版本_x64-setup.exe`。
 
@@ -29,7 +29,7 @@
 
 ## 按 PPT 处理任务
 
-规则依据 [原始 PPT 整体逻辑](docs/TAURI_REBUILD_GOAL.md)，流程为：
+当前实现的完整业务、架构和边界见 [0.2.2 项目完整逻辑](docs/PROJECT_LOGIC_0_2_2.md)。规则依据 [原始 PPT 整体逻辑](docs/TAURI_REBUILD_GOAL.md)，流程为：
 
 `原名单 → 来源与身份核对 → 本库查询/差异核验 → 原始导出或模板 → 上传 → 导入 → 推送 → 关联/认领 → SA 回读 → 来源报告`
 
