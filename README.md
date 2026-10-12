@@ -6,7 +6,7 @@
 
 ## 下载 Windows 安装包
 
-最新安装包及实际源码、大小和 SHA256 见 [交付状态](docs/TAURI_ACCEPTANCE_STATUS.md)。此前 0.2.0 的 [GitHub Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38134762488) 和产物 `Windows-EXE-0.2.0-33c97447` 保留为历史交付。
+**0.2.1 已编译完成：** [本次 GitHub Actions](https://github.com/Lawrenclia/Library_code/actions/runs/38199601028)，源码 `c2d69e4d8237350a82779f501e3423a096d4a96e`，产物 `Windows-EXE-0.2.1-c2d69e4d`。安装 EXE 的实际版本、大小和 SHA256 已与包内清单核对一致，详见 [交付状态](docs/TAURI_ACCEPTANCE_STATUS.md)。此前版本保留为历史交付。
 
 打开上面的本次运行，或 [Windows EXE 工作流](https://github.com/Lawrenclia/Library_code/actions/workflows/windows-exe.yml) 中的成功运行，在 **Artifacts** 下载 `Windows-EXE-版本-提交` 压缩包，解压后使用其中的 `机构知识库工作台_版本_x64-setup.exe`。
 
