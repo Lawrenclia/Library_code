@@ -12,6 +12,24 @@ pub fn is_site(url: &Url) -> bool {
         && url.password().is_none()
         && matches!(url.host_str(), Some("kns.cnki.net" | "kns8.cnki.net"))
 }
+/// Search the roster title in the title field, preserving it as one URL value.
+/// Older SU result checkpoints remain readable by select_result.
+pub fn title_search(entry: &Url, title: &str) -> Result<Url> {
+    if !is_site(entry) || title.trim().is_empty() {
+        return Err(Failure::new(
+            "INPUT_INVALID",
+            "CNKI 官方入口或名单题名无效。",
+        ));
+    }
+    let mut query = entry
+        .join("/kns8s/defaultresult/index")
+        .map_err(Failure::storage)?;
+    query
+        .query_pairs_mut()
+        .append_pair("kw", title)
+        .append_pair("korder", "TI");
+    Ok(query)
+}
 fn fail(message: &str) -> Failure {
     Failure::new("CNKI_EXPORT_INVALID", message)
 }
@@ -316,6 +334,27 @@ mod tests {
     use super::*;
     fn search_task() -> Task {
         Task::new(serde_json::from_value(json!({"row":2,"owner":"","sa_id":"cnki-search","title":"Paper","doi":"","wos":"","staff_id":"001","matches":0,"item_ids":"","mark":"","reason":"","done":false,"skipped":false,"source":""})).unwrap(), "input".into())
+    }
+    #[test]
+    fn roster_search_uses_title_field_and_encodes_title_without_extra_parameters() {
+        let title = "题名 & DOI? # A+B";
+        for site in [
+            "https://kns.cnki.net/old?kw=old&korder=SU",
+            "https://kns8.cnki.net/",
+        ] {
+            let url = title_search(&Url::parse(site).unwrap(), title).unwrap();
+            assert_eq!(url.path(), "/kns8s/defaultresult/index");
+            assert_eq!(url.query_pairs().count(), 2);
+            assert!(url.query_pairs().any(|(k, v)| k == "kw" && v == title));
+            assert!(url.query_pairs().any(|(k, v)| k == "korder" && v == "TI"));
+            assert_eq!(url.fragment(), None);
+        }
+        assert!(title_search(&Url::parse(ENTRY).unwrap(), " ").is_err());
+        assert!(title_search(
+            &Url::parse("https://kns.cnki.net.evil.invalid/").unwrap(),
+            title
+        )
+        .is_err());
     }
     #[test]
     fn automatic_selection_requires_complete_unique_exact_scoped_results() {

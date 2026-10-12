@@ -135,13 +135,7 @@ pub(crate) async fn cnki_source(
         let label = opened["label"]
             .as_str()
             .ok_or_else(|| Failure::new("BROWSER_DISCONNECTED", "来源窗口未返回。"))?;
-        let mut query = entry
-            .join("/kns8s/defaultresult/index")
-            .map_err(Failure::storage)?;
-        query
-            .query_pairs_mut()
-            .append_pair("kw", &task.record.title)
-            .append_pair("korder", "SU");
+        let query = cnki::title_search(&entry, &task.record.title)?;
         state
             .browser
             .source_loaded

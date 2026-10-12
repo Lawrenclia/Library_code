@@ -16,6 +16,11 @@ const runCNKICommand = new Function(
   ) + "\nreturn runCNKICommand;",
 )();
 const origin = "https://database.invalid";
+const evidenceRoot = path.resolve(
+  process.env.VALIDATION_ROOT ||
+    path.join(__dirname, "../runtime/validation-0.2.0-20261012"),
+);
+fs.mkdirSync(evidenceRoot, { recursive: true });
 const flow = {
   channel: "ei",
   search_url: "",
@@ -204,6 +209,25 @@ const command = (action, more = {}) => ({
       );
       pass("specialized CNKI guard handles " + new URL(url).pathname);
     }
+    await boot(
+      "<main>抱歉，暂无数据，请稍后重试。</main>",
+      "https://kns.cnki.net/kns8s/defaultresult/index?kw=Paper&korder=TI",
+    );
+    const serviceFailure = await page.evaluate(
+      runCNKICommand,
+      command("cnki_results"),
+    );
+    assert.equal(serviceFailure.code, "SOURCE_SERVICE_UNAVAILABLE");
+    pass("CNKI temporary service failure is detected before result waiting");
+    const sharedFailure = await call("source_results", {
+      site: { channel: "cnki", download_origins: ["https://kns.cnki.net"] },
+      flow: { ...flow, channel: "cnki" },
+    });
+    assert.equal(sharedFailure.code, "SOURCE_SERVICE_UNAVAILABLE");
+    assert.equal(sharedFailure.submitted, false);
+    pass(
+      "shared source driver never converts CNKI retry message into zero hits",
+    );
     await boot(detail, "https://foreign.invalid/record");
     assert.equal((await call("source_capture")).code, "INPUT_CHANGED");
     pass("foreign origin cannot use the saved source session");
@@ -256,10 +280,7 @@ const command = (action, more = {}) => ({
     const download = await downloadEvent;
     assert.equal(download.suggestedFilename(), "paper.csv");
     assert.equal(await download.failure(), null);
-    const output = path.resolve(
-      __dirname,
-      "../runtime/validation-0.2.0-20261012/source-flow.csv",
-    );
+    const output = path.join(evidenceRoot, "source-flow.csv");
     await download.saveAs(output);
     assert.equal(
       fs.readFileSync(output, "utf8"),
@@ -278,10 +299,7 @@ const command = (action, more = {}) => ({
       production_native_source_callbacks_verified: false,
     };
     fs.writeFileSync(
-      path.resolve(
-        __dirname,
-        "../runtime/validation-0.2.0-20261012/source-flow-results.json",
-      ),
+      path.join(evidenceRoot, "source-flow-results.json"),
       JSON.stringify(evidence, null, 2),
     );
     console.log(

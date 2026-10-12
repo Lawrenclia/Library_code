@@ -38,6 +38,14 @@ async function runCNKICommand(command) {
       if (Date.now() >= command.expires - 2500)
         fail("PAGE_TIMEOUT", "CNKI 页面尚未加载完成，请在窗口核对后继续。");
       const heading = document.body?.innerText?.slice(0, 1600) || "";
+      if (
+        /\/defaultresult\//i.test(page.pathname) &&
+        /抱歉[，,\s]*暂无数据[，,\s]*请稍后重试/.test(heading)
+      )
+        fail(
+          "SOURCE_SERVICE_UNAVAILABLE",
+          "CNKI 页面提示‘抱歉，暂无数据，请稍后重试’，来源服务未返回结果；没有判定论文未收录，请稍后继续。",
+        );
       if (/A timeout occurred|Error code\s*52[024]|Host Error/i.test(heading))
         fail(
           "SOURCE_SERVICE_UNAVAILABLE",

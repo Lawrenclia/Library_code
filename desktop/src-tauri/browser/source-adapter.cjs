@@ -59,6 +59,18 @@ async function runSourceCommand(c) {
       if (Date.now() > c.expires - 1500)
         stop("PAGE_TIMEOUT", "来源页面等待超时，未据此判定无记录。", submitted);
       if (
+        ["kns.cnki.net", "kns8.cnki.net"].includes(page.hostname) &&
+        /\/defaultresult\//i.test(page.pathname) &&
+        /抱歉[，,\s]*暂无数据[，,\s]*请稍后重试/.test(
+          document.body?.innerText || "",
+        )
+      )
+        stop(
+          "SOURCE_SERVICE_UNAVAILABLE",
+          "CNKI 来源服务未返回数据，请稍后继续；未判定为检索无记录。",
+          submitted,
+        );
+      if (
         /A timeout occurred|Error code\s*52[024]|Host Error/i.test(
           document.body?.innerText?.slice(0, 1800) || "",
         )
